@@ -40,8 +40,10 @@ Three configurations exist: **Debug**, **Release**, and **AuditMode** (enables e
 ```cmd
 cd src\cascadia\CascadiaPackage
 bx
-"C:\Program Files\Microsoft Visual Studio\2022\Preview\Common7\IDE\DeployAppRecipe.exe" bin\%ARCH%\%_LAST_BUILD_CONF%\CascadiaPackage.build.appxrecipe
+DeployAppRecipe.exe bin\%ARCH%\%_LAST_BUILD_CONF%\CascadiaPackage.build.appxrecipe
 ```
+
+Note: `DeployAppRecipe.exe` lives under your VS install at `Common7\IDE\DeployAppRecipe.exe`. It should already be on your PATH after running `razzle.cmd`. If not, find it at `C:\Program Files\Microsoft Visual Studio\2022\<Edition>\Common7\IDE\`.
 
 ## Test
 
@@ -65,7 +67,7 @@ runut *Tests.dll /name:TextBufferTests::TestInsertCharacter /waitForDebugger
 
 ## Code Formatting
 
-C++ code is formatted with **clang-format** (config in `.clang-format` at repo root). Style is based on `Microsoft` with Allman braces, no column limit, and all namespace contents indented.
+C++ code is formatted with **clang-format** (config in `.clang-format` at repo root). Style is based on `Microsoft` with braces on their own line, no column limit, and all namespace contents indented.
 
 ```cmd
 runformat
