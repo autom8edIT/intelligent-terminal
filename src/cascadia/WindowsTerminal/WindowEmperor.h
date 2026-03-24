@@ -48,6 +48,8 @@ public:
     const std::wstring& GetProtocolPipeName() const noexcept { return _protocolPipeName; }
     const std::string& GetMcpToken() const noexcept { return _mcpToken; }
     const std::wstring& GetComClsid() const noexcept { return _comClsid; }
+    const std::vector<std::shared_ptr<::AppHost>>& GetWindows() const noexcept { return _windows; }
+    AppHost* GetMostRecentWindow() const noexcept { return _mostRecentWindow(); }
 
 private:
     struct SummonWindowSelectionArgs

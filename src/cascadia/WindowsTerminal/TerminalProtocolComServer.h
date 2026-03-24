@@ -17,35 +17,54 @@
 #endif
 
 class ProtocolRequestHandler;
+class WindowEmperor;
 
 struct __declspec(uuid(__CLSID_TerminalProtocolServer))
 TerminalProtocolComServer : public Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::RuntimeClassType::ClassicCom>, ITerminalProtocolServer>
 {
-    // ITerminalProtocolServer
+    // ITerminalProtocolServer — JSON fallback
     STDMETHODIMP HandleRequest(BSTR requestJson, BSTR* responseJson) override;
 
+    // ITerminalProtocolServer — typed methods
+    STDMETHODIMP Authenticate(BSTR token, BOOL* authenticated, BSTR* protocolVersion) override;
+    STDMETHODIMP GetCapabilities(BSTR* protocolVersion, BSTR* supportedMethodsJson) override;
+
+    STDMETHODIMP GetActivePane(PROTOCOL_PANE_INFO* result) override;
+    STDMETHODIMP ListWindows(UINT32* count, PROTOCOL_WINDOW_INFO** results) override;
+    STDMETHODIMP ListTabs(BSTR windowIdFilter, UINT32* count, PROTOCOL_TAB_INFO** results) override;
+    STDMETHODIMP ListPanes(BSTR windowIdFilter, BSTR tabIdFilter, UINT32* count, PROTOCOL_PANE_INFO** results) override;
+    STDMETHODIMP ReadPaneOutput(BSTR paneId, BSTR source, INT32 maxLines, PROTOCOL_PANE_OUTPUT* result) override;
+    STDMETHODIMP GetProcessStatus(BSTR paneId, PROTOCOL_PROCESS_STATUS* result) override;
+    STDMETHODIMP GetSessionVariable(BSTR paneId, BSTR name, PROTOCOL_SESSION_VARIABLE* result) override;
+    STDMETHODIMP GetSettings(BSTR* settingsJson) override;
+
+    STDMETHODIMP CreateTab(BSTR windowId, BSTR profile, BSTR commandline, BSTR title,
+                           BOOL suppressAppTitle, BOOL injectMcpCredentials, BOOL background,
+                           PROTOCOL_TAB_CREATION_RESULT* result) override;
+    STDMETHODIMP SplitPane(BSTR paneId, BSTR direction, float size, BSTR profile, BSTR commandline,
+                           BOOL injectMcpCredentials, BOOL background,
+                           PROTOCOL_TAB_CREATION_RESULT* result) override;
+    STDMETHODIMP ClosePane(BSTR paneId) override;
+    STDMETHODIMP SendInput(BSTR paneId, BSTR text) override;
+    STDMETHODIMP SetSessionVariable(BSTR paneId, BSTR name, BSTR value) override;
+    STDMETHODIMP SetSettings(BSTR settingsContent, BSTR* backupPath) override;
+
     // Static setup — must be called before s_StartListening().
+    static void s_setEmperor(WindowEmperor* emperor) noexcept;
     static void s_setHandler(ProtocolRequestHandler* handler) noexcept;
 
-    // Register/revoke the COM class factory with the SCM.
     static HRESULT s_StartListening();
     static HRESULT s_StopListening();
 
-    // Register the automation proxy/stub for our interface IID.
-    // Must be called in BOTH server and client processes before COM calls.
-    static HRESULT s_RegisterAutomationProxy();
-
 private:
-    // Per-instance authentication state (mirrors pipe connection state).
     bool _authenticated = false;
 
-    // Shared across all instances — set once at startup, never changes.
+    static WindowEmperor* s_emperor;
     static ProtocolRequestHandler* s_handler;
 };
 
-// Disable warnings from the CoCreatableClass macro.
 #pragma warning(push)
-#pragma warning(disable : 26477) // Macro uses 0/NULL over nullptr.
-#pragma warning(disable : 26476) // Macro uses naked union over variant.
+#pragma warning(disable : 26477)
+#pragma warning(disable : 26476)
 CoCreatableClass(TerminalProtocolComServer);
 #pragma warning(pop)
