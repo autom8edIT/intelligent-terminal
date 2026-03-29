@@ -35,7 +35,7 @@
 
     // Agent Integration
     "agentCliPath": "",
-    "agentPanePosition": "right",
+    "agentPanePosition": "bottom",
 
     "profiles":
     [

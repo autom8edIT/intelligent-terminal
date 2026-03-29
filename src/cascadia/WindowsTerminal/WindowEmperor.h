@@ -96,6 +96,7 @@ private:
     UINT WM_TASKBARCREATED = 0;
     HMENU _currentWindowMenu = nullptr;
     bool _notificationIconShown = false;
+    bool _coordinatorHostPrewarmRequested = false;
     bool _skipPersistence = false;
     bool _needsPersistenceCleanup = false;
     SafeDispatcherTimer _persistStateTimer;

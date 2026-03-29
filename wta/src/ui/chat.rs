@@ -7,6 +7,20 @@ use crate::app::{App, ChatMessage, PlanEntryStatus};
 use crate::theme;
 use crate::ui_trace;
 
+const ACTIVITY_LABEL: &str = "working";
+const ACTIVITY_ICON_FRAMES: [&str; 4] = [".", "o", "O", "o"];
+const ACTIVITY_HIGHLIGHT_WINDOWS: [(usize, usize); 9] = [
+    (0, 1),
+    (0, 2),
+    (0, 3),
+    (1, 4),
+    (2, 5),
+    (3, 6),
+    (4, 7),
+    (5, 7),
+    (6, 7),
+];
+const ACTIVITY_PREVIEW_MAX_CHARS: usize = 180;
 const MAX_RENDER_LINE_CHARS: usize = 4096;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
@@ -20,21 +34,8 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     let mut reversed_lines: Vec<Line> = Vec::new();
 
-    if app.agent_streaming {
-        reversed_lines.push(Line::from(Span::styled("...", theme::DIM)));
-        if !app.pending_agent_response.is_empty() {
-            let mut pending: Vec<Line> = app
-                .pending_agent_response
-                .lines()
-                .map(|line_text| {
-                    Line::from(Span::styled(
-                        truncate_render_text(line_text),
-                        theme::AGENT_TEXT,
-                    ))
-                })
-                .collect();
-            reversed_lines.extend(pending.drain(..).rev());
-        }
+    if let Some(activity_line) = build_activity_line(app) {
+        reversed_lines.push(activity_line);
     }
 
     for (idx, msg) in app.messages.iter().enumerate().rev() {
@@ -58,7 +59,9 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let total_lines = lines.len();
     let scroll = total_lines.saturating_sub(visible_height.saturating_add(app.scroll_offset));
 
-    let paragraph = Paragraph::new(lines).block(inner).scroll((scroll as u16, 0));
+    let paragraph = Paragraph::new(lines)
+        .block(inner)
+        .scroll((scroll as u16, 0));
 
     frame.render_widget(paragraph, area);
 
@@ -73,6 +76,78 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             area.height
         )
     });
+}
+
+fn build_activity_line(app: &App) -> Option<Line<'static>> {
+    if !(app.prompt_in_flight || app.agent_streaming || app.progress_status.is_some()) {
+        return None;
+    }
+
+    let mut spans = Vec::new();
+    let icon = ACTIVITY_ICON_FRAMES[app.activity_frame % ACTIVITY_ICON_FRAMES.len()];
+    spans.push(Span::styled(icon.to_string(), theme::IN_PROGRESS));
+    spans.push(Span::raw(" "));
+    spans.extend(animated_activity_label(app.activity_frame));
+
+    if let Some((preview, style)) = activity_preview(app) {
+        spans.push(Span::styled(" ", theme::DIM));
+        spans.push(Span::styled(preview, style));
+    }
+
+    Some(Line::from(spans))
+}
+
+fn animated_activity_label(frame: usize) -> Vec<Span<'static>> {
+    let (start, end) = ACTIVITY_HIGHLIGHT_WINDOWS[frame % ACTIVITY_HIGHLIGHT_WINDOWS.len()];
+    let prefix = &ACTIVITY_LABEL[..start];
+    let highlighted = &ACTIVITY_LABEL[start..end];
+    let suffix = &ACTIVITY_LABEL[end..];
+
+    let mut spans = Vec::new();
+    if !prefix.is_empty() {
+        spans.push(Span::styled(prefix.to_string(), theme::DIM));
+    }
+    spans.push(Span::styled(highlighted.to_string(), theme::IN_PROGRESS));
+    if !suffix.is_empty() {
+        spans.push(Span::styled(suffix.to_string(), theme::DIM));
+    }
+    spans
+}
+
+fn activity_preview(app: &App) -> Option<(String, Style)> {
+    if !app.pending_agent_response.trim().is_empty() {
+        return Some((
+            single_line_tail_preview(&app.pending_agent_response),
+            theme::AGENT_TEXT,
+        ));
+    }
+
+    if !app.pending_thought_response.trim().is_empty() {
+        return Some((
+            single_line_tail_preview(&app.pending_thought_response),
+            theme::SYSTEM_TEXT,
+        ));
+    }
+
+    app.progress_status
+        .as_deref()
+        .map(single_line_tail_preview)
+        .filter(|text| !text.is_empty())
+        .map(|text| (text, theme::DIM))
+}
+
+fn single_line_tail_preview(text: &str) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let chars: Vec<char> = collapsed.chars().collect();
+
+    if chars.len() <= ACTIVITY_PREVIEW_MAX_CHARS {
+        return collapsed;
+    }
+
+    let tail: String = chars[chars.len().saturating_sub(ACTIVITY_PREVIEW_MAX_CHARS)..]
+        .iter()
+        .collect();
+    format!("...{tail}")
 }
 
 fn build_message_lines<'a>(

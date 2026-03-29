@@ -558,6 +558,7 @@ Json::Value ProtocolRequestHandler::_handleCreateTab(const Json::Value& params)
     const auto windowIdStr = params.get("window_id", "").asString();
     const auto profile = params.get("profile", "").asString();
     const auto commandline = params.get("commandline", "").asString();
+    const auto cwd = params.get("cwd", "").asString();
     const auto title = params.get("title", "").asString();
     const auto suppressAppTitle = params.get("suppress_application_title", false).asBool();
     const auto injectMcpCredentials = params.get("inject_mcp_credentials", false).asBool();
@@ -594,6 +595,10 @@ Json::Value ProtocolRequestHandler::_handleCreateTab(const Json::Value& params)
     if (!commandline.empty())
     {
         newTermArgs.Commandline(winrt::to_hstring(commandline));
+    }
+    if (!cwd.empty())
+    {
+        newTermArgs.StartingDirectory(winrt::to_hstring(cwd));
     }
     if (!title.empty())
     {
@@ -641,6 +646,7 @@ Json::Value ProtocolRequestHandler::_handleSplitPane(const Json::Value& params)
     const auto directionStr = params.get("direction", "right").asString();
     const auto profile = params.get("profile", "").asString();
     const auto commandline = params.get("commandline", "").asString();
+    const auto cwd = params.get("cwd", "").asString();
     const auto size = params.get("size", 0.5).asFloat();
     const auto injectMcpCredentials = params.get("inject_mcp_credentials", false).asBool();
 
@@ -667,6 +673,10 @@ Json::Value ProtocolRequestHandler::_handleSplitPane(const Json::Value& params)
     if (!commandline.empty())
     {
         newTermArgs.Commandline(winrt::to_hstring(commandline));
+    }
+    if (!cwd.empty())
+    {
+        newTermArgs.StartingDirectory(winrt::to_hstring(cwd));
     }
 
     const auto background = params.get("background", true).asBool();

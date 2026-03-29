@@ -120,6 +120,8 @@ pub struct SplitPaneParams {
     pub pane_id: String,
     /// Command to run in the new pane (optional)
     pub commandline: Option<String>,
+    /// Working directory (optional)
+    pub cwd: Option<String>,
     /// Split direction: "horizontal" or "vertical" (optional, default: "auto")
     pub direction: Option<String>,
     /// Size fraction 0.0-1.0 (optional, default: 0.5)
@@ -502,6 +504,7 @@ impl WtaMcpServer {
             .wt_split_pane(
                 &params.pane_id,
                 params.commandline.as_deref(),
+                params.cwd.as_deref(),
                 params.direction.as_deref(),
                 params.size,
             )

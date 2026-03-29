@@ -14,7 +14,7 @@ use windows_sys::Win32::Foundation::ERROR_PIPE_BUSY;
 
 use crate::app::{AppEvent, ChatMessage, ConnectionState, DebugDir, DebugMessage, PermOption};
 use crate::coordinator::{parse_recommendation_set, RecommendationChoice, RecommendationSet};
-use crate::protocol::acp::client::{run_acp_client, PromptSubmission};
+use crate::protocol::acp::client::{prompt_timing_log, run_acp_client, PromptSubmission};
 use crate::shell::wt_channel::ConnectionInfo;
 use crate::shell::ShellManager;
 use crate::ui_trace;
@@ -45,13 +45,22 @@ pub struct SharedStateSnapshot {
     pub version: u64,
     pub state: ConnectionState,
     pub agent_name: String,
+    #[serde(default)]
+    pub agent_model: Option<String>,
+    #[serde(default)]
+    pub progress_status: Option<String>,
     pub session_id: String,
     pub wt_connected: bool,
     pub messages: Vec<ChatMessage>,
     pub recommendations: Option<RecommendationSet>,
     pub agent_streaming: bool,
+    #[serde(default)]
+    pub pending_thought_response: String,
+    #[serde(default)]
     pub pending_agent_response: String,
     pub prompt_in_flight: bool,
+    #[serde(default)]
+    pub timing_note: Option<String>,
     pub permission: Option<PermissionPrompt>,
 }
 
@@ -63,6 +72,8 @@ pub enum HostClientRequest {
     },
     GetSnapshot,
     SubmitPrompt {
+        prompt_id: u64,
+        submitted_at_unix_s: f64,
         text: String,
         pane_context: Option<PaneContext>,
     },
@@ -101,18 +112,54 @@ pub enum HostServerMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SharedUiEvent {
-    ConnectionStage { stage: String },
-    AgentConnected { name: String, session_id: String },
-    AgentError { message: String },
-    UserMessage { text: String },
-    AgentMessageChunk { text: String },
+    ConnectionStage {
+        stage: String,
+    },
+    ProgressStatus {
+        message: String,
+    },
+    AgentConnected {
+        name: String,
+        #[serde(default)]
+        model: Option<String>,
+        session_id: String,
+    },
+    AgentError {
+        message: String,
+    },
+    UserMessage {
+        text: String,
+    },
+    AgentThoughtChunk {
+        text: String,
+    },
+    AgentMessageChunk {
+        text: String,
+    },
     AgentMessageEnd,
-    ToolCall { id: String, title: String, status: String },
-    ToolCallUpdate { id: String, status: String },
-    Plan { entries: Vec<crate::app::PlanEntry> },
-    PermissionRequest { description: String, options: Vec<PermOption> },
+    TimingMetric {
+        message: String,
+    },
+    ToolCall {
+        id: String,
+        title: String,
+        status: String,
+    },
+    ToolCallUpdate {
+        id: String,
+        status: String,
+    },
+    Plan {
+        entries: Vec<crate::app::PlanEntry>,
+    },
+    PermissionRequest {
+        description: String,
+        options: Vec<PermOption>,
+    },
     PermissionCleared,
-    SystemMessage { message: String },
+    SystemMessage {
+        message: String,
+    },
 }
 
 impl SharedUiEvent {
@@ -121,17 +168,31 @@ impl SharedUiEvent {
             AppEvent::ConnectionStage(stage) => Some(Self::ConnectionStage {
                 stage: stage.clone(),
             }),
-            AppEvent::AgentConnected { name, session_id } => Some(Self::AgentConnected {
+            AppEvent::ProgressStatus(message) => Some(Self::ProgressStatus {
+                message: message.clone(),
+            }),
+            AppEvent::AgentConnected {
+                name,
+                model,
+                session_id,
+            } => Some(Self::AgentConnected {
                 name: name.clone(),
+                model: model.clone(),
                 session_id: session_id.clone(),
             }),
             AppEvent::AgentError(message) => Some(Self::AgentError {
                 message: message.clone(),
             }),
-            AppEvent::AgentMessageChunk(text) => Some(Self::AgentMessageChunk {
-                text: text.clone(),
-            }),
+            AppEvent::AgentThoughtChunk(text) => {
+                Some(Self::AgentThoughtChunk { text: text.clone() })
+            }
+            AppEvent::AgentMessageChunk(text) => {
+                Some(Self::AgentMessageChunk { text: text.clone() })
+            }
             AppEvent::AgentMessageEnd => Some(Self::AgentMessageEnd),
+            AppEvent::TimingMetric(message) => Some(Self::TimingMetric {
+                message: message.clone(),
+            }),
             AppEvent::ToolCall { id, title, status } => Some(Self::ToolCall {
                 id: id.clone(),
                 title: title.clone(),
@@ -155,7 +216,8 @@ impl SharedUiEvent {
             AppEvent::SystemMessage(message) => Some(Self::SystemMessage {
                 message: message.clone(),
             }),
-            AppEvent::Key(_)
+            AppEvent::Tick
+            | AppEvent::Key(_)
             | AppEvent::Resize(_, _)
             | AppEvent::DebugPipeMessage(_)
             | AppEvent::SharedStateSnapshot(_)
@@ -168,13 +230,22 @@ impl SharedUiEvent {
     fn into_app_event(self) -> AppEvent {
         match self {
             Self::ConnectionStage { stage } => AppEvent::ConnectionStage(stage),
-            Self::AgentConnected { name, session_id } => {
-                AppEvent::AgentConnected { name, session_id }
-            }
+            Self::ProgressStatus { message } => AppEvent::ProgressStatus(message),
+            Self::AgentConnected {
+                name,
+                model,
+                session_id,
+            } => AppEvent::AgentConnected {
+                name,
+                model,
+                session_id,
+            },
             Self::AgentError { message } => AppEvent::AgentError(message),
             Self::UserMessage { text } => AppEvent::UserMessage(text),
+            Self::AgentThoughtChunk { text } => AppEvent::AgentThoughtChunk(text),
             Self::AgentMessageChunk { text } => AppEvent::AgentMessageChunk(text),
             Self::AgentMessageEnd => AppEvent::AgentMessageEnd,
+            Self::TimingMetric { message } => AppEvent::TimingMetric(message),
             Self::ToolCall { id, title, status } => AppEvent::ToolCall { id, title, status },
             Self::ToolCallUpdate { id, status } => AppEvent::ToolCallUpdate { id, status },
             Self::Plan { entries } => AppEvent::Plan(entries),
@@ -191,13 +262,24 @@ impl SharedUiEvent {
     }
 }
 
-pub fn pipe_name_for(pipe_info: Option<&ConnectionInfo>) -> String {
+fn normalize_agent_command(agent_cmd: Option<&str>) -> String {
+    agent_cmd
+        .map(|cmd| cmd.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default()
+}
+
+pub fn pipe_name_for(pipe_info: Option<&ConnectionInfo>, agent_cmd: Option<&str>) -> String {
     let mut hasher = DefaultHasher::new();
     pipe_info
         .map(|info| info.pipe_name.as_str())
         .unwrap_or("local-only")
         .hash(&mut hasher);
+    normalize_agent_command(agent_cmd).hash(&mut hasher);
     format!(r"\\.\pipe\wta-shared-host-{:016x}", hasher.finish())
+}
+
+pub fn host_session_is_ready(snapshot: &SharedStateSnapshot) -> bool {
+    matches!(snapshot.state, ConnectionState::Connected) && !snapshot.session_id.trim().is_empty()
 }
 
 pub async fn wait_for_host(pipe_name: &str, timeout: Duration) -> Result<()> {
@@ -230,10 +312,52 @@ pub async fn wait_for_host(pipe_name: &str, timeout: Duration) -> Result<()> {
     }
 }
 
+pub async fn probe_host_snapshot(
+    pipe_name: &str,
+    timeout: Duration,
+) -> Result<SharedStateSnapshot> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Some(snapshot) = try_probe_host_snapshot_once(pipe_name).await? {
+            return Ok(snapshot);
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for shared host snapshot {}", pipe_name);
+        }
+
+        sleep(Duration::from_millis(75)).await;
+    }
+}
+
+pub async fn wait_for_host_ready(
+    pipe_name: &str,
+    timeout: Duration,
+) -> Result<SharedStateSnapshot> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Some(snapshot) = try_probe_host_snapshot_once(pipe_name).await? {
+            if host_session_is_ready(&snapshot) {
+                return Ok(snapshot);
+            }
+
+            if let ConnectionState::Failed(message) = &snapshot.state {
+                anyhow::bail!("shared host failed to initialize: {}", message);
+            }
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for shared host session {}", pipe_name);
+        }
+
+        sleep(Duration::from_millis(75)).await;
+    }
+}
+
 pub async fn run_attach_client(
     host_pipe_name: String,
     event_tx: mpsc::UnboundedSender<AppEvent>,
-    mut prompt_rx: mpsc::UnboundedReceiver<String>,
+    mut prompt_rx: mpsc::UnboundedReceiver<PromptSubmission>,
     mut recommendation_rx: mpsc::UnboundedReceiver<RecommendationChoice>,
     mut permission_rx: mpsc::UnboundedReceiver<String>,
     pane_context: PaneContext,
@@ -277,7 +401,7 @@ pub async fn run_host_server(
     ));
 
     let (event_tx, event_rx) = mpsc::unbounded_channel();
-    let (prompt_tx, prompt_rx) = mpsc::unbounded_channel();
+    let (prompt_tx, prompt_rx) = mpsc::unbounded_channel::<PromptSubmission>();
     let (recommendation_tx, recommendation_rx) = mpsc::unbounded_channel();
 
     tokio::spawn(crate::coordinator::run_recommendation_executor(
@@ -308,7 +432,7 @@ pub async fn run_host_server(
 async fn run_attach_client_inner(
     host_pipe_name: String,
     event_tx: mpsc::UnboundedSender<AppEvent>,
-    prompt_rx: &mut mpsc::UnboundedReceiver<String>,
+    prompt_rx: &mut mpsc::UnboundedReceiver<PromptSubmission>,
     recommendation_rx: &mut mpsc::UnboundedReceiver<RecommendationChoice>,
     permission_rx: &mut mpsc::UnboundedReceiver<String>,
     pane_context: PaneContext,
@@ -332,12 +456,21 @@ async fn run_attach_client_inner(
     .await?;
 
     if let Some(text) = initial_prompt {
+        let prompt = PromptSubmission::new(text, Some(pane_context.clone()));
+        prompt_timing_log(
+            prompt.id,
+            prompt.submitted_at_unix_s,
+            "attach_initial_prompt",
+            &format!("preview={:?}", prompt.preview()),
+        );
         send_host_request(
             &event_tx,
             &debug_capture_enabled,
             &mut writer,
             &HostClientRequest::SubmitPrompt {
-                text,
+                prompt_id: prompt.id,
+                submitted_at_unix_s: prompt.submitted_at_unix_s,
+                text: prompt.text,
                 pane_context: Some(pane_context.clone()),
             },
         )
@@ -390,12 +523,20 @@ async fn run_attach_client_inner(
             }
 
             Some(prompt) = prompt_rx.recv() => {
+                prompt_timing_log(
+                    prompt.id,
+                    prompt.submitted_at_unix_s,
+                    "attach_client_send",
+                    &format!("preview={:?}", prompt.preview()),
+                );
                 send_host_request(
                     &event_tx,
                     &debug_capture_enabled,
                     &mut writer,
                     &HostClientRequest::SubmitPrompt {
-                        text: prompt,
+                        prompt_id: prompt.id,
+                        submitted_at_unix_s: prompt.submitted_at_unix_s,
+                        text: prompt.text,
                         pane_context: Some(pane_context.clone()),
                     },
                 ).await?;
@@ -596,7 +737,12 @@ async fn run_host_service(
             }
 
             Some(event) = event_rx.recv() => {
-                let shared_event = SharedUiEvent::from_app_event(&event);
+                let snapshot_after_event = matches!(event, AppEvent::AgentMessageEnd);
+                let shared_event = if snapshot_after_event {
+                    None
+                } else {
+                    SharedUiEvent::from_app_event(&event)
+                };
                 state.apply_agent_event(event);
                 if let Some(event) = shared_event {
                     broadcast_event(&mut clients, &event);
@@ -659,7 +805,12 @@ fn handle_host_command(
                     client.pane_context = pane_context;
                 }
             }
-            HostClientRequest::SubmitPrompt { text, pane_context } => {
+            HostClientRequest::SubmitPrompt {
+                prompt_id,
+                submitted_at_unix_s,
+                text,
+                pane_context,
+            } => {
                 if text.trim().is_empty() {
                     return;
                 }
@@ -677,11 +828,28 @@ fn handle_host_command(
 
                 state.record_prompt_submission(text.clone());
                 broadcast_event(clients, &SharedUiEvent::UserMessage { text: text.clone() });
+                prompt_timing_log(
+                    prompt_id,
+                    submitted_at_unix_s,
+                    "shared_host_received",
+                    &format!(
+                        "preview={:?}",
+                        crate::protocol::acp::client::PromptSubmission::from_parts(
+                            prompt_id,
+                            text.clone(),
+                            None,
+                            submitted_at_unix_s
+                        )
+                        .preview()
+                    ),
+                );
                 if prompt_tx
-                    .send(PromptSubmission {
+                    .send(PromptSubmission::from_parts(
+                        prompt_id,
                         text,
-                        pane_context: effective_context,
-                    })
+                        effective_context,
+                        submitted_at_unix_s,
+                    ))
                     .is_err()
                 {
                     state.push_error("agent prompt loop is unavailable".to_string());
@@ -701,6 +869,8 @@ fn handle_host_command(
                     .cloned();
 
                 if let Some(selected) = maybe_choice {
+                    state.clear_recommendations();
+                    broadcast_snapshot(clients, &state.snapshot());
                     if recommendation_tx.send(selected).is_err() {
                         state.push_system_message(
                             "recommendation executor is unavailable".to_string(),
@@ -756,6 +926,59 @@ async fn connect_client(
             Err(err) => return Err(err),
         }
     }
+}
+
+async fn try_probe_host_snapshot_once(pipe_name: &str) -> Result<Option<SharedStateSnapshot>> {
+    let client = match try_connect_client_once(pipe_name) {
+        Ok(client) => client,
+        Err(err)
+            if err.raw_os_error() == Some(ERROR_PIPE_BUSY as i32)
+                || err.kind() == io::ErrorKind::NotFound =>
+        {
+            return Ok(None);
+        }
+        Err(err) => return Err(err.into()),
+    };
+
+    let (reader, mut writer) = tokio::io::split(client);
+    let mut lines = BufReader::new(reader).lines();
+    send_line(
+        &mut writer,
+        &HostClientRequest::Attach {
+            pane_context: PaneContext::default(),
+        },
+    )
+    .await?;
+
+    let response_deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        let remaining = response_deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+
+        match tokio::time::timeout(remaining, lines.next_line()).await {
+            Ok(Ok(Some(line))) => {
+                let message: HostServerMessage =
+                    serde_json::from_str(&line).context("invalid shared host snapshot response")?;
+                match message {
+                    HostServerMessage::Attached { snapshot, .. }
+                    | HostServerMessage::SharedStateSnapshot { snapshot } => {
+                        return Ok(Some(snapshot));
+                    }
+                    HostServerMessage::Error { message } => {
+                        anyhow::bail!("shared host snapshot request failed: {}", message);
+                    }
+                    HostServerMessage::Event { .. } | HostServerMessage::Pong => {}
+                }
+            }
+            Ok(Ok(None)) => break,
+            Ok(Err(err)) => return Err(err.into()),
+            Err(_) => break,
+        }
+    }
+
+    Ok(None)
 }
 
 fn try_connect_client_once(
@@ -901,13 +1124,17 @@ struct HostSessionState {
     version: u64,
     state: ConnectionState,
     agent_name: String,
+    agent_model: Option<String>,
+    progress_status: Option<String>,
     session_id: String,
     wt_connected: bool,
     messages: Vec<ChatMessage>,
     recommendations: Option<RecommendationSet>,
     agent_streaming: bool,
+    pending_thought_response: String,
     pending_agent_response: String,
     prompt_in_flight: bool,
+    timing_note: Option<String>,
     permission: Option<PermissionPrompt>,
     permission_responder: Option<tokio::sync::oneshot::Sender<String>>,
     tool_calls: HashMap<String, (String, String)>,
@@ -919,13 +1146,17 @@ impl HostSessionState {
             version: 1,
             state: ConnectionState::Connecting("Starting agent...".to_string()),
             agent_name: String::new(),
+            agent_model: None,
+            progress_status: None,
             session_id: String::new(),
             wt_connected,
             messages: Vec::new(),
             recommendations: None,
             agent_streaming: false,
+            pending_thought_response: String::new(),
             pending_agent_response: String::new(),
             prompt_in_flight: false,
+            timing_note: None,
             permission: None,
             permission_responder: None,
             tool_calls: HashMap::new(),
@@ -937,13 +1168,17 @@ impl HostSessionState {
             version: self.version,
             state: self.state.clone(),
             agent_name: self.agent_name.clone(),
+            agent_model: self.agent_model.clone(),
+            progress_status: self.progress_status.clone(),
             session_id: self.session_id.clone(),
             wt_connected: self.wt_connected,
             messages: self.messages.clone(),
             recommendations: self.recommendations.clone(),
             agent_streaming: self.agent_streaming,
+            pending_thought_response: self.pending_thought_response.clone(),
             pending_agent_response: self.pending_agent_response.clone(),
             prompt_in_flight: self.prompt_in_flight,
+            timing_note: self.timing_note.clone(),
             permission: self.permission.clone(),
         }
     }
@@ -953,10 +1188,10 @@ impl HostSessionState {
     }
 
     fn record_prompt_submission(&mut self, text: String) {
+        self.clear_chat_history();
         self.prompt_in_flight = true;
         self.agent_streaming = false;
-        self.pending_agent_response.clear();
-        self.recommendations = None;
+        self.progress_status = Some("Preparing context...".to_string());
         self.messages.push(ChatMessage::User(text));
         self.bump();
     }
@@ -965,7 +1200,10 @@ impl HostSessionState {
         self.state = ConnectionState::Failed(message.clone());
         self.prompt_in_flight = false;
         self.agent_streaming = false;
+        self.progress_status = None;
+        self.pending_thought_response.clear();
         self.pending_agent_response.clear();
+        self.timing_note = None;
         self.messages.push(ChatMessage::Error(message));
         self.permission = None;
         self.permission_responder = None;
@@ -977,14 +1215,51 @@ impl HostSessionState {
         self.bump();
     }
 
+    fn clear_recommendations(&mut self) {
+        self.recommendations = None;
+    }
+
+    fn clear_chat_history(&mut self) {
+        self.messages.clear();
+        self.tool_calls.clear();
+        self.permission = None;
+        self.permission_responder = None;
+        self.progress_status = None;
+        self.pending_thought_response.clear();
+        self.pending_agent_response.clear();
+        self.agent_streaming = false;
+        self.timing_note = None;
+        self.clear_recommendations();
+    }
+
+    fn clear_completed_turn_history(&mut self) {
+        self.messages.clear();
+        self.tool_calls.clear();
+        self.permission = None;
+        self.permission_responder = None;
+        self.progress_status = None;
+        self.pending_thought_response.clear();
+        self.pending_agent_response.clear();
+        self.agent_streaming = false;
+    }
+
     fn apply_agent_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::ConnectionStage(stage) => {
                 self.state = ConnectionState::Connecting(stage);
                 self.bump();
             }
-            AppEvent::AgentConnected { name, session_id } => {
+            AppEvent::ProgressStatus(message) => {
+                self.progress_status = Some(message);
+                self.bump();
+            }
+            AppEvent::AgentConnected {
+                name,
+                model,
+                session_id,
+            } => {
                 self.agent_name = name;
+                self.agent_model = model;
                 self.session_id = session_id;
                 self.state = ConnectionState::Connected;
                 self.bump();
@@ -992,16 +1267,34 @@ impl HostSessionState {
             AppEvent::AgentError(message) => {
                 self.push_error(message);
             }
+            AppEvent::AgentThoughtChunk(text) => {
+                self.prompt_in_flight = true;
+                if self.progress_status.is_none() {
+                    self.progress_status = Some("Thinking...".to_string());
+                }
+                append_thought_preview(&mut self.pending_thought_response, &text);
+                self.bump();
+            }
             AppEvent::AgentMessageChunk(text) => {
                 self.agent_streaming = true;
                 self.prompt_in_flight = true;
+                self.progress_status = None;
+                self.pending_thought_response.clear();
                 self.pending_agent_response.push_str(&text);
                 self.bump();
             }
             AppEvent::AgentMessageEnd => {
                 self.agent_streaming = false;
                 self.prompt_in_flight = false;
-                self.finalize_agent_response();
+                self.progress_status = None;
+                self.pending_thought_response.clear();
+                if self.finalize_agent_response() {
+                    self.clear_completed_turn_history();
+                }
+                self.bump();
+            }
+            AppEvent::TimingMetric(message) => {
+                self.timing_note = Some(message);
                 self.bump();
             }
             AppEvent::ToolCall { id, title, status } => {
@@ -1051,29 +1344,56 @@ impl HostSessionState {
             AppEvent::UserMessage(_)
             | AppEvent::SharedPermissionRequest { .. }
             | AppEvent::PermissionCleared
-            |
-            AppEvent::Key(_)
+            | AppEvent::Tick
+            | AppEvent::Key(_)
             | AppEvent::Resize(_, _)
             | AppEvent::DebugPipeMessage(_)
             | AppEvent::SharedStateSnapshot(_) => {}
         }
     }
 
-    fn finalize_agent_response(&mut self) {
+    fn finalize_agent_response(&mut self) -> bool {
         if self.pending_agent_response.trim().is_empty() {
             self.pending_agent_response.clear();
-            return;
+            return false;
         }
 
         let text = std::mem::take(&mut self.pending_agent_response);
         match parse_recommendation_set(&text) {
             Ok(recommendations) => {
                 self.recommendations = Some(recommendations);
+                true
             }
-            Err(_) => {
+            Err(err) => {
                 self.recommendations = None;
+                let error_text = format!("{:#}", err).replace('\n', " | ");
+                self.messages.push(ChatMessage::System(format!(
+                    "Agent returned invalid recommendation JSON: {}",
+                    error_text
+                )));
                 self.messages.push(ChatMessage::Agent(text));
+                false
             }
         }
     }
+}
+
+const THOUGHT_PREVIEW_MAX_CHARS: usize = 1024;
+
+fn append_thought_preview(buffer: &mut String, chunk: &str) {
+    if chunk.is_empty() {
+        return;
+    }
+
+    buffer.push_str(chunk);
+    let char_count = buffer.chars().count();
+    if char_count <= THOUGHT_PREVIEW_MAX_CHARS {
+        return;
+    }
+
+    let tail: String = buffer
+        .chars()
+        .skip(char_count.saturating_sub(THOUGHT_PREVIEW_MAX_CHARS))
+        .collect();
+    *buffer = format!("...{tail}");
 }

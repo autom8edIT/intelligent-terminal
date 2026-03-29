@@ -119,6 +119,87 @@ static const uint8_t* deserializeString(const uint8_t* it, const uint8_t* end, w
     return it + bytes;
 }
 
+static std::wstring detectWtaPathForHostPrewarm()
+{
+    wchar_t buffer[MAX_PATH];
+    if (SearchPathW(nullptr, L"wta", L".exe", MAX_PATH, buffer, nullptr) > 0)
+    {
+        return buffer;
+    }
+
+    auto cursor = std::filesystem::path{ wil::GetModuleFileNameW<std::wstring>(nullptr) }.parent_path();
+    while (!cursor.empty())
+    {
+        for (const auto& relative : {
+                 std::filesystem::path{ L"wta\\target\\debug\\wta.exe" },
+                 std::filesystem::path{ L"wta\\target\\release\\wta.exe" },
+             })
+        {
+            const auto candidate = cursor / relative;
+            std::error_code ec;
+            if (std::filesystem::exists(candidate, ec))
+            {
+                return candidate.lexically_normal().wstring();
+            }
+        }
+
+        const auto parent = cursor.parent_path();
+        if (parent == cursor)
+        {
+            break;
+        }
+        cursor = parent;
+    }
+
+    static constexpr std::wstring_view devPath =
+        L"C:\\Users\\xianghong\\Documents\\wta-unified\\wta\\target\\debug\\wta.exe";
+    if (std::filesystem::exists(devPath))
+    {
+        return std::wstring{ devPath };
+    }
+
+    return {};
+}
+
+static std::wstring detectDefaultAgentCliForHostPrewarm()
+{
+    wchar_t buffer[MAX_PATH];
+
+    if (SearchPathW(nullptr, L"copilot", L".exe", MAX_PATH, buffer, nullptr) > 0)
+    {
+        return L"copilot --acp --stdio";
+    }
+
+    static constexpr std::wstring_view fallbackClis[] = { L"claude" };
+    for (const auto& cli : fallbackClis)
+    {
+        if (SearchPathW(nullptr, cli.data(), L".exe", MAX_PATH, buffer, nullptr) > 0)
+        {
+            return std::wstring{ cli };
+        }
+    }
+
+    return {};
+}
+
+static void appendQuotedCommandArg(std::wstring& cmdline, std::wstring_view arg)
+{
+    if (!cmdline.empty())
+    {
+        cmdline.push_back(L' ');
+    }
+
+    std::wstring escaped{ arg };
+    for (size_t pos = 0; (pos = escaped.find(L'"', pos)) != std::wstring::npos; pos += 2)
+    {
+        escaped.replace(pos, 1, L"\"\"");
+    }
+
+    cmdline.push_back(L'"');
+    cmdline += escaped;
+    cmdline.push_back(L'"');
+}
+
 struct Handoff
 {
     wil::zwstring_view args;
@@ -305,8 +386,6 @@ void WindowEmperor::CreateNewWindow(winrt::TerminalApp::WindowRequestedArgs args
         }
     }
 
-    // Start the AI coordinator pane if enabled in settings.
-    _startCoordinatorIfEnabled();
 }
 
 AppHost* WindowEmperor::_mostRecentWindow() const noexcept
@@ -388,6 +467,7 @@ void WindowEmperor::HandleCommandlineArgs(int nCmdShow)
 
     // Initialize the protocol server for AI CLI integration.
     _initializeProtocolServer();
+    _startCoordinatorIfEnabled();
 
     // When the settings change, we'll want to update our global hotkeys
     // and our notification icon based on the new settings.
@@ -398,6 +478,7 @@ void WindowEmperor::HandleCommandlineArgs(int nCmdShow)
             _setupGlobalHotkeys();
             _checkWindowsForNotificationIcon();
             _setupSessionPersistence(args.NewSettings().GlobalSettings().ShouldUsePersistedLayout());
+            _startCoordinatorIfEnabled();
         }
     });
 
@@ -1518,6 +1599,11 @@ void WindowEmperor::_initializeProtocolServer()
 
 void WindowEmperor::_startCoordinatorIfEnabled()
 {
+    if (_coordinatorHostPrewarmRequested)
+    {
+        return;
+    }
+
     const auto& settings = _app.Logic().Settings();
     const auto& globals = settings.GlobalSettings();
 
@@ -1526,31 +1612,66 @@ void WindowEmperor::_startCoordinatorIfEnabled()
         return;
     }
 
-    // The AI assistant pane is created in the first window.
-    if (_windows.empty())
+    if (_protocolPipeName.empty())
     {
         return;
     }
 
-    const auto& host = _windows.front();
-    const auto logic = host->Logic();
-    if (!logic)
+    const auto wtaPath = detectWtaPathForHostPrewarm();
+    if (wtaPath.empty())
     {
         return;
     }
 
-    // Get the TerminalPage from the root.
-    const auto root = logic.GetRoot();
-    if (!root)
+    auto agentCliPath = globals.AgentCliPath();
+    if (agentCliPath.empty())
     {
+        agentCliPath = winrt::hstring{ detectDefaultAgentCliForHostPrewarm() };
+    }
+
+    std::wstring cmdline;
+    appendQuotedCommandArg(cmdline, wtaPath);
+    cmdline += L" ensure-host";
+    if (!agentCliPath.empty())
+    {
+        cmdline += L" --agent";
+        appendQuotedCommandArg(cmdline, std::wstring_view{ agentCliPath });
+    }
+    cmdline += L" --pipe-name";
+    appendQuotedCommandArg(cmdline, _protocolPipeName);
+    if (!_mcpToken.empty())
+    {
+        cmdline += L" --pipe-token";
+        appendQuotedCommandArg(cmdline, winrt::to_hstring(_mcpToken).c_str());
+    }
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+
+    PROCESS_INFORMATION pi{};
+    auto mutableCmdline = cmdline;
+    const auto launched = CreateProcessW(
+        wtaPath.c_str(),
+        mutableCmdline.data(),
+        nullptr,
+        nullptr,
+        FALSE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        nullptr,
+        &si,
+        &pi);
+    if (!launched)
+    {
+        OutputDebugStringW(fmt::format(
+            FMT_COMPILE(L"[AgentHost] failed to prewarm shared host via '{}'\n"),
+            cmdline).c_str());
         return;
     }
 
-    const auto page = root.try_as<winrt::TerminalApp::TerminalPage>();
-    if (!page)
-    {
-        return;
-    }
-
-    page.ToggleCoordinator();
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    _coordinatorHostPrewarmRequested = true;
 }

@@ -214,6 +214,16 @@ Current limitation:
 
 - ACP child-process stderr is currently discarded, so some crashes can appear in the UI as a generic ACP shutdown error without a full root-cause trace in the debug logs.
 
+## Build Rule
+
+For normal local WTA development, always produce the binary at `wta/target/debug/wta.exe`.
+
+- Before running `cargo build` for WTA, kill any active `wta.exe` processes first. A live shared-host session can keep `target/debug/wta.exe` locked and make the build fail with `Access is denied`.
+- Preferred PowerShell sequence:
+  - `Get-Process wta -ErrorAction SilentlyContinue | Stop-Process -Force`
+  - `cargo build --manifest-path wta/Cargo.toml`
+- Do not switch to an alternate `--target-dir` just to work around a locked `wta.exe` unless that is explicitly the task. The default expectation is to refresh `wta/target/debug/wta.exe`.
+
 ## Key Crates
 
 | Crate | Version | Purpose |

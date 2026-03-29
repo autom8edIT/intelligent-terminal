@@ -9,6 +9,10 @@ pub const TOOL_CALL: Style = Style::new().fg(Color::DarkGray);
 pub const PLAN_STYLE: Style = Style::new().fg(Color::Cyan);
 pub const PERMISSION: Style = Style::new().fg(Color::Yellow);
 pub const ERROR_STYLE: Style = Style::new().fg(Color::Red);
+pub const IN_PROGRESS: Style = Style::new()
+    .fg(Color::Yellow)
+    .add_modifier(Modifier::BOLD)
+    .add_modifier(Modifier::ITALIC);
 pub const STATUS_CONNECTED: Style = Style::new().fg(Color::Green);
 pub const STATUS_CONNECTING: Style = Style::new().fg(Color::Yellow);
 pub const STATUS_DISCONNECTED: Style = Style::new().fg(Color::DarkGray);

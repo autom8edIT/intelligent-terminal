@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::prelude::*;
 use ratatui::backend::CrosstermBackend;
+use ratatui::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use crate::coordinator::{
     parse_recommendation_set, recommended_choice_index, RecommendationChoice, RecommendationSet,
 };
+use crate::protocol::acp::client::{prompt_timing_log, PromptSubmission};
 use crate::shared_host::SharedStateSnapshot;
 use crate::ui;
 use crate::ui_trace;
@@ -86,16 +87,21 @@ pub struct PermissionState {
 
 pub enum AppEvent {
     Key(KeyEvent),
+    Tick,
     Resize(u16, u16), // terminal resize (handled by ratatui)
     ConnectionStage(String),
+    ProgressStatus(String),
     UserMessage(String),
     AgentConnected {
         name: String,
+        model: Option<String>,
         session_id: String,
     },
     AgentError(String),
+    AgentThoughtChunk(String),
     AgentMessageChunk(String),
     AgentMessageEnd,
+    TimingMetric(String),
     ToolCall {
         id: String,
         title: String,
@@ -126,6 +132,9 @@ pub enum AppEvent {
 pub struct App {
     pub state: ConnectionState,
     pub agent_name: String,
+    pub agent_model: Option<String>,
+    pub progress_status: Option<String>,
+    pub activity_frame: usize,
     pub session_id: String,
     pub wt_connected: bool,
     pub messages: Vec<ChatMessage>,
@@ -140,10 +149,15 @@ pub struct App {
     pub should_quit: bool,
     pub prompt_in_flight: bool,
     pub shared_mode: bool,
-    prompt_tx: mpsc::UnboundedSender<String>,
+    current_prompt_id: Option<u64>,
+    current_prompt_submitted_at_unix_s: Option<f64>,
+    selection_visible_pending: bool,
+    prompt_tx: mpsc::UnboundedSender<PromptSubmission>,
     recommendation_tx: mpsc::UnboundedSender<RecommendationChoice>,
     permission_tx: mpsc::UnboundedSender<String>,
+    pub pending_thought_response: String,
     pub pending_agent_response: String,
+    pub timing_note: Option<String>,
     debug_capture_enabled: Arc<AtomicBool>,
     // Debug panel
     pub debug_messages: Vec<DebugMessage>,
@@ -157,7 +171,7 @@ pub struct App {
 
 impl App {
     pub fn new(
-        prompt_tx: mpsc::UnboundedSender<String>,
+        prompt_tx: mpsc::UnboundedSender<PromptSubmission>,
         recommendation_tx: mpsc::UnboundedSender<RecommendationChoice>,
         permission_tx: mpsc::UnboundedSender<String>,
         debug_capture_enabled: Arc<AtomicBool>,
@@ -167,6 +181,9 @@ impl App {
         Self {
             state: ConnectionState::Connecting("Starting agent...".to_string()),
             agent_name: String::new(),
+            agent_model: None,
+            progress_status: None,
+            activity_frame: 0,
             session_id: String::new(),
             wt_connected,
             messages: Vec::new(),
@@ -181,10 +198,15 @@ impl App {
             should_quit: false,
             prompt_in_flight: false,
             shared_mode,
+            current_prompt_id: None,
+            current_prompt_submitted_at_unix_s: None,
+            selection_visible_pending: false,
             prompt_tx,
             recommendation_tx,
             permission_tx,
+            pending_thought_response: String::new(),
             pending_agent_response: String::new(),
+            timing_note: None,
             debug_capture_enabled,
             debug_messages: Vec::new(),
             show_debug_panel: false,
@@ -216,16 +238,19 @@ impl App {
                 Some(event) = ui_rx.recv() => {
                     let event_name = Self::event_name(&event);
                     self.apply_resize_if_needed(terminal, &event)?;
+                    let should_redraw = self.event_requires_redraw(&event);
                     let handle_started = std::time::Instant::now();
                     self.handle_event(event);
                     ui_trace::log_slow("ui_event_handle", handle_started.elapsed(), || {
                         format!("event={} {}", event_name, self.trace_state())
                     });
-                    let draw_started = std::time::Instant::now();
-                    self.draw_frame(terminal)?;
-                    ui_trace::log_slow("ui_event_draw", draw_started.elapsed(), || {
-                        format!("event={} {}", event_name, self.trace_state())
-                    });
+                    if should_redraw {
+                        let draw_started = std::time::Instant::now();
+                        self.draw_frame(terminal)?;
+                        ui_trace::log_slow("ui_event_draw", draw_started.elapsed(), || {
+                            format!("event={} {}", event_name, self.trace_state())
+                        });
+                    }
                 }
 
                 Some(event) = event_rx.recv() => {
@@ -306,10 +331,7 @@ impl App {
         Ok(())
     }
 
-    fn draw_frame(
-        &self,
-        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    ) -> Result<()> {
+    fn draw_frame(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         let total_started = std::time::Instant::now();
 
         let mut frame = terminal.get_frame();
@@ -343,9 +365,13 @@ impl App {
 
         let backend_flush_started = std::time::Instant::now();
         terminal.backend_mut().flush()?;
-        ui_trace::log_slow("terminal_backend_flush", backend_flush_started.elapsed(), || {
-            self.trace_state()
-        });
+        ui_trace::log_slow(
+            "terminal_backend_flush",
+            backend_flush_started.elapsed(),
+            || self.trace_state(),
+        );
+
+        self.log_selection_visible_if_needed();
 
         ui_trace::log_slow("draw_frame_total", total_started.elapsed(), || {
             self.trace_state()
@@ -357,13 +383,17 @@ impl App {
     fn event_name(event: &AppEvent) -> &'static str {
         match event {
             AppEvent::Key(_) => "key",
+            AppEvent::Tick => "tick",
             AppEvent::Resize(_, _) => "resize",
             AppEvent::ConnectionStage(_) => "connection_stage",
+            AppEvent::ProgressStatus(_) => "progress_status",
             AppEvent::UserMessage(_) => "user_message",
             AppEvent::AgentConnected { .. } => "agent_connected",
             AppEvent::AgentError(_) => "agent_error",
+            AppEvent::AgentThoughtChunk(_) => "agent_thought_chunk",
             AppEvent::AgentMessageChunk(_) => "agent_message_chunk",
             AppEvent::AgentMessageEnd => "agent_message_end",
+            AppEvent::TimingMetric(_) => "timing_metric",
             AppEvent::ToolCall { .. } => "tool_call",
             AppEvent::ToolCallUpdate { .. } => "tool_call_update",
             AppEvent::Plan(_) => "plan",
@@ -378,38 +408,52 @@ impl App {
 
     fn trace_state(&self) -> String {
         format!(
-            "state={:?} messages={} input_chars={} pending_chars={} scroll={} streaming={} recommendations={} permission={}",
+            "state={:?} messages={} input_chars={} thought_chars={} pending_chars={} scroll={} streaming={} activity_frame={} recommendations={} permission={} timing_note={}",
             self.state,
             self.messages.len(),
             self.input.chars().count(),
+            self.pending_thought_response.chars().count(),
             self.pending_agent_response.chars().count(),
             self.scroll_offset,
             self.agent_streaming,
+            self.activity_frame,
             self.recommendations
                 .as_ref()
                 .map(|recs| recs.choices.len())
                 .unwrap_or(0),
-            self.permission.is_some()
+            self.permission.is_some(),
+            self.timing_note.is_some()
         )
     }
 
     fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::Key(key) => self.handle_key(key),
+            AppEvent::Tick => {
+                if self.has_activity_indicator() {
+                    self.activity_frame = (self.activity_frame + 1) % 9;
+                }
+            }
             AppEvent::Resize(_, _) => {} // ratatui handles resize
             AppEvent::ConnectionStage(stage) => {
                 self.state = ConnectionState::Connecting(stage);
             }
+            AppEvent::ProgressStatus(status) => {
+                self.progress_status = Some(status);
+                self.scroll_to_bottom();
+            }
             AppEvent::UserMessage(text) => {
-                self.recommendations = None;
-                self.selected_recommendation = 0;
-                self.pending_agent_response.clear();
-                self.prompt_in_flight = true;
+                self.prepare_for_new_prompt();
                 self.messages.push(ChatMessage::User(text));
                 self.scroll_to_bottom();
             }
-            AppEvent::AgentConnected { name, session_id } => {
+            AppEvent::AgentConnected {
+                name,
+                model,
+                session_id,
+            } => {
                 self.agent_name = name;
+                self.agent_model = model;
                 self.session_id = session_id;
                 self.state = ConnectionState::Connected;
             }
@@ -417,19 +461,44 @@ impl App {
                 self.state = ConnectionState::Failed(msg.clone());
                 self.prompt_in_flight = false;
                 self.agent_streaming = false;
+                self.progress_status = None;
+                self.pending_thought_response.clear();
+                self.activity_frame = 0;
                 self.pending_agent_response.clear();
+                self.timing_note = None;
                 self.messages.push(ChatMessage::Error(msg));
+            }
+            AppEvent::AgentThoughtChunk(text) => {
+                self.prompt_in_flight = true;
+                if self.progress_status.is_none() {
+                    self.progress_status = Some("Thinking...".to_string());
+                }
+                append_thought_preview(&mut self.pending_thought_response, &text);
+                self.scroll_to_bottom();
             }
             AppEvent::AgentMessageChunk(text) => {
                 self.agent_streaming = true;
                 self.prompt_in_flight = true;
+                self.progress_status = None;
+                self.pending_thought_response.clear();
                 self.pending_agent_response.push_str(&text);
                 self.scroll_to_bottom();
             }
             AppEvent::AgentMessageEnd => {
                 self.agent_streaming = false;
                 self.prompt_in_flight = false;
-                self.finalize_agent_response();
+                self.progress_status = None;
+                self.pending_thought_response.clear();
+                self.activity_frame = 0;
+                let parsed_recommendations = self.finalize_agent_response();
+                if parsed_recommendations {
+                    self.clear_completed_turn_history();
+                } else {
+                    self.scroll_to_bottom();
+                }
+            }
+            AppEvent::TimingMetric(note) => {
+                self.timing_note = Some(note);
             }
             AppEvent::ToolCall { id, title, status } => {
                 self.tool_calls
@@ -505,7 +574,8 @@ impl App {
 
     fn event_requires_redraw(&self, event: &AppEvent) -> bool {
         match event {
-            AppEvent::AgentMessageChunk(_) => !self.agent_streaming,
+            AppEvent::Tick => self.has_activity_indicator(),
+            AppEvent::AgentMessageChunk(_) => true,
             AppEvent::DebugPipeMessage(_) => self.show_debug_panel,
             _ => true,
         }
@@ -613,6 +683,7 @@ impl App {
                     && self.recommendations.is_some()
                 {
                     if let Some(choice) = self.selected_recommendation().cloned() {
+                        self.clear_recommendations();
                         let _ = self.recommendation_tx.send(choice);
                     }
                 } else if !self.input.is_empty() && self.state == ConnectionState::Connected {
@@ -620,14 +691,21 @@ impl App {
                     self.input.clear();
                     self.cursor_pos = 0;
                     if !self.shared_mode {
-                        self.recommendations = None;
-                        self.selected_recommendation = 0;
-                        self.pending_agent_response.clear();
-                        self.prompt_in_flight = true;
+                        self.prepare_for_new_prompt();
                         self.messages.push(ChatMessage::User(text.clone()));
                         self.scroll_to_bottom();
                     }
-                    let _ = self.prompt_tx.send(text);
+                    let prompt = PromptSubmission::new(text, None);
+                    self.current_prompt_id = Some(prompt.id);
+                    self.current_prompt_submitted_at_unix_s = Some(prompt.submitted_at_unix_s);
+                    self.selection_visible_pending = false;
+                    prompt_timing_log(
+                        prompt.id,
+                        prompt.submitted_at_unix_s,
+                        "ui_submit",
+                        &format!("preview={:?}", prompt.preview()),
+                    );
+                    let _ = self.prompt_tx.send(prompt);
                 }
             }
             KeyCode::Backspace => {
@@ -675,29 +753,96 @@ impl App {
         self.scroll_offset = 0;
     }
 
+    fn has_activity_indicator(&self) -> bool {
+        self.prompt_in_flight || self.agent_streaming || self.progress_status.is_some()
+    }
+
+    fn clear_recommendations(&mut self) {
+        self.recommendations = None;
+        self.selected_recommendation = 0;
+    }
+
+    fn clear_chat_history(&mut self) {
+        self.messages.clear();
+        self.tool_calls.clear();
+        self.permission = None;
+        self.progress_status = None;
+        self.pending_thought_response.clear();
+        self.activity_frame = 0;
+        self.pending_agent_response.clear();
+        self.agent_streaming = false;
+        self.scroll_offset = 0;
+        self.timing_note = None;
+        self.selection_visible_pending = false;
+        self.clear_recommendations();
+    }
+
+    fn clear_completed_turn_history(&mut self) {
+        self.messages.clear();
+        self.tool_calls.clear();
+        self.permission = None;
+        self.progress_status = None;
+        self.pending_thought_response.clear();
+        self.activity_frame = 0;
+        self.pending_agent_response.clear();
+        self.agent_streaming = false;
+        self.scroll_offset = 0;
+        self.selection_visible_pending = false;
+    }
+
+    fn prepare_for_new_prompt(&mut self) {
+        self.clear_chat_history();
+        self.prompt_in_flight = true;
+        self.progress_status = Some("Preparing context...".to_string());
+        self.activity_frame = 0;
+    }
+
     fn selected_recommendation(&self) -> Option<&RecommendationChoice> {
         self.recommendations
             .as_ref()
             .and_then(|recs| recs.choices.get(self.selected_recommendation))
     }
 
-    fn finalize_agent_response(&mut self) {
+    fn finalize_agent_response(&mut self) -> bool {
         if self.pending_agent_response.trim().is_empty() {
-            return;
+            self.log_selection_phase("selection_parse_failed", "reason=empty_agent_response");
+            return false;
         }
 
         let text = std::mem::take(&mut self.pending_agent_response);
 
-        match parse_recommendation_set(&text).ok() {
-            Some(recommendations) => {
+        match parse_recommendation_set(&text) {
+            Ok(recommendations) => {
                 self.selected_recommendation = recommended_choice_index(&recommendations);
+                self.log_selection_phase(
+                    "selection_ready",
+                    &format!(
+                        "choice_count={} recommended_choice={:?}",
+                        recommendations.choices.len(),
+                        recommendations.recommended_choice
+                    ),
+                );
                 self.recommendations = Some(recommendations);
+                self.selection_visible_pending = true;
+                true
             }
-            None => {
-                self.recommendations = None;
-                self.selected_recommendation = 0;
+            Err(err) => {
+                self.clear_recommendations();
+                let error_text = format!("{:#}", err).replace('\n', " | ");
+                self.log_selection_phase(
+                    "selection_parse_failed",
+                    &format!(
+                        "response_chars={} error={:?}",
+                        text.chars().count(),
+                        error_text
+                    ),
+                );
+                self.messages.push(ChatMessage::System(format!(
+                    "Agent returned invalid recommendation JSON: {}",
+                    error_text
+                )));
                 self.messages.push(ChatMessage::Agent(text));
-                self.scroll_to_bottom();
+                false
             }
         }
     }
@@ -715,12 +860,16 @@ impl App {
 
         self.state = snapshot.state;
         self.agent_name = snapshot.agent_name;
+        self.agent_model = snapshot.agent_model;
+        self.progress_status = snapshot.progress_status;
         self.session_id = snapshot.session_id;
         self.wt_connected = snapshot.wt_connected;
         self.messages = snapshot.messages;
         self.recommendations = snapshot.recommendations;
         self.agent_streaming = snapshot.agent_streaming;
+        self.pending_thought_response = snapshot.pending_thought_response;
         self.pending_agent_response = snapshot.pending_agent_response;
+        self.timing_note = snapshot.timing_note;
         self.prompt_in_flight = snapshot.prompt_in_flight;
 
         if recommendations_changed {
@@ -729,6 +878,9 @@ impl App {
                 .as_ref()
                 .map(recommended_choice_index)
                 .unwrap_or(0);
+            if self.recommendations.is_some() {
+                self.selection_visible_pending = true;
+            }
         }
 
         if let Some(permission) = snapshot.permission {
@@ -751,4 +903,52 @@ impl App {
             self.permission = None;
         }
     }
+}
+
+impl App {
+    fn log_selection_phase(&self, phase: &str, details: &str) {
+        if let (Some(prompt_id), Some(submitted_at_unix_s)) = (
+            self.current_prompt_id,
+            self.current_prompt_submitted_at_unix_s,
+        ) {
+            prompt_timing_log(prompt_id, submitted_at_unix_s, phase, details);
+        }
+    }
+
+    fn log_selection_visible_if_needed(&mut self) {
+        if !self.selection_visible_pending || self.recommendations.is_none() {
+            return;
+        }
+
+        let details = format!(
+            "choice_count={} selected_index={}",
+            self.recommendations
+                .as_ref()
+                .map(|set| set.choices.len())
+                .unwrap_or(0),
+            self.selected_recommendation
+        );
+        self.log_selection_phase("selection_visible", &details);
+        self.selection_visible_pending = false;
+    }
+}
+
+const THOUGHT_PREVIEW_MAX_CHARS: usize = 1024;
+
+fn append_thought_preview(buffer: &mut String, chunk: &str) {
+    if chunk.is_empty() {
+        return;
+    }
+
+    buffer.push_str(chunk);
+    let char_count = buffer.chars().count();
+    if char_count <= THOUGHT_PREVIEW_MAX_CHARS {
+        return;
+    }
+
+    let tail: String = buffer
+        .chars()
+        .skip(char_count.saturating_sub(THOUGHT_PREVIEW_MAX_CHARS))
+        .collect();
+    *buffer = format!("...{tail}");
 }

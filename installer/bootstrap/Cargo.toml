@@ -1,0 +1,9 @@
+[package]
+name = "agentic-terminal-installer-bootstrap"
+version = "0.1.0"
+edition = "2021"
+description = "Target-architecture bootstrap for the local Agentic Terminal installer"
+
+[[bin]]
+name = "agentic-terminal-installer-bootstrap"
+path = "src/main.rs"

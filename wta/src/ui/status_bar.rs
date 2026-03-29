@@ -4,72 +4,35 @@ use ratatui::widgets::Paragraph;
 use crate::app::{App, ConnectionState};
 use crate::theme;
 
-pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let (status_text, status_style) = match &app.state {
-        ConnectionState::Disconnected => ("Disconnected", theme::STATUS_DISCONNECTED),
-        ConnectionState::Connecting(stage) => (stage.as_str(), theme::STATUS_CONNECTING),
-        ConnectionState::Connected => ("Connected", theme::STATUS_CONNECTED),
-        ConnectionState::Failed(msg) => {
-            // We can't return a reference to msg, so handle inline
-            let text = format!("[wta] {} | Failed: {}", app.agent_name, msg);
-            let p = Paragraph::new(text).style(theme::STATUS_FAILED);
-            frame.render_widget(p, area);
-            return;
-        }
-    };
-
+fn agent_identity(app: &App) -> String {
     let name = if app.agent_name.is_empty() {
         "agent"
     } else {
         &app.agent_name
     };
 
-    let session_info = if app.session_id.is_empty() {
-        String::new()
-    } else {
-        let short = if app.session_id.len() > 8 {
-            &app.session_id[..8]
-        } else {
-            &app.session_id
-        };
-        format!(" | session: {}", short)
+    match app.agent_model.as_deref() {
+        Some(model) if !model.is_empty() => format!("{} {}", name, model),
+        _ => name.to_string(),
+    }
+}
+
+pub fn render(frame: &mut Frame, app: &App, area: Rect) {
+    let identity = agent_identity(app);
+    let identity_style = match &app.state {
+        ConnectionState::Failed(_) => theme::STATUS_FAILED,
+        _ if app.progress_status.is_some() || app.prompt_in_flight => theme::IN_PROGRESS,
+        ConnectionState::Connected => theme::STATUS_CONNECTED,
+        ConnectionState::Connecting(_) => theme::STATUS_CONNECTING,
+        ConnectionState::Disconnected => theme::STATUS_DISCONNECTED,
     };
 
-    let wt_info = if app.wt_connected {
-        " | WT:pipe"
-    } else {
-        " | WT:local"
-    };
+    let mut spans = vec![Span::styled(identity, identity_style)];
+    if let Some(note) = app.timing_note.as_deref().filter(|note| !note.is_empty()) {
+        spans.push(Span::styled(" | ", theme::DIM));
+        spans.push(Span::styled(note.to_string(), theme::SYSTEM_TEXT));
+    }
 
-    let pane_info = match (&app.pane_id, &app.tab_id) {
-        (Some(p), Some(t)) => format!(" | pane:{} tab:{}", p, t),
-        (Some(p), None) => format!(" | pane:{}", p),
-        _ => String::new(),
-    };
-
-    let debug_hint = if app.show_debug_panel {
-        ""
-    } else {
-        " | F12:debug"
-    };
-    let recommendation_hint = if app.recommendations.is_some() {
-        " | recs:ready"
-    } else {
-        ""
-    };
-    let inflight_hint = if app.prompt_in_flight { " | busy" } else { "" };
-
-    let text = format!(
-        "[wta] {} | {}{}{}{}{}{}{}",
-        name,
-        status_text,
-        session_info,
-        wt_info,
-        pane_info,
-        inflight_hint,
-        recommendation_hint,
-        debug_hint
-    );
-    let p = Paragraph::new(text).style(status_style);
+    let p = Paragraph::new(Line::from(spans));
     frame.render_widget(p, area);
 }

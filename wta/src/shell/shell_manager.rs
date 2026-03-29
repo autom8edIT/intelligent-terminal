@@ -554,6 +554,7 @@ impl ShellManager {
         &self,
         pane_id: &str,
         commandline: Option<&str>,
+        cwd: Option<&str>,
         direction: Option<&str>,
         size: Option<f64>,
     ) -> anyhow::Result<serde_json::Value> {
@@ -561,6 +562,9 @@ impl ShellManager {
         params.insert("pane_id".into(), pane_id.into());
         if let Some(cmd) = commandline {
             params.insert("commandline".into(), cmd.into());
+        }
+        if let Some(dir) = cwd {
+            params.insert("cwd".into(), dir.into());
         }
         if let Some(dir) = direction {
             params.insert("direction".into(), dir.into());

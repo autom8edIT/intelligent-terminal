@@ -75,6 +75,9 @@ enum Command {
     /// Run the long-lived shared ACP host
     Host,
 
+    /// Ensure the shared ACP host is running, then exit
+    EnsureHost,
+
     /// Attach a pane-local TUI to the shared ACP host
     Attach,
 
@@ -282,6 +285,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Some(Command::Host) => run_host_mode(cli, pipe_override).await,
+        Some(Command::EnsureHost) => run_ensure_host_mode(cli, pipe_override).await,
         Some(Command::Attach) => run_attach_mode(cli, pipe_override).await,
         Some(Command::Local) => run_default_tui(cli, pipe_override).await,
 
@@ -917,7 +921,8 @@ async fn run_host_mode(cli: Cli, po: PipeOverride) -> Result<()> {
     };
 
     let local_set = tokio::task::LocalSet::new();
-    let host_pipe_name = shared_host::pipe_name_for(resolved_pipe.as_ref());
+    let host_pipe_name =
+        shared_host::pipe_name_for(resolved_pipe.as_ref(), Some(cli.agent.as_str()));
     local_set
         .run_until(shared_host::run_host_server(
             host_pipe_name,
@@ -928,19 +933,36 @@ async fn run_host_mode(cli: Cli, po: PipeOverride) -> Result<()> {
         .await
 }
 
+async fn run_ensure_host_mode(cli: Cli, po: PipeOverride) -> Result<()> {
+    let resolved_pipe = resolve_pipe_info(&po);
+    let host_pipe_name =
+        shared_host::pipe_name_for(resolved_pipe.as_ref(), Some(cli.agent.as_str()));
+    ensure_wta_host_running(&cli.agent, resolved_pipe.as_ref(), &host_pipe_name).await
+}
+
 async fn run_attach_mode(cli: Cli, po: PipeOverride) -> Result<()> {
     let resolved_pipe = resolve_pipe_info(&po);
-    let host_pipe_name = shared_host::pipe_name_for(resolved_pipe.as_ref());
-    ensure_wta_host_running(&cli.agent, resolved_pipe.as_ref(), &host_pipe_name).await?;
+    let host_pipe_name =
+        shared_host::pipe_name_for(resolved_pipe.as_ref(), Some(cli.agent.as_str()));
 
     let pane_identity = discover_local_pane_identity(&po).await;
     let pane_context = pane_context_from_identity(pane_identity.clone());
-    run_attach_tui_mode(cli.prompt, host_pipe_name, pane_context, pane_identity).await
+    run_attach_tui_mode(
+        cli.prompt,
+        cli.agent,
+        host_pipe_name,
+        resolved_pipe,
+        pane_context,
+        pane_identity,
+    )
+    .await
 }
 
 async fn run_attach_tui_mode(
     initial_prompt: Option<String>,
+    agent_cmd: String,
     host_pipe_name: String,
+    pipe_info: Option<shell::wt_channel::ConnectionInfo>,
     pane_context: PaneContext,
     pane_identity: Option<(String, String, String)>,
 ) -> Result<()> {
@@ -954,7 +976,9 @@ async fn run_attach_tui_mode(
     let result = local_set
         .run_until(run_attach_app(
             &mut terminal,
+            agent_cmd,
             host_pipe_name,
+            pipe_info,
             initial_prompt,
             pane_context,
             pane_identity,
@@ -970,14 +994,17 @@ async fn run_attach_tui_mode(
 
 async fn run_attach_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    agent_cmd: String,
     host_pipe_name: String,
+    pipe_info: Option<shell::wt_channel::ConnectionInfo>,
     initial_prompt: Option<String>,
     pane_context: PaneContext,
     pane_identity: Option<(String, String, String)>,
 ) -> Result<()> {
     let (ui_tx, ui_rx) = tokio::sync::mpsc::unbounded_channel();
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (prompt_tx, prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (prompt_tx, prompt_rx) =
+        tokio::sync::mpsc::unbounded_channel::<protocol::acp::client::PromptSubmission>();
     let (recommendation_tx, recommendation_rx) = tokio::sync::mpsc::unbounded_channel();
     let (permission_tx, permission_rx) = tokio::sync::mpsc::unbounded_channel();
     let debug_capture_enabled = Arc::new(AtomicBool::new(false));
@@ -987,7 +1014,7 @@ async fn run_attach_app(
     let attach_event_tx = event_tx.clone();
     let attach_debug = debug_capture_enabled.clone();
     tokio::spawn(shared_host::run_attach_client(
-        host_pipe_name,
+        host_pipe_name.clone(),
         attach_event_tx,
         prompt_rx,
         recommendation_rx,
@@ -996,6 +1023,23 @@ async fn run_attach_app(
         initial_prompt,
         attach_debug,
     ));
+
+    let ensure_event_tx = event_tx.clone();
+    tokio::task::spawn_local(async move {
+        if let Err(err) = ensure_attach_host_ready(
+            agent_cmd,
+            pipe_info,
+            host_pipe_name,
+            ensure_event_tx.clone(),
+        )
+        .await
+        {
+            let _ = ensure_event_tx.send(app::AppEvent::AgentError(format!(
+                "failed to start shared host: {:#}",
+                err
+            )));
+        }
+    });
 
     let mut app_state = app::App::new(
         prompt_tx,
@@ -1015,12 +1059,43 @@ async fn run_attach_app(
     app_state.run(terminal, ui_rx, event_rx).await
 }
 
+async fn ensure_attach_host_ready(
+    agent_cmd: String,
+    pipe_info: Option<shell::wt_channel::ConnectionInfo>,
+    host_pipe_name: String,
+    event_tx: tokio::sync::mpsc::UnboundedSender<app::AppEvent>,
+) -> Result<()> {
+    if shared_host::wait_for_host_ready(&host_pipe_name, std::time::Duration::from_millis(75))
+        .await
+        .is_ok()
+    {
+        return Ok(());
+    }
+
+    if shared_host::probe_host_snapshot(&host_pipe_name, std::time::Duration::from_millis(200))
+        .await
+        .is_ok()
+    {
+        let _ = event_tx.send(app::AppEvent::ConnectionStage(
+            "Waiting for shared host session...".to_string(),
+        ));
+        shared_host::wait_for_host_ready(&host_pipe_name, std::time::Duration::from_secs(30))
+            .await?;
+        return Ok(());
+    }
+
+    let _ = event_tx.send(app::AppEvent::ConnectionStage(
+        "Starting shared host...".to_string(),
+    ));
+    ensure_wta_host_running(&agent_cmd, pipe_info.as_ref(), &host_pipe_name).await
+}
+
 async fn ensure_wta_host_running(
     agent_cmd: &str,
     pipe_info: Option<&shell::wt_channel::ConnectionInfo>,
     host_pipe_name: &str,
 ) -> Result<()> {
-    if shared_host::wait_for_host(host_pipe_name, std::time::Duration::from_millis(150))
+    if shared_host::wait_for_host_ready(host_pipe_name, std::time::Duration::from_millis(200))
         .await
         .is_ok()
     {
@@ -1028,15 +1103,23 @@ async fn ensure_wta_host_running(
     }
 
     let _mutex = NamedMutexGuard::acquire(&host_mutex_name(host_pipe_name))?;
-    if shared_host::wait_for_host(host_pipe_name, std::time::Duration::from_millis(150))
+    if shared_host::wait_for_host_ready(host_pipe_name, std::time::Duration::from_millis(200))
         .await
         .is_ok()
     {
         return Ok(());
     }
 
-    spawn_wta_host_process(agent_cmd, pipe_info)?;
-    shared_host::wait_for_host(host_pipe_name, std::time::Duration::from_secs(15)).await
+    if shared_host::probe_host_snapshot(host_pipe_name, std::time::Duration::from_millis(200))
+        .await
+        .is_err()
+    {
+        spawn_wta_host_process(agent_cmd, pipe_info)?;
+    }
+
+    shared_host::wait_for_host_ready(host_pipe_name, std::time::Duration::from_secs(30))
+        .await
+        .map(|_| ())
 }
 
 fn spawn_wta_host_process(
@@ -1081,22 +1164,37 @@ async fn discover_local_pane_identity(po: &PipeOverride) -> Option<(String, Stri
 }
 
 fn pane_context_from_identity(pane_identity: Option<(String, String, String)>) -> PaneContext {
-    let cwd = std::env::current_dir()
+    let current_cwd = std::env::current_dir()
         .ok()
         .map(|path| path.display().to_string());
+    let source_pane_id = non_empty_env_var("WTA_SOURCE_PANE_ID");
+    let source_tab_id = non_empty_env_var("WTA_SOURCE_TAB_ID");
+    let source_window_id = non_empty_env_var("WTA_SOURCE_WINDOW_ID");
+    let source_cwd = non_empty_env_var("WTA_SOURCE_CWD");
+
     match pane_identity {
         Some((pane_id, tab_id, window_id)) => PaneContext {
-            source_pane_id: Some(pane_id.clone()),
+            source_pane_id: source_pane_id.or_else(|| Some(pane_id.clone())),
             pane_id: Some(pane_id),
-            tab_id: Some(tab_id),
-            window_id: Some(window_id),
-            cwd,
+            tab_id: source_tab_id.or_else(|| Some(tab_id)),
+            window_id: source_window_id.or_else(|| Some(window_id)),
+            cwd: source_cwd.or(current_cwd),
         },
         None => PaneContext {
-            cwd,
-            ..PaneContext::default()
+            pane_id: None,
+            tab_id: source_tab_id,
+            window_id: source_window_id,
+            cwd: source_cwd.or(current_cwd),
+            source_pane_id,
         },
     }
+}
+
+fn non_empty_env_var(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn host_mutex_name(host_pipe_name: &str) -> String {
@@ -1668,8 +1766,10 @@ async fn run_acp_app(
             ));
             let (ui_tx, ui_rx) = tokio::sync::mpsc::unbounded_channel();
             let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
-            let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
-            let (acp_prompt_tx, acp_prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (prompt_tx, mut prompt_rx) =
+                tokio::sync::mpsc::unbounded_channel::<protocol::acp::client::PromptSubmission>();
+            let (acp_prompt_tx, acp_prompt_rx) =
+                tokio::sync::mpsc::unbounded_channel::<protocol::acp::client::PromptSubmission>();
             let (recommendation_tx, recommendation_rx) = tokio::sync::mpsc::unbounded_channel();
             let (permission_tx, _permission_rx) = tokio::sync::mpsc::unbounded_channel();
             acp_startup_log(&format!(
@@ -1713,11 +1813,20 @@ async fn run_acp_app(
             let prompt_context = pane_context_from_identity(pane_identity.clone());
             let prompt_context_bridge = prompt_context.clone();
             tokio::task::spawn_local(async move {
-                while let Some(text) = prompt_rx.recv().await {
-                    let _ = acp_prompt_tx.send(protocol::acp::client::PromptSubmission {
-                        text,
-                        pane_context: Some(prompt_context_bridge.clone()),
-                    });
+                while let Some(prompt) = prompt_rx.recv().await {
+                    protocol::acp::client::prompt_timing_log(
+                        prompt.id,
+                        prompt.submitted_at_unix_s,
+                        "local_bridge_received",
+                        &format!("preview={:?}", prompt.preview()),
+                    );
+                    let _ =
+                        acp_prompt_tx.send(protocol::acp::client::PromptSubmission::from_parts(
+                            prompt.id,
+                            prompt.text,
+                            Some(prompt_context_bridge.clone()),
+                            prompt.submitted_at_unix_s,
+                        ));
                 }
             });
 
@@ -1736,7 +1845,14 @@ async fn run_acp_app(
             ));
 
             if let Some(initial_prompt) = cli.prompt.clone() {
-                let _ = prompt_tx.send(initial_prompt);
+                let prompt = protocol::acp::client::PromptSubmission::new(initial_prompt, None);
+                protocol::acp::client::prompt_timing_log(
+                    prompt.id,
+                    prompt.submitted_at_unix_s,
+                    "initial_prompt_enqueued",
+                    &format!("preview={:?}", prompt.preview()),
+                );
+                let _ = prompt_tx.send(prompt);
             }
 
             let mut app_state = app::App::new(

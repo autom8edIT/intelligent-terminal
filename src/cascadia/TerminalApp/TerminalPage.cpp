@@ -707,7 +707,10 @@ namespace winrt::TerminalApp::implementation
         wchar_t buffer[MAX_PATH];
 
         // Prefer GitHub Copilot CLI in ACP mode (JSON-RPC over stdio).
-        // The --acp flag starts the agent as an ACP server; stdio is the default transport.
+        // Model selection should come from Copilot's own configuration unless
+        // the user explicitly overrides agentCliPath in Terminal settings.
+        // The --acp flag starts the agent as an ACP server; stdio is the
+        // default transport.
         if (SearchPathW(nullptr, L"copilot", L".exe", MAX_PATH, buffer, nullptr) > 0)
         {
             return winrt::hstring{ L"copilot --acp --stdio" };
@@ -741,6 +744,30 @@ namespace winrt::TerminalApp::implementation
         if (SearchPathW(nullptr, L"wta", L".exe", MAX_PATH, buffer, nullptr) > 0)
         {
             return winrt::hstring{ buffer };
+        }
+
+        auto cursor = std::filesystem::path{ wil::GetModuleFileNameW<std::wstring>(nullptr) }.parent_path();
+        while (!cursor.empty())
+        {
+            for (const auto& relative : {
+                     std::filesystem::path{ L"wta\\target\\debug\\wta.exe" },
+                     std::filesystem::path{ L"wta\\target\\release\\wta.exe" },
+                 })
+            {
+                const auto candidate = cursor / relative;
+                std::error_code ec;
+                if (std::filesystem::exists(candidate, ec))
+                {
+                    return winrt::hstring{ candidate.lexically_normal().wstring() };
+                }
+            }
+
+            const auto parent = cursor.parent_path();
+            if (parent == cursor)
+            {
+                break;
+            }
+            cursor = parent;
         }
 
         // 2. Check the known dev build location (matches WindowEmperor's hardcoded path).
