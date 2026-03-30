@@ -233,58 +233,20 @@ HRESULT ComChannel::SetSettings(const std::wstring& settingsContent, std::wstrin
     return hr;
 }
 
-// Channel::Connect factory — tries COM first, falls back to pipe.
-std::unique_ptr<Channel> Channel::Connect(
-    const std::optional<std::wstring>& pipeNameOverride,
-    const std::optional<std::wstring>& pipeTokenOverride)
+// Channel::Connect factory — connects via COM using WT_COM_CLSID.
+std::unique_ptr<Channel> Channel::Connect()
 {
-    // If no explicit pipe override, try COM first.
-    if (!pipeNameOverride.has_value())
+    wchar_t clsid[128]{};
+    if (!GetEnvironmentVariableW(L"WT_COM_CLSID", clsid, ARRAYSIZE(clsid)))
     {
-        wchar_t clsid[128]{};
-        if (GetEnvironmentVariableW(L"WT_COM_CLSID", clsid, ARRAYSIZE(clsid)))
-        {
-            wchar_t token[256]{};
-            GetEnvironmentVariableW(L"WT_MCP_TOKEN", token, ARRAYSIZE(token));
-
-            auto channel = ComChannel::Connect(clsid, token);
-            if (channel)
-            {
-                return channel;
-            }
-            fprintf(stderr, "[wtcli] COM connect failed, trying pipe...\n");
-        }
-    }
-
-    // Fall back to pipe channel.
-    // TODO: implement PipeChannel
-    wchar_t pipeName[256]{};
-    if (pipeNameOverride.has_value())
-    {
-        wcsncpy_s(pipeName, pipeNameOverride->c_str(), _TRUNCATE);
-    }
-    else
-    {
-        if (!GetEnvironmentVariableW(L"WT_PIPE_NAME", pipeName, ARRAYSIZE(pipeName)))
-        {
-            fprintf(stderr, "[wtcli] Cannot find Windows Terminal. Set WT_COM_CLSID or WT_PIPE_NAME.\n");
-            return nullptr;
-        }
+        fprintf(stderr, "[wtcli] WT_COM_CLSID not set. Must run inside a Windows Terminal pane.\n");
+        return nullptr;
     }
 
     wchar_t token[256]{};
-    if (pipeTokenOverride.has_value())
-    {
-        wcsncpy_s(token, pipeTokenOverride->c_str(), _TRUNCATE);
-    }
-    else
-    {
-        GetEnvironmentVariableW(L"WT_MCP_TOKEN", token, ARRAYSIZE(token));
-    }
+    GetEnvironmentVariableW(L"WT_MCP_TOKEN", token, ARRAYSIZE(token));
 
-    // PipeChannel::Connect(pipeName, token) — TODO in Step 3
-    fprintf(stderr, "[wtcli] Pipe channel not yet implemented.\n");
-    return nullptr;
+    return ComChannel::Connect(clsid, token);
 }
 
 // String conversion utilities

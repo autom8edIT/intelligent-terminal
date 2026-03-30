@@ -3,7 +3,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <optional>
 
 #include <Windows.h>
 #include <objbase.h>
@@ -46,11 +45,8 @@ struct Channel
     virtual HRESULT SetSessionVariable(const std::wstring& paneId, const std::wstring& name, const std::wstring& value) = 0;
     virtual HRESULT SetSettings(const std::wstring& settingsContent, std::wstring& backupPath) = 0;
 
-    // Factory: tries COM first (WT_COM_CLSID), falls back to pipe (WT_PIPE_NAME).
-    // pipeNameOverride/pipeTokenOverride are from CLI --pipe-name/--pipe-token flags.
-    static std::unique_ptr<Channel> Connect(
-        const std::optional<std::wstring>& pipeNameOverride = std::nullopt,
-        const std::optional<std::wstring>& pipeTokenOverride = std::nullopt);
+    // Connect to Windows Terminal via COM (WT_COM_CLSID env var).
+    static std::unique_ptr<Channel> Connect();
 };
 
 // Helper: free all BSTRs in a PROTOCOL_WINDOW_INFO and zero the struct.

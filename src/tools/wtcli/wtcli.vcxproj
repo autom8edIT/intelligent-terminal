@@ -13,12 +13,10 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ComChannel.cpp" />
-    <ClCompile Include="PipeChannel.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Channel.h" />
     <ClInclude Include="ComChannel.h" />
-    <ClInclude Include="PipeChannel.h" />
     <ClInclude Include="Formatting.h" />
   </ItemGroup>
   <ItemDefinitionGroup>

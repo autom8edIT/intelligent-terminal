@@ -4,10 +4,7 @@
 
 #include "Channel.h"
 #include "ComChannel.h"
-#include "PipeChannel.h"
 #include "Formatting.h"
-
-#include <optional>
 #include <string>
 #include <cstdio>
 #include <thread>
@@ -103,17 +100,11 @@ int main()
 
     // Global options
     bool jsonMode = false;
-    std::string pipeNameOpt;
-    std::string pipeTokenOpt;
     app.add_flag("--json", jsonMode, "Output raw JSON");
-    app.add_option("--pipe-name", pipeNameOpt, "Override pipe name");
-    app.add_option("--pipe-token", pipeTokenOpt, "Override auth token");
 
-    // Helper: connect with global overrides
+    // Helper: connect to Windows Terminal via COM
     auto connect = [&]() -> std::unique_ptr<Channel> {
-        auto pipeName = pipeNameOpt.empty() ? std::nullopt : std::optional<std::wstring>(Utf8ToWide(pipeNameOpt));
-        auto pipeToken = pipeTokenOpt.empty() ? std::nullopt : std::optional<std::wstring>(Utf8ToWide(pipeTokenOpt));
-        return Channel::Connect(pipeName, pipeToken);
+        return Channel::Connect();
     };
 
     // ── list-windows ──
