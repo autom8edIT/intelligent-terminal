@@ -216,6 +216,58 @@ HRESULT ComChannel::SetSettings(const std::wstring& settingsContent, std::wstrin
     return hr;
 }
 
+HRESULT ComChannel::QuickPick(const std::wstring& title,
+                               const std::vector<std::wstring>& choices,
+                               bool allowFreeInput,
+                               bool& cancelled, std::wstring& selected)
+{
+    auto bstrTitle = ToBstr(title);
+
+    // Allocate BSTR array for choices
+    std::vector<BSTR> bstrChoices(choices.size());
+    auto cleanupChoices = wil::scope_exit([&]() {
+        for (auto& b : bstrChoices)
+            SysFreeString(b);
+    });
+    for (size_t i = 0; i < choices.size(); ++i)
+    {
+        bstrChoices[i] = SysAllocString(choices[i].c_str());
+    }
+
+    BOOL wasCancelled = TRUE;
+    wil::unique_bstr selectedBstr;
+    HRESULT hr = _server->QuickPick(bstrTitle.get(),
+                                     static_cast<UINT32>(choices.size()),
+                                     bstrChoices.data(),
+                                     allowFreeInput ? TRUE : FALSE,
+                                     &wasCancelled,
+                                     &selectedBstr);
+    if (SUCCEEDED(hr))
+    {
+        cancelled = (wasCancelled != FALSE);
+        selected = BstrToWstring(selectedBstr.get());
+    }
+    return hr;
+}
+
+HRESULT ComChannel::PollEvents(UINT32 timeoutMs, std::vector<std::wstring>& events)
+{
+    UINT32 count = 0;
+    BSTR* raw = nullptr;
+    HRESULT hr = _server->PollEvents(timeoutMs, &count, &raw);
+    if (SUCCEEDED(hr) && raw)
+    {
+        events.reserve(count);
+        for (UINT32 i = 0; i < count; ++i)
+        {
+            events.push_back(BstrToWstring(raw[i]));
+            SysFreeString(raw[i]);
+        }
+        CoTaskMemFree(raw);
+    }
+    return hr;
+}
+
 // Channel::Connect factory — connects via COM using WT_COM_CLSID.
 std::unique_ptr<Channel> Channel::Connect()
 {

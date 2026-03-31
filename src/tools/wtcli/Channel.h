@@ -46,6 +46,15 @@ struct Channel
     virtual HRESULT SetSessionVariable(const std::wstring& paneId, const std::wstring& name, const std::wstring& value) = 0;
     virtual HRESULT SetSettings(const std::wstring& settingsContent, std::wstring& backupPath) = 0;
 
+    // Interactive
+    virtual HRESULT QuickPick(const std::wstring& title,
+                              const std::vector<std::wstring>& choices,
+                              bool allowFreeInput,
+                              bool& cancelled, std::wstring& selected) = 0;
+
+    // Events
+    virtual HRESULT PollEvents(UINT32 timeoutMs, std::vector<std::wstring>& events) = 0;
+
     // Connect to Windows Terminal via COM (WT_COM_CLSID env var).
     static std::unique_ptr<Channel> Connect();
 };

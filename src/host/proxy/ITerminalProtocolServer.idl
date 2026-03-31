@@ -117,4 +117,18 @@ interface ITerminalProtocolServer : IUnknown
     HRESULT SendInput([in] BSTR paneId, [in] BSTR text);
     HRESULT SetSessionVariable([in] BSTR paneId, [in] BSTR name, [in] BSTR value);
     HRESULT SetSettings([in] BSTR settingsContent, [out] BSTR* backupPath);
+
+    // ── Interactive ──
+    HRESULT QuickPick([in] BSTR title,
+                      [in] UINT32 choiceCount, [in, size_is(choiceCount)] BSTR* choices,
+                      [in] BOOL allowFreeInput,
+                      [out] BOOL* cancelled, [out, retval] BSTR* selected);
+
+    // ── Events ──
+    // Poll for buffered protocol events (VT sequences, connection-state changes).
+    // Blocks up to timeoutMs waiting for at least one event.
+    // Returns an array of JSON-encoded event strings.
+    HRESULT PollEvents([in] UINT32 timeoutMs,
+                       [out] UINT32* eventCount,
+                       [out, size_is(,*eventCount)] BSTR** events);
 };

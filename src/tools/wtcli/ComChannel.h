@@ -44,6 +44,15 @@ public:
     HRESULT SetSessionVariable(const std::wstring& paneId, const std::wstring& name, const std::wstring& value) override;
     HRESULT SetSettings(const std::wstring& settingsContent, std::wstring& backupPath) override;
 
+    // Interactive
+    HRESULT QuickPick(const std::wstring& title,
+                      const std::vector<std::wstring>& choices,
+                      bool allowFreeInput,
+                      bool& cancelled, std::wstring& selected) override;
+
+    // Events
+    HRESULT PollEvents(UINT32 timeoutMs, std::vector<std::wstring>& events) override;
+
 private:
     Microsoft::WRL::ComPtr<ITerminalProtocolServer> _server;
 };

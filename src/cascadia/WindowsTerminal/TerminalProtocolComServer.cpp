@@ -20,6 +20,10 @@ ProtocolRequestHandler* TerminalProtocolComServer::s_handler = nullptr;
 static DWORD g_comRegistration = 0;
 static std::shared_mutex g_mtx;
 
+// Static instance tracking for event delivery to COM clients
+std::mutex TerminalProtocolComServer::s_instancesMutex;
+std::vector<TerminalProtocolComServer*> TerminalProtocolComServer::s_instances;
+
 void TerminalProtocolComServer::s_setEmperor(WindowEmperor* emperor) noexcept
 {
     s_emperor = emperor;
@@ -63,6 +67,45 @@ HRESULT TerminalProtocolComServer::s_StopListening()
     }
 
     return S_OK;
+}
+
+void TerminalProtocolComServer::_registerForEvents()
+{
+    // Initialize the event signal for PollEvents blocking
+    _eventSignal.create(wil::EventOptions::ManualReset);
+
+    std::lock_guard lock{ s_instancesMutex };
+    s_instances.push_back(this);
+}
+
+void TerminalProtocolComServer::_unregisterFromEvents()
+{
+    std::lock_guard lock{ s_instancesMutex };
+    std::erase(s_instances, this);
+}
+
+void TerminalProtocolComServer::s_BroadcastEventToComClients(const std::string& eventJson)
+{
+    std::lock_guard lock{ s_instancesMutex };
+    for (auto* instance : s_instances)
+    {
+        if (!instance->_authenticated)
+            continue;
+
+        {
+            std::lock_guard eLock{ instance->_eventMutex };
+            // Cap queue to prevent unbounded memory growth
+            if (instance->_eventQueue.size() < 1000)
+            {
+                instance->_eventQueue.push_back(eventJson);
+            }
+        }
+        // Signal the event to wake up any blocking PollEvents call
+        if (instance->_eventSignal)
+        {
+            instance->_eventSignal.SetEvent();
+        }
+    }
 }
 
 // ============================================================================
@@ -160,6 +203,12 @@ try
 
     s_handler->HandleRequest(request, _authenticated);
 
+    // Register for event delivery on successful authentication
+    if (_authenticated)
+    {
+        _registerForEvents();
+    }
+
     *authenticated = _authenticated ? TRUE : FALSE;
     *protocolVersion = SysAllocString(L"1.0");
     return S_OK;
@@ -175,14 +224,13 @@ try
     *protocolVersion = SysAllocString(L"1.0");
 
     // Build JSON array of method names from the canonical list in ProtocolRequestHandler.
-    // "quick_pick" is intentionally excluded — it blocks the UI thread and isn't
-    // supported over the COM transport yet.
     Json::Value methods(Json::arrayValue);
     for (const auto& m : ProtocolRequestHandler::GetSupportedMethods())
     {
-        if (m != "quick_pick")
-            methods.append(m);
+        methods.append(m);
     }
+    // Add COM-only methods not in the JSON handler's list
+    methods.append("poll_events");
 
     Json::StreamWriterBuilder wb;
     wb["indentation"] = "";
@@ -713,6 +761,111 @@ try
         return E_FAIL;
 
     *backupPath = SysAllocString(winrt::to_hstring(r.get("backup_path", "").asString()).c_str());
+    return S_OK;
+}
+CATCH_RETURN()
+
+// ============================================================================
+// Interactive
+// ============================================================================
+
+STDMETHODIMP TerminalProtocolComServer::QuickPick(BSTR title, UINT32 choiceCount, BSTR* choices,
+                                                   BOOL allowFreeInput, BOOL* cancelled, BSTR* selected)
+try
+{
+    RETURN_HR_IF_NULL(E_POINTER, cancelled);
+    RETURN_HR_IF_NULL(E_POINTER, selected);
+    RETURN_HR_IF_NULL(E_NOT_VALID_STATE, s_handler);
+    *cancelled = TRUE;
+    *selected = nullptr;
+
+    // Build JSON request params
+    Json::Value params;
+    if (title && SysStringLen(title) > 0)
+        params["title"] = winrt::to_string(std::wstring_view(title, SysStringLen(title)));
+
+    Json::Value choicesArr(Json::arrayValue);
+    for (UINT32 i = 0; i < choiceCount; ++i)
+    {
+        if (choices[i])
+            choicesArr.append(winrt::to_string(std::wstring_view(choices[i], SysStringLen(choices[i]))));
+    }
+    params["choices"] = choicesArr;
+    params["allow_free_input"] = allowFreeInput ? true : false;
+
+    Json::Value request;
+    request["type"] = "request";
+    request["id"] = "com-quick-pick";
+    request["method"] = "quick_pick";
+    request["params"] = params;
+
+    const auto response = s_handler->HandleRequest(request, _authenticated);
+    const auto& r = response["result"];
+    if (r.isNull())
+        return E_FAIL;
+
+    *cancelled = r.get("cancelled", true).asBool() ? TRUE : FALSE;
+    *selected = SysAllocString(winrt::to_hstring(r.get("selected", "").asString()).c_str());
+    return S_OK;
+}
+CATCH_RETURN()
+
+// ============================================================================
+// Events
+// ============================================================================
+
+STDMETHODIMP TerminalProtocolComServer::PollEvents(UINT32 timeoutMs, UINT32* eventCount, BSTR** events)
+try
+{
+    RETURN_HR_IF_NULL(E_POINTER, eventCount);
+    RETURN_HR_IF_NULL(E_POINTER, events);
+    *eventCount = 0;
+    *events = nullptr;
+
+    if (!_authenticated)
+        return E_ACCESSDENIED;
+
+    // Ensure page event registration is triggered (lazy init like pipe path)
+    if (s_handler)
+    {
+        // Send a lightweight request to trigger _ensurePageEventsRegistered
+        Json::Value capReq;
+        capReq["type"] = "request";
+        capReq["id"] = "com-poll-init";
+        capReq["method"] = "get_capabilities";
+        capReq["params"] = Json::objectValue;
+        s_handler->HandleRequest(capReq, _authenticated);
+    }
+
+    // Wait for events up to timeoutMs
+    if (_eventSignal)
+    {
+        WaitForSingleObject(_eventSignal.get(), timeoutMs);
+    }
+
+    // Drain the queue
+    std::vector<std::string> drained;
+    {
+        std::lock_guard lock{ _eventMutex };
+        drained.swap(_eventQueue);
+        if (_eventSignal)
+        {
+            _eventSignal.ResetEvent();
+        }
+    }
+
+    if (drained.empty())
+        return S_OK;
+
+    *eventCount = static_cast<UINT32>(drained.size());
+    *events = static_cast<BSTR*>(CoTaskMemAlloc(drained.size() * sizeof(BSTR)));
+    RETURN_HR_IF_NULL(E_OUTOFMEMORY, *events);
+
+    for (UINT32 i = 0; i < drained.size(); ++i)
+    {
+        (*events)[i] = SysAllocString(winrt::to_hstring(drained[i]).c_str());
+    }
+
     return S_OK;
 }
 CATCH_RETURN()

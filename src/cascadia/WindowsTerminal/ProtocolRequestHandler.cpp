@@ -4,6 +4,7 @@
 #include "pch.h"
 #include "ProtocolRequestHandler.h"
 #include "TerminalProtocolServer.h"
+#include "TerminalProtocolComServer.h"
 #include "WindowEmperor.h"
 #include "AppHost.h"
 
@@ -279,7 +280,11 @@ void ProtocolRequestHandler::_ensurePageEventsRegistered()
         auto* server = _server;
         page.ProtocolVtSequenceReceived(
             [server](auto&&, const winrt::hstring& eventJson) {
-                server->BroadcastEvent(winrt::to_string(eventJson));
+                const auto jsonStr = winrt::to_string(eventJson);
+                // Broadcast to named-pipe clients
+                server->BroadcastEvent(jsonStr);
+                // Broadcast to COM clients
+                TerminalProtocolComServer::s_BroadcastEventToComClients(jsonStr);
             });
         break; // Single-window for now
     }

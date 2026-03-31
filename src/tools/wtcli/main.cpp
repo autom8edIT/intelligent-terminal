@@ -13,6 +13,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -521,6 +522,100 @@ int main()
             if (!pn.empty()) printf("set WT_PIPE_NAME=%s\n", pn.c_str());
             if (!tk.empty()) printf("set WT_MCP_TOKEN=%s\n", tk.c_str());
             if (!cl.empty()) printf("set WT_COM_CLSID=%s\n", cl.c_str());
+        }
+    });
+
+    // ── quick-pick ──
+    std::string quickPickTitle;
+    std::vector<std::string> quickPickChoices;
+    bool quickPickFreeInput = false;
+    auto* quickPickCmd = app.add_subcommand("quick-pick", "Show a quick-pick dialog in Windows Terminal");
+    quickPickCmd->add_option("choices", quickPickChoices, "Choices to present")->required();
+    quickPickCmd->add_option("--title", quickPickTitle, "Dialog title");
+    quickPickCmd->add_flag("--free-input", quickPickFreeInput, "Allow freeform text input");
+    quickPickCmd->callback([&]() {
+        auto ch = connect();
+        if (!ch) return;
+
+        std::vector<std::wstring> wideChoices;
+        wideChoices.reserve(quickPickChoices.size());
+        for (const auto& c : quickPickChoices)
+            wideChoices.push_back(Utf8ToWide(c));
+
+        bool cancelled = false;
+        std::wstring selected;
+        if (FAILED(ch->QuickPick(Utf8ToWide(quickPickTitle), wideChoices, quickPickFreeInput, cancelled, selected)))
+        {
+            fprintf(stderr, "QuickPick failed\n");
+            exitCode = 1;
+            return;
+        }
+        if (jsonMode)
+        {
+            Json::Value v;
+            v["cancelled"] = cancelled;
+            v["selected"] = WideToUtf8(selected);
+            PrintJson(v);
+        }
+        else
+        {
+            if (cancelled)
+                printf("(cancelled)\n");
+            else
+                printf("%s\n", WideToUtf8(selected).c_str());
+        }
+    });
+
+    // ── listen ──
+    std::string listenTarget;
+    auto* listenCmd = app.add_subcommand("listen", "Stream real-time events from Windows Terminal")->alias("mon");
+    listenCmd->add_option("-t,--target", listenTarget, "Filter by pane ID");
+    listenCmd->callback([&]() {
+        auto ch = connect();
+        if (!ch) return;
+
+        // Trigger lazy event registration via get_capabilities
+        {
+            std::wstring version, methods;
+            ch->GetCapabilities(version, methods);
+        }
+
+        if (!jsonMode)
+            fprintf(stderr, "Listening for events... (Ctrl-C to stop)\n");
+
+        while (true)
+        {
+            std::vector<std::wstring> events;
+            auto hr = ch->PollEvents(1000, events);
+            if (FAILED(hr))
+            {
+                fprintf(stderr, "PollEvents failed: 0x%08lX\n", hr);
+                exitCode = 1;
+                return;
+            }
+
+            for (const auto& eventWide : events)
+            {
+                auto eventUtf8 = WideToUtf8(eventWide);
+
+                // Optionally filter by pane_id
+                if (!listenTarget.empty())
+                {
+                    Json::Value ev;
+                    Json::CharReaderBuilder rb;
+                    std::string errs;
+                    std::istringstream ss(eventUtf8);
+                    if (Json::parseFromStream(rb, ss, &ev, &errs))
+                    {
+                        auto paneId = ev["params"].get("pane_id", "").asString();
+                        if (paneId != listenTarget)
+                            continue;
+                    }
+                }
+
+                printf("%s\n", eventUtf8.c_str());
+                fflush(stdout);
+            }
         }
     });
 
