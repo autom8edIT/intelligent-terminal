@@ -202,8 +202,6 @@
                 <com:Interface Id="E686C757-9A35-4A1C-B3CE-0BCC8B5C69F4" ProxyStubClsid="3171DE52-6EFA-4AEF-8A9F-D02BD67E7A4F"/>
                 <com:Interface Id="6F23DA90-15C5-4203-9DB0-64E73F1B1B00" ProxyStubClsid="3171DE52-6EFA-4AEF-8A9F-D02BD67E7A4F"/> <!-- ITerminalHandoff3 -->
                 <com:Interface Id="746E6BC0-AB05-4E38-AB14-71E86763141F" ProxyStubClsid="3171DE52-6EFA-4AEF-8A9F-D02BD67E7A4F"/>
-                <com:Interface Id="7B3F8A1E-5C2D-4E6F-9A8B-1D3E5F7A9B0C" ProxyStubClsid="3171DE52-6EFA-4AEF-8A9F-D02BD67E7A4F"/> <!-- ITerminalProtocolServer -->
-                <com:Interface Id="539A9320-4CD2-4B59-8759-7E361EC9E7EA" ProxyStubClsid="3171DE52-6EFA-4AEF-8A9F-D02BD67E7A4F"/> <!-- ITerminalEventCallback -->
             </com:ComInterface>
         </com:Extension>
         <com:Extension Category="windows.comServer">
