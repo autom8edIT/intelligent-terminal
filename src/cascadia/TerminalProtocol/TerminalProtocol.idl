@@ -80,6 +80,13 @@ namespace Microsoft.Terminal.Protocol
         String Selected;
     };
 
+    // Callback interface — implemented by clients (e.g. wtcli) to receive
+    // push-based event notifications from Terminal.
+    interface IProtocolEventCallback
+    {
+        void OnEvent(String eventJson);
+    }
+
     // Server interface — implemented by WindowsTerminal.exe, consumed by wtcli.exe.
     // Activated via CoCreateInstance (CLSCTX_LOCAL_SERVER) with a custom class factory.
     // Marshaled cross-process via MBM (no proxy/stub DLL needed).
@@ -109,6 +116,10 @@ namespace Microsoft.Terminal.Protocol
 
         // Interactive
         QuickPickResult QuickPick(String title, String[] choices, Boolean allowFreeInput);
+
+        // Events — push-based via callback
+        void Subscribe(IProtocolEventCallback callback);
+        void Unsubscribe();
     }
 }
 

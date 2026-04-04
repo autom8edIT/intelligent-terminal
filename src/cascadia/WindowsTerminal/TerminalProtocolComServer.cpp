@@ -164,10 +164,24 @@ void TerminalProtocolComServer::s_NotifyEventToComClients(const std::string& eve
     std::lock_guard lock{ s_instancesMutex };
     for (auto* instance : s_instances)
     {
-        // Fire the WinRT event on each instance.
-        // TODO: Once EventReceived is in the IDL, cross-process clients
-        //       will receive these via MBM automatically.
-        instance->_eventReceived(nullptr, eventHstr);
+        Protocol::IProtocolEventCallback callback{ nullptr };
+        {
+            std::lock_guard cbLock{ instance->_callbackMutex };
+            callback = instance->_callback;
+        }
+        if (!callback)
+            continue;
+
+        try
+        {
+            callback.OnEvent(eventHstr);
+        }
+        catch (...)
+        {
+            // Client disconnected — clear the callback.
+            std::lock_guard cbLock{ instance->_callbackMutex };
+            instance->_callback = nullptr;
+        }
     }
 }
 
@@ -264,6 +278,8 @@ winrt::hstring TerminalProtocolComServer::GetCapabilities()
         "set_session_variable",
         "set_settings",
         "quick_pick",
+        "subscribe",
+        "unsubscribe",
     };
 
     Json::Value methods(Json::arrayValue);
@@ -671,4 +687,28 @@ Protocol::QuickPickResult TerminalProtocolComServer::QuickPick(
     result.Cancelled = r.get("cancelled", true).asBool();
     result.Selected = winrt::to_hstring(r.get("selected", "").asString());
     return result;
+}
+
+// ============================================================================
+// Events — push-based via callback
+// ============================================================================
+
+void TerminalProtocolComServer::Subscribe(Protocol::IProtocolEventCallback const& callback)
+{
+    THROW_HR_IF(E_INVALIDARG, !callback);
+    THROW_HR_IF(E_ACCESSDENIED, !_authenticated);
+
+    {
+        std::lock_guard lock{ _callbackMutex };
+        _callback = callback;
+    }
+
+    // Ensure page events are wired up (one-time global init).
+    _ensurePageEventsRegistered();
+}
+
+void TerminalProtocolComServer::Unsubscribe()
+{
+    std::lock_guard lock{ _callbackMutex };
+    _callback = nullptr;
 }

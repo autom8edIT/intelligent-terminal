@@ -91,6 +91,10 @@ TerminalProtocolComServer : winrt::implements<TerminalProtocolComServer, Protoco
                                          winrt::array_view<winrt::hstring const> choices,
                                          bool allowFreeInput);
 
+    // Events — push-based via callback
+    void Subscribe(Protocol::IProtocolEventCallback const& callback);
+    void Unsubscribe();
+
     // Static setup — must be called before s_StartListening().
     static void s_setEmperor(WindowEmperor* emperor) noexcept;
 
@@ -103,9 +107,9 @@ TerminalProtocolComServer : winrt::implements<TerminalProtocolComServer, Protoco
 private:
     bool _authenticated = false;
 
-    // Event tracking for push-based notifications to COM clients.
-    winrt::event<winrt::Windows::Foundation::TypedEventHandler<
-        winrt::Windows::Foundation::IInspectable, winrt::hstring>> _eventReceived;
+    // Per-instance event callback (set via Subscribe, cleared via Unsubscribe).
+    std::mutex _callbackMutex;
+    Protocol::IProtocolEventCallback _callback{ nullptr };
 
     // Static tracking of live COM instances for event delivery
     static std::mutex s_instancesMutex;

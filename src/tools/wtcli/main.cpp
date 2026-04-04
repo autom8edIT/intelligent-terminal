@@ -17,6 +17,23 @@
 
 namespace Protocol = winrt::Microsoft::Terminal::Protocol;
 
+// ── EventCallback — receives push-based events from Terminal ──
+
+struct EventCallback : winrt::implements<EventCallback, Protocol::IProtocolEventCallback>
+{
+    EventCallback(std::function<void(winrt::hstring const&)> handler) :
+        _handler(std::move(handler)) {}
+
+    void OnEvent(winrt::hstring const& eventJson)
+    {
+        if (_handler)
+            _handler(eventJson);
+    }
+
+private:
+    std::function<void(winrt::hstring const&)> _handler;
+};
+
 // ── Helpers ──
 
 static Protocol::IProtocolServer ConnectToTerminal()
@@ -621,14 +638,61 @@ int main()
     });
 
     // ── listen ──
-    // TODO: WinRT interface events aren't wired yet.
     std::string listenTarget;
     auto* listenCmd = app.add_subcommand("listen", "Stream real-time events from Windows Terminal");
     listenCmd->add_option("-t,--target", listenTarget, "Filter by pane ID");
     listenCmd->callback([&]() {
-        fprintf(stderr,
-            "Event streaming via the COM interface is not yet supported with the WinRT protocol.\n");
-        exitCode = 1;
+        auto server = ConnectToTerminal();
+        if (!server) { exitCode = 1; return; }
+
+        // Set up Ctrl-C handler to unblock the wait.
+        static HANDLE s_stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        SetConsoleCtrlHandler([](DWORD) -> BOOL {
+            SetEvent(s_stopEvent);
+            return TRUE;
+        }, TRUE);
+
+        if (!jsonMode)
+            fprintf(stderr, "Listening for events... (Ctrl-C to stop)\n");
+
+        auto callback = winrt::make<EventCallback>([&](winrt::hstring const& eventJson) {
+            auto eventUtf8 = winrt::to_string(eventJson);
+
+            // Optionally filter by pane_id
+            if (!listenTarget.empty())
+            {
+                Json::Value ev;
+                Json::CharReaderBuilder rb;
+                std::string errs;
+                std::istringstream ss(eventUtf8);
+                if (Json::parseFromStream(rb, ss, &ev, &errs))
+                {
+                    auto paneId = ev["params"].get("pane_id", "").asString();
+                    if (paneId != listenTarget)
+                        return;
+                }
+            }
+
+            printf("%s\n", eventUtf8.c_str());
+            fflush(stdout);
+        });
+
+        try
+        {
+            server.Subscribe(callback);
+        }
+        catch (winrt::hresult_error const& e)
+        {
+            fprintf(stderr, "Subscribe failed: %ls\n", e.message().c_str());
+            exitCode = 1;
+            CloseHandle(s_stopEvent);
+            return;
+        }
+
+        // Block until Ctrl-C.
+        WaitForSingleObject(s_stopEvent, INFINITE);
+        server.Unsubscribe();
+        CloseHandle(s_stopEvent);
     });
 
     // ── Default (no subcommand) ──
