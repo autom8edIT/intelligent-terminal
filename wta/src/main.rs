@@ -227,6 +227,25 @@ enum Command {
         delegate_agent: Option<String>,
     },
 
+    /// Delegate a prompt to a new tab with a configured agent (fire-and-forget)
+    Delegate {
+        /// The prompt to send to the delegate agent
+        #[arg(value_name = "PROMPT")]
+        prompt: String,
+
+        /// Agent CLI command (used to derive delegate agent commandline)
+        #[arg(long, default_value = "copilot --acp --stdio")]
+        agent: String,
+
+        /// Working directory for the delegate agent tab
+        #[arg(long)]
+        cwd: Option<String>,
+
+        /// Source pane ID to read terminal context from
+        #[arg(long)]
+        source_pane: Option<String>,
+    },
+
     /// Show a quick-pick dialog in Windows Terminal and print the user's selection
     QuickPick {
         /// Choices to present (1 or more, all positional args)
@@ -469,10 +488,27 @@ async fn main() -> Result<()> {
             run_set_env(&pipe_override, &shell)
         }
 
-        // ── Ensure host (called by WT on startup, stub for now) ──
-        Some(Command::EnsureHost { .. }) => {
-            // No-op: host prewarm not yet implemented in this build.
-            Ok(())
+        // ── Ensure host (called by WT on startup) ──
+        Some(Command::EnsureHost {
+            agent,
+            delegate_agent,
+        }) => {
+            run_ensure_host(
+                &pipe_override,
+                agent.unwrap_or_else(|| "copilot --acp --stdio".to_string()),
+                delegate_agent,
+            )
+            .await
+        }
+
+        // ── Delegate prompt to new tab agent ──
+        Some(Command::Delegate {
+            prompt,
+            agent,
+            cwd,
+            source_pane,
+        }) => {
+            run_delegate(&pipe_override, &prompt, &agent, cwd.as_deref(), source_pane.as_deref()).await
         }
 
         // ── Quick pick ──
@@ -927,6 +963,263 @@ async fn run_listen(po: &PipeOverride, pane_filter: Option<&str>) -> Result<()> 
     }
 
     Ok(())
+}
+
+// ─── Delegate prompt to new tab agent ────────────────────────────────────────
+
+async fn run_delegate(
+    po: &PipeOverride,
+    prompt: &str,
+    agent_cmd: &str,
+    cwd: Option<&str>,
+    source_pane: Option<&str>,
+) -> Result<()> {
+    fn dlog(msg: &str) {
+        use std::io::Write;
+        let path = std::env::temp_dir().join("wta-delegate.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = writeln!(f, "[{:.3}] {}", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(), msg);
+        }
+    }
+    dlog(&format!("run_delegate: prompt={:?} agent={} cwd={:?} source_pane={:?}",
+        prompt, agent_cmd, cwd, source_pane));
+
+    let (debug_tx, _) = tokio::sync::mpsc::unbounded_channel::<app::DebugMessage>();
+    let channel = match connect_to_wt_pipe(po, debug_tx).await {
+        Ok(ch) => { dlog("pipe connected"); ch }
+        Err(e) => { dlog(&format!("pipe FAILED: {:#}", e)); return Err(e); }
+    };
+    let shell_mgr = ShellManager::new()
+        .with_wt_channel(Arc::new(channel) as Arc<dyn shell::wt_channel::WtChannel>);
+
+    match delegate_with_context(&shell_mgr, prompt, agent_cmd, source_pane, cwd).await {
+        Ok(()) => { dlog("delegate OK"); Ok(()) }
+        Err(e) => { dlog(&format!("delegate FAILED: {:#}", e)); Err(e) }
+    }
+}
+
+/// Shared delegation logic: read context from source pane, build a rich prompt,
+/// and create a new tab with the delegate agent. Used by both `wta delegate`
+/// CLI and the auto-fix flow.
+async fn delegate_with_context(
+    shell_mgr: &ShellManager,
+    prompt: &str,
+    agent_cmd: &str,
+    source_pane_id: Option<&str>,
+    cwd: Option<&str>,
+) -> Result<()> {
+    // Read terminal context from the source pane if provided.
+    let pane_context = if let Some(pane_id) = source_pane_id {
+        match shell_mgr.wt_read_pane_output(pane_id, Some(30)).await {
+            Ok(value) => value
+                .get("content")
+                .and_then(|c| c.as_str())
+                .map(|s| s.to_string()),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    // Build a rich prompt with terminal context.
+    let full_prompt = if let Some(ref context) = pane_context {
+        format!(
+            "{}\n\n## Terminal Context (pane {})\n```\n{}\n```",
+            prompt,
+            source_pane_id.unwrap_or("?"),
+            context
+        )
+    } else {
+        prompt.to_string()
+    };
+
+    // Build the delegate agent commandline.
+    let delegate_agents = crate::coordinator::default_delegate_agent_runtimes(
+        None,
+        Some(agent_cmd),
+    );
+    let runtime = delegate_agents
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("no delegate agent configured"))?;
+
+    let commandline = crate::coordinator::build_delegate_commandline(runtime, &full_prompt)?;
+
+    // Log the final commandline for diagnostics.
+    {
+        fn dlog(msg: &str) {
+            use std::io::Write;
+            let path = std::env::temp_dir().join("wta-delegate.log");
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                let _ = writeln!(f, "[{:.3}] {}", std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(), msg);
+            }
+        }
+        dlog(&format!("delegate_with_context: commandline={:?} cwd={:?}", commandline, cwd));
+    }
+
+    // Create a new tab with the delegate agent.
+    shell_mgr
+        .wt_create_tab(Some(&commandline), cwd, None)
+        .await?;
+
+    Ok(())
+}
+
+// ─── Ensure host (background mode) ──────────────────────────────────────────
+
+async fn run_ensure_host(
+    po: &PipeOverride,
+    agent_cmd: String,
+    delegate_agent_cmd: Option<String>,
+) -> Result<()> {
+    fn host_log(msg: &str) {
+        use std::io::Write;
+        let path = std::env::temp_dir().join("wta-ensure-host.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let _ = writeln!(
+                f,
+                "[{:.3}] {}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64(),
+                msg
+            );
+        }
+    }
+
+    host_log("=== ensure-host starting ===");
+
+    let local_set = tokio::task::LocalSet::new();
+    local_set
+        .run_until(async move {
+            // Connect to the Windows Terminal protocol pipe.
+            // Must be inside LocalSet because start_reader() uses spawn_local.
+            let (debug_tx, _debug_rx) =
+                tokio::sync::mpsc::unbounded_channel::<app::DebugMessage>();
+            let mut shell_mgr = ShellManager::new();
+            let wt_event_rx = match connect_to_wt_pipe(po, debug_tx).await {
+                Ok(channel) => {
+                    host_log("Connected to WT pipe");
+                    let event_rx = channel.subscribe_events();
+                    let arc_channel = Arc::new(channel);
+                    shell_mgr = shell_mgr.with_wt_channel(
+                        arc_channel.clone() as Arc<dyn shell::wt_channel::WtChannel>,
+                    );
+
+                    host_log("Starting pipe reader...");
+                    arc_channel.start_reader().await;
+                    host_log("Pipe reader started, fetching capabilities...");
+                    match arc_channel
+                        .request("get_capabilities", serde_json::json!({}))
+                        .await
+                    {
+                        Ok(v) => host_log(&format!("get_capabilities OK: {}", v)),
+                        Err(e) => host_log(&format!("get_capabilities FAILED: {}", e)),
+                    }
+                    Some(event_rx)
+                }
+                Err(e) => {
+                    host_log(&format!("No WT pipe: {}", e));
+                    None
+                }
+            };
+            let shell_mgr = Arc::new(shell_mgr);
+
+            // Compute shared host pipe name.
+            let wt_info = po.pipe_name.as_ref().map(|name| {
+                shell::wt_channel::ConnectionInfo {
+                    pipe_name: name.clone(),
+                    token: po.pipe_token.clone().unwrap_or_default(),
+                    source: shell::wt_channel::DiscoverySource::EnvVar,
+                }
+            });
+            let host_pipe_name = shared_host::pipe_name_for(
+                wt_info.as_ref(),
+                Some(agent_cmd.as_str()),
+                delegate_agent_cmd.as_deref(),
+            );
+            host_log(&format!("Host pipe: {}", host_pipe_name));
+            // Spawn background listener for agent_prompt events from the WT pipe.
+            if let Some(mut wt_rx) = wt_event_rx {
+                let sm = Arc::clone(&shell_mgr);
+                let agent_for_recs = agent_cmd.clone();
+                let delegate_for_recs = delegate_agent_cmd.clone();
+                tokio::task::spawn_local(async move {
+                    // Create a recommendation executor for delegation.
+                    let (rec_tx, rec_rx) =
+                        tokio::sync::mpsc::unbounded_channel();
+                    let (evt_tx, _evt_rx) = tokio::sync::mpsc::unbounded_channel();
+                    let delegate_agents =
+                        crate::coordinator::default_delegate_agent_runtimes(
+                            delegate_for_recs.as_deref(),
+                            Some(agent_for_recs.as_str()),
+                        );
+                    tokio::spawn(crate::coordinator::run_recommendation_executor(
+                        rec_rx,
+                        evt_tx,
+                        sm,
+                        delegate_agents,
+                    ));
+
+                    while let Some(event_json) = wt_rx.recv().await {
+                        let method = event_json
+                            .get("method")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if method == "agent_prompt" {
+                            let prompt = event_json
+                                .get("params")
+                                .and_then(|p| p.get("prompt"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if !prompt.is_empty() {
+                                host_log(&format!("agent_prompt received: {}", prompt));
+                                let choice = crate::coordinator::RecommendationChoice {
+                                    choice: 1,
+                                    title: "Delegate to tab agent".into(),
+                                    rationale: String::new(),
+                                    actions: vec![
+                                        crate::coordinator::RecommendedAction::OpenAndSend {
+                                            target: crate::coordinator::OpenTarget::Tab,
+                                            parent: None,
+                                            input: prompt,
+                                            agent: Some("copilot".into()),
+                                            cwd: None,
+                                            title: None,
+                                        },
+                                    ],
+                                };
+                                let _ = rec_tx.send(choice);
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Start the shared host server (ACP client + host service).
+            host_log("Starting shared host server...");
+            match shared_host::run_host_server(
+                host_pipe_name,
+                agent_cmd,
+                delegate_agent_cmd,
+                shell_mgr,
+                true, // wt_connected
+            )
+            .await
+            {
+                Ok(()) => host_log("Shared host server exited normally"),
+                Err(e) => host_log(&format!("Shared host server FAILED: {:#}", e)),
+            }
+            Ok(())
+        })
+        .await
 }
 
 // ─── Default ACP TUI mode ───────────────────────────────────────────────────
@@ -1414,6 +1707,18 @@ async fn run_acp_app(
                 app_state.tab_id = Some(tab_id);
                 app_state.window_id = Some(window_id);
             }
+            // Read source pane context from env vars set by WT when creating the agent pane.
+            app_state.source_pane_id = std::env::var("WTA_SOURCE_PANE_ID").ok().filter(|s| !s.is_empty());
+            app_state.source_cwd = std::env::var("WTA_SOURCE_CWD").ok().filter(|s| !s.is_empty());
+
+            // If a prompt was passed via CLI arg (e.g., from command palette creating
+            // a new agent pane), delegate it to a new tab agent on startup.
+            if let Some(ref initial_prompt) = cli.prompt {
+                if !initial_prompt.is_empty() {
+                    app_state.delegate_to_tab_agent(initial_prompt, None);
+                }
+            }
+
             app_state.run(terminal, event_rx, ui_event_rx).await
         })
         .await

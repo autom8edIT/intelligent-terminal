@@ -2244,9 +2244,24 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     {
         try
         {
+            // Collect VT sequences while the lock is held, raise events after releasing.
+            std::vector<winrt::hstring> vtSequences;
             {
                 const auto lock = _terminal->LockForWriting();
+                _terminal->SetVtSequenceCallback([&vtSequences](std::wstring_view seq) {
+                    vtSequences.emplace_back(seq);
+                });
                 _terminal->Write(winrt_array_to_wstring_view(str));
+                _terminal->SetVtSequenceCallback([this](std::wstring_view seq) {
+                    // Restore the original callback for non-output-handler callers.
+                    VtSequenceReceived.raise(*this, winrt::hstring{ seq });
+                });
+            }
+
+            // Now outside the lock — safe to raise events that may block on pipe I/O.
+            for (const auto& seq : vtSequences)
+            {
+                VtSequenceReceived.raise(*this, seq);
             }
 
             if (!_pendingResponses.empty())

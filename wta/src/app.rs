@@ -14,7 +14,7 @@ use crate::coordinator::{
     validate_recommendation_set_for_coordinator_target, RecommendationChoice, RecommendationSet,
 };
 use crate::protocol::acp::client::{prompt_timing_log, PromptSubmission};
-use crate::shared_host::{PaneContext, SharedStateSnapshot};
+use crate::shared_host::SharedStateSnapshot;
 use crate::ui;
 use crate::ui_trace;
 
@@ -209,6 +209,19 @@ fn classify_wt_event(method: &str, pane_id: &str, params: &serde_json::Value) ->
                 age_ticks: 100,
             }
         }
+        "agent_prompt" => {
+            let prompt = params
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            WtNotification {
+                severity: WtEventSeverity::Actionable,
+                pane_id: pane_id.to_string(),
+                summary: format!("agent_prompt:{}", prompt),
+                acknowledged: false,
+                age_ticks: 0,
+            }
+        }
         _ => WtNotification {
             severity: WtEventSeverity::Informational,
             pane_id: pane_id.to_string(),
@@ -322,6 +335,9 @@ pub struct App {
     pub pane_id: Option<String>,
     pub tab_id: Option<String>,
     pub window_id: Option<String>,
+    // Source pane context (from WTA_SOURCE_* env vars set by WT)
+    pub source_pane_id: Option<String>,
+    pub source_cwd: Option<String>,
     current_prompt_text: Option<String>,
     pending_completed_turn: Option<CompletedTurn>,
     // WT event notifications
@@ -329,8 +345,8 @@ pub struct App {
     pub show_notification_banner: bool,
     // Auto-fix: timestamp of last auto-fix prompt to debounce rapid errors
     last_autofix_unix_s: f64,
-    // Auto-fix: true while an auto-fix prompt is in flight (hides intermediate UI)
-    autofix_in_flight: bool,
+    // Auto-fix: the pane ID where the error occurred (used to auto-fill Send parent)
+    pub autofix_pane_id: Option<String>,
 }
 
 impl App {
@@ -382,12 +398,14 @@ impl App {
             pane_id: None,
             tab_id: None,
             window_id: None,
+            source_pane_id: None,
+            source_cwd: None,
             current_prompt_text: None,
             pending_completed_turn: None,
             wt_notifications: VecDeque::new(),
             show_notification_banner: false,
             last_autofix_unix_s: 0.0,
-            autofix_in_flight: false,
+            autofix_pane_id: None,
         }
     }
 
@@ -666,10 +684,6 @@ impl App {
             }
             AppEvent::AgentThoughtChunk(text) => {
                 self.prompt_in_flight = true;
-                if self.autofix_in_flight {
-                    // Suppress thinking UI during auto-fix
-                    return;
-                }
                 if self.progress_status.is_none() {
                     self.progress_status = Some("Thinking...".to_string());
                 }
@@ -682,14 +696,11 @@ impl App {
                 self.progress_status = None;
                 self.pending_thought_response.clear();
                 self.pending_agent_response.push_str(&text);
-                if !self.autofix_in_flight {
-                    self.scroll_to_bottom();
-                }
+                self.scroll_to_bottom();
             }
             AppEvent::AgentMessageEnd => {
                 self.agent_streaming = false;
                 self.prompt_in_flight = false;
-                self.autofix_in_flight = false;
                 self.progress_status = None;
                 self.pending_thought_response.clear();
                 self.activity_frame = 0;
@@ -711,37 +722,31 @@ impl App {
             AppEvent::ToolCall { id, title, status } => {
                 self.tool_calls
                     .insert(id.clone(), (title.clone(), status.clone()));
-                if !self.autofix_in_flight {
-                    self.messages
-                        .push(ChatMessage::ToolCall { id, title, status });
-                    self.scroll_to_bottom();
-                }
+                self.messages
+                    .push(ChatMessage::ToolCall { id, title, status });
+                self.scroll_to_bottom();
             }
             AppEvent::ToolCallUpdate { id, status } => {
                 if let Some(entry) = self.tool_calls.get_mut(&id) {
                     entry.1 = status.clone();
                 }
-                if !self.autofix_in_flight {
-                    // Update in-place in messages
-                    for msg in &mut self.messages {
-                        if let ChatMessage::ToolCall {
-                            id: ref mid,
-                            status: ref mut s,
-                            ..
-                        } = msg
-                        {
-                            if mid == &id {
-                                *s = status.clone();
-                            }
+                // Update in-place in messages
+                for msg in &mut self.messages {
+                    if let ChatMessage::ToolCall {
+                        id: ref mid,
+                        status: ref mut s,
+                        ..
+                    } = msg
+                    {
+                        if mid == &id {
+                            *s = status.clone();
                         }
                     }
                 }
             }
             AppEvent::Plan(entries) => {
-                if !self.autofix_in_flight {
-                    self.messages.push(ChatMessage::Plan(entries));
-                    self.scroll_to_bottom();
-                }
+                self.messages.push(ChatMessage::Plan(entries));
+                self.scroll_to_bottom();
             }
             AppEvent::PermissionRequest {
                 description,
@@ -814,6 +819,20 @@ impl App {
                         self.scroll_to_bottom();
                     }
                     WtEventSeverity::Actionable => {
+                        if method == "agent_prompt" {
+                            // Command palette prompt: delegate directly to a new tab agent.
+                            // No UI feedback in agent pane — it stays hidden.
+                            let prompt = params
+                                .get("prompt")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if !prompt.is_empty() {
+                                self.delegate_to_tab_agent(&prompt, None);
+                            }
+                            return;
+                        }
+
                         self.messages
                             .push(ChatMessage::System(notification.summary.clone()));
                         self.show_notification_banner = true;
@@ -955,11 +974,34 @@ impl App {
                 self.collapse_selected_history_turn();
             }
             KeyCode::Enter => {
+                autofix_log(&format!(
+                    "Enter: input_empty={} state={:?} recs={} autofix_pane={:?} selected_idx={}",
+                    self.input.is_empty(),
+                    self.state,
+                    self.recommendations.is_some(),
+                    self.autofix_pane_id,
+                    self.selected_recommendation,
+                ));
                 if self.input.is_empty()
                     && self.state == ConnectionState::Connected
                     && self.recommendations.is_some()
                 {
-                    if let Some(choice) = self.selected_recommendation().cloned() {
+                    if let Some(mut choice) = self.selected_recommendation().cloned() {
+                        autofix_log(&format!("Executing choice {} actions={}", choice.choice, choice.actions.len()));
+                        // Auto-fill parent for Send actions from auto-fix.
+                        if let Some(ref pane_id) = self.autofix_pane_id {
+                            for action in &mut choice.actions {
+                                if let crate::coordinator::RecommendedAction::Send {
+                                    ref mut parent, ..
+                                } = action
+                                {
+                                    if parent.is_empty() {
+                                        *parent = pane_id.clone();
+                                    }
+                                }
+                            }
+                        }
+                        self.autofix_pane_id = None;
                         self.commit_pending_completed_turn();
                         self.clear_recommendations();
                         self.push_execution_info(format!("Executing choice {}.", choice.choice));
@@ -968,6 +1010,8 @@ impl App {
                 } else if self.history_navigation_enabled() {
                     self.toggle_selected_history_turn();
                 } else if !self.input.is_empty() && self.state == ConnectionState::Connected {
+                    // User manually submitted a prompt — re-enable auto-fix.
+                    self.last_autofix_unix_s = 0.0;
                     let text = self.input.clone();
                     self.input.clear();
                     self.cursor_pos = 0;
@@ -976,7 +1020,14 @@ impl App {
                         self.messages.push(ChatMessage::User(text.clone()));
                         self.scroll_to_bottom();
                     }
-                    let prompt = PromptSubmission::new(text, None);
+                    let pane_context = crate::shared_host::PaneContext {
+                        pane_id: self.pane_id.clone(),
+                        tab_id: self.tab_id.clone(),
+                        window_id: self.window_id.clone(),
+                        cwd: self.source_cwd.clone(),
+                        source_pane_id: self.source_pane_id.clone(),
+                    };
+                    let prompt = PromptSubmission::new(text, Some(pane_context));
                     self.current_prompt_id = Some(prompt.id);
                     self.current_prompt_submitted_at_unix_s = Some(prompt.submitted_at_unix_s);
                     self.selection_visible_pending = false;
@@ -1174,60 +1225,77 @@ impl App {
         }
     }
 
-    /// Auto-fix: when a command fails in another pane, automatically send a
-    /// prompt to the ACP agent so it can diagnose the error and suggest a fix.
+    /// Delegate a prompt to a new tab agent by spawning `wta delegate` subprocess.
+    /// This is the same path used by the command palette — single code path for
+    /// context capture, prompt building, and tab creation.
+    pub fn delegate_to_tab_agent(&self, prompt: &str, source_pane_id: Option<&str>) {
+        let exe = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("delegate").arg(prompt);
+
+        // Pass pipe credentials from environment (set when agent pane was created).
+        if let Ok(pipe_name) = std::env::var("WT_PIPE_NAME") {
+            cmd.arg("--pipe-name").arg(&pipe_name);
+        }
+        if let Ok(token) = std::env::var("WT_MCP_TOKEN") {
+            cmd.arg("--pipe-token").arg(&token);
+        }
+        if let Some(pane_id) = source_pane_id {
+            cmd.arg("--source-pane").arg(pane_id);
+        }
+
+        // Fire-and-forget: spawn hidden, don't wait.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let _ = cmd.spawn();
+    }
+
+    /// Auto-fix: when a command fails in another pane, ask the coordinator
+    /// agent to suggest a fix. The user confirms before execution.
     fn maybe_trigger_autofix(&mut self, notification: &WtNotification) {
         // Only trigger when the agent is connected and idle
         if self.state != ConnectionState::Connected || self.agent_streaming || self.prompt_in_flight
         {
-            autofix_log(&format!(
-                "skipped: state={:?} streaming={} in_flight={}",
-                self.state, self.agent_streaming, self.prompt_in_flight
-            ));
             return;
         }
 
-        // Debounce: at most one auto-fix every 5 seconds
-        let now = now_unix_s();
-        if now - self.last_autofix_unix_s < 5.0 {
+        // One-shot: only auto-fix once until the user manually submits a new prompt.
+        // This prevents cascading loops when the fix itself fails.
+        if self.last_autofix_unix_s > 0.0 {
             return;
         }
-        self.last_autofix_unix_s = now;
+        self.last_autofix_unix_s = now_unix_s();
 
-        let pane_id = notification.pane_id.clone();
-        let summary = notification.summary.clone();
-
-        // Build auto-fix prompt with the failing pane as context source
         let prompt_text = format!(
-            "[auto-fix] {}\nRead the terminal output from pane {} to see what command failed and why. \
-             Diagnose the error and suggest a fix as actionable recommendations.",
-            summary, pane_id
+            "[auto-fix] {}\nDiagnose the error and suggest a fix.",
+            notification.summary
         );
 
-        let pane_context = PaneContext {
+        // Use the failing pane as the source so the agent reads its buffer.
+        let pane_context = crate::shared_host::PaneContext {
             pane_id: self.pane_id.clone(),
             tab_id: self.tab_id.clone(),
             window_id: self.window_id.clone(),
-            cwd: None,
-            source_pane_id: Some(pane_id),
+            cwd: self.source_cwd.clone(),
+            source_pane_id: Some(notification.pane_id.clone()),
         };
 
-        self.autofix_in_flight = true;
+        // Store the failing pane ID so we can auto-fill `parent` on execution.
+        self.autofix_pane_id = Some(notification.pane_id.clone());
+
         self.prepare_for_new_prompt(&prompt_text);
-        self.messages
-            .push(ChatMessage::System(format!("Analyzing failure — asking agent for a fix...")));
         self.scroll_to_bottom();
 
         let prompt = PromptSubmission::new(prompt_text, Some(pane_context));
         self.current_prompt_id = Some(prompt.id);
         self.current_prompt_submitted_at_unix_s = Some(prompt.submitted_at_unix_s);
-        prompt_timing_log(
-            prompt.id,
-            prompt.submitted_at_unix_s,
-            "autofix_submit",
-            &format!("pane={}", notification.pane_id),
-        );
-        autofix_log(&format!("sending prompt for pane {}", notification.pane_id));
+        autofix_log(&format!("sending auto-fix prompt for pane {}", notification.pane_id));
         let _ = self.prompt_tx.send(prompt);
     }
 
@@ -1359,8 +1427,7 @@ impl App {
             validate_recommendation_set_for_coordinator_target(
                 &recommendations,
                 self.pane_id.as_deref(),
-            )?;
-            Ok(recommendations)
+            )
         }) {
             Ok(recommendations) => {
                 self.stage_completed_turn(text);

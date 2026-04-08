@@ -28,6 +28,7 @@ Action types you may emit:
 Validation and planning rules:
 
 - Return 1 to 3 ranked choices.
+- The `recommended_choice` should prefer running commands in the source pane (`send` on `sourceTarget`) when the task can be done there. A new tab is an alternative, not the default.
 - Every choice must contain at least one executable action.
 - Never emit an empty `actions` array.
 - There is no `wait`, `noop`, `observe`, or informational-only action type.
@@ -38,21 +39,18 @@ Validation and planning rules:
 - At least one choice should delegate a hard or long-running task to a supported agent when appropriate.
 - For simple shell checks in the source pane, prefer `send` on the source pane instead of creating a new pane or tab.
 - Simple inspection commands like `git status`, `git worktree list`, `git branch`, `pwd`, `ls`, or `dir` should normally be `send` on the source pane unless the user explicitly asked for isolation.
-- `send` must include `parent` and `input`.
+- `send` must include `parent` and `input`. The `parent` must be a pane ID from the `panels` list in the terminal context JSON. NEVER invent pane IDs — only use IDs you see in the context.
+- For `send`, prefer the `sourceTarget` pane for commands the user wants to run in their working terminal.
 - `open_and_send` must include `target` (`tab` or `panel`) and `input`.
+- `open_and_send` must always include `cwd` set to `sourceCwd` (or the relevant working directory) so new tabs start in the right location.
 - For `open_and_send` with `target: "panel"`, include `parent` and use a pane ID from the terminal context JSON.
 - For `open_and_send` with `target: "tab"`, omit `parent`.
 - Use only `agent` IDs that appear in the supported delegate agent JSON.
-- `send` can target either a shell pane or another agent pane. Use shell commands for shells and natural-language prompts for agent panes.
-- Never target `send` at the current assistant pane. That just loops back into this same assistant.
-- When sending to another existing agent pane, only use panes that are already the right place to continue work.
-- If the only available agent pane is this current assistant pane, prefer `send` on the source pane or `open_and_send` with an `agent`.
+- `send` can target either a shell pane or another agent pane visible in the panels list.
 - When `open_and_send.agent` is set, WTA launches that delegate agent in the new destination and then sends `input`.
-- When opening a new tab or pane for shell work or delegation, set `cwd` to the relevant repo/directory when `sourceCwd` or another obvious working directory is available.
 - Prefer `open_and_send` with an `agent` for Copilot when the work is hard, long-running, or should stay isolated from the current pane.
-- Prefer the source pane when the user refers to the terminal they were working in before opening this assistant.
-- The `sourceTarget` pane in the terminal context is the original pane the user was working in before the assistant opened. It may differ from the currently focused assistant pane.
-- When diagnosing an error, inspect the `sourceTarget` buffer first. Do not treat the assistant pane buffer as the source shell unless `sourceTarget` and `activeTarget` are the same pane.
+- The `sourceTarget` pane is the user's original working pane. Prefer it for `send` actions unless the user explicitly asked for a different destination.
+- When diagnosing an error, inspect the `sourceTarget` buffer first.
 - Only use `open_and_send` when the user explicitly asked for a new destination or when isolation is materially useful.
 - Do not use `open_and_send` just to run a short one-off command that fits in the source pane.
 - Do not invent capabilities that are not in the action list.

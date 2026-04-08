@@ -835,8 +835,14 @@ async fn build_prompt_text(
     let total_started = std::time::Instant::now();
     let mut runtime_sections = Vec::new();
 
+    let is_autofix = user_text.starts_with("[auto-fix]");
+
     let template_started = std::time::Instant::now();
-    let planner_template = prompt::load_planner_prompt_template();
+    let planner_template = if is_autofix {
+        prompt::load_autofix_prompt_template()
+    } else {
+        prompt::load_planner_prompt_template()
+    };
     prompt_timing_log(
         prompt_id,
         submitted_at_unix_s,
@@ -849,46 +855,71 @@ async fn build_prompt_text(
         ),
     );
 
-    let agents_started = std::time::Instant::now();
-    let supported_agents_json = serde_json::to_string(&default_supported_delegate_agents())
-        .unwrap_or_else(|_| "[]".to_string());
-    runtime_sections.push(format!(
-        "### Supported Delegate Agents\n```json\n{}\n```",
-        supported_agents_json
-    ));
-    prompt_timing_log(
-        prompt_id,
-        submitted_at_unix_s,
-        "delegate_agents_ready",
-        &format!("dt={:.3}s", agents_started.elapsed().as_secs_f64()),
-    );
-
-    if wt_connected {
-        let terminal_context_started = std::time::Instant::now();
-        let terminal_context_json = build_terminal_context_json(shell_mgr, pane_context).await;
+    if !is_autofix {
+        // Full planner prompt: include delegate agents and terminal layout.
+        let agents_started = std::time::Instant::now();
+        let supported_agents_json = serde_json::to_string(&default_supported_delegate_agents())
+            .unwrap_or_else(|_| "[]".to_string());
+        runtime_sections.push(format!(
+            "### Supported Delegate Agents\n```json\n{}\n```",
+            supported_agents_json
+        ));
         prompt_timing_log(
             prompt_id,
             submitted_at_unix_s,
-            "terminal_context_ready",
-            &format!(
-                "present={} dt={:.3}s",
-                terminal_context_json.is_some(),
-                terminal_context_started.elapsed().as_secs_f64()
-            ),
+            "delegate_agents_ready",
+            &format!("dt={:.3}s", agents_started.elapsed().as_secs_f64()),
         );
-        if let Some(terminal_context_json) = terminal_context_json {
-            runtime_sections.push(format!(
-                "### Terminal Context JSON\n```json\n{}\n```",
-                terminal_context_json
-            ));
+
+        if wt_connected {
+            let terminal_context_started = std::time::Instant::now();
+            let terminal_context_json = build_terminal_context_json(shell_mgr, pane_context).await;
+            prompt_timing_log(
+                prompt_id,
+                submitted_at_unix_s,
+                "terminal_context_ready",
+                &format!(
+                    "present={} dt={:.3}s",
+                    terminal_context_json.is_some(),
+                    terminal_context_started.elapsed().as_secs_f64()
+                ),
+            );
+            if let Some(terminal_context_json) = terminal_context_json {
+                runtime_sections.push(format!(
+                    "### Terminal Context JSON\n```json\n{}\n```",
+                    terminal_context_json
+                ));
+            }
+        } else {
+            prompt_timing_log(
+                prompt_id,
+                submitted_at_unix_s,
+                "terminal_context_skipped",
+                "wt_connected=false",
+            );
         }
     } else {
-        prompt_timing_log(
-            prompt_id,
-            submitted_at_unix_s,
-            "terminal_context_skipped",
-            "wt_connected=false",
-        );
+        // Auto-fix prompt: only read the source pane buffer, no layout.
+        if wt_connected {
+            if let Some(source_pane_id) = pane_context
+                .and_then(|ctx| ctx.effective_source_pane_id())
+            {
+                if let Ok(value) = shell_mgr
+                    .wt_read_pane_output(source_pane_id, Some(30))
+                    .await
+                {
+                    if let Some(content) = value
+                        .get("content")
+                        .and_then(|c| c.as_str())
+                    {
+                        runtime_sections.push(format!(
+                            "### Terminal Output\n```\n{}\n```",
+                            truncate_for_prompt(content, ACTIVE_PANE_CONTEXT_MAX_CHARS)
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     let assemble_started = std::time::Instant::now();

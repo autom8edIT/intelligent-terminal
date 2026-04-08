@@ -10,11 +10,24 @@ const EMBEDDED_DEFAULT_PROMPT: &str = include_str!(concat!(
     "/prompts/terminal-agent.md"
 ));
 
+const EMBEDDED_AUTOFIX_PROMPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/auto-fix.md"
+));
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlannerPromptTemplate {
     pub content: String,
     pub source_label: String,
     pub display_name: String,
+}
+
+pub(crate) fn load_autofix_prompt_template() -> PlannerPromptTemplate {
+    PlannerPromptTemplate {
+        display_name: "Auto-Fix Agent".to_string(),
+        content: EMBEDDED_AUTOFIX_PROMPT.to_string(),
+        source_label: "embedded:auto-fix.md".to_string(),
+    }
 }
 
 pub(crate) fn load_planner_prompt_template() -> PlannerPromptTemplate {

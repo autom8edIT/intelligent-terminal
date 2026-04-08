@@ -640,6 +640,8 @@ namespace winrt::TerminalApp::implementation
         _actionDispatch->DoAction(actionAndArgs);
     }
 
+    static void _agentPaneLog(const std::string& msg);
+
     // Method Description:
     // - This method is called when the user submits a foreground agent prompt
     //   from the command palette (? prefix). Opens or reuses an agent pane
@@ -650,7 +652,15 @@ namespace winrt::TerminalApp::implementation
     // - <none>
     void TerminalPage::_OnAgentForegroundPromptRequested(const IInspectable& /*sender*/, const winrt::hstring& prompt)
     {
-        _OpenOrReuseAgentPane(prompt);
+        _agentPaneLog("_OnAgentForegroundPromptRequested: prompt='" + winrt::to_string(prompt) + "' empty=" + (prompt.empty() ? "true" : "false"));
+        if (!prompt.empty())
+        {
+            _DelegatePromptToAgent(prompt);
+        }
+        else
+        {
+            _OpenOrReuseAgentPane(prompt);
+        }
     }
 
     // Method Description:
@@ -846,10 +856,142 @@ namespace winrt::TerminalApp::implementation
         return std::make_shared<Pane>(paneContent);
     }
 
+    static void _agentPaneLog(const std::string& msg)
+    {
+        wchar_t tmpPath[MAX_PATH];
+        if (GetTempPathW(MAX_PATH, tmpPath) == 0)
+            return;
+        const auto logPath = std::wstring(tmpPath) + L"wta-agent-pane.log";
+        if (auto f = std::ofstream(logPath, std::ios::app))
+        {
+            const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count();
+            f << "[" << (now / 1000.0) << "] " << msg << "\n";
+        }
+    }
+
+    void TerminalPage::_DelegatePromptToAgent(const winrt::hstring& prompt)
+    {
+        _agentPaneLog("_DelegatePromptToAgent called, prompt='" + winrt::to_string(prompt) + "'");
+
+        // Find the WTA executable.
+        const auto wtaPath = _DetectWtaPath();
+        if (wtaPath.empty())
+        {
+            _agentPaneLog("ABORT: no WTA path found");
+            return;
+        }
+
+        // Build agent CLI path for the --agent flag.
+        const auto& globals = _settings.GlobalSettings();
+        auto agentCliPath = globals.AgentCliPath();
+        if (agentCliPath.empty())
+        {
+            agentCliPath = _DetectAgentCli();
+        }
+
+        // Helper: escape and quote an argument for the command line.
+        auto quoteArg = [](std::wstring_view arg) -> std::wstring {
+            std::wstring escaped{ arg };
+            for (size_t pos = 0; (pos = escaped.find(L'"', pos)) != std::wstring::npos; pos += 2)
+            {
+                escaped.replace(pos, 1, L"\\\"");
+            }
+            return L"\"" + escaped + L"\"";
+        };
+
+        // Build: wta delegate --pipe-name <pipe> --pipe-token <token> --agent <agent> "<prompt>"
+        std::wstring cmdline = quoteArg(wtaPath) + L" delegate";
+
+        if (!agentCliPath.empty())
+        {
+            cmdline += L" --agent " + quoteArg(std::wstring_view{ agentCliPath });
+        }
+
+        if (const auto pipeName = _WindowProperties.ProtocolPipeName(); !pipeName.empty())
+        {
+            cmdline += L" --pipe-name " + quoteArg(std::wstring_view{ pipeName });
+        }
+        if (const auto token = _WindowProperties.McpToken(); !token.empty())
+        {
+            cmdline += L" --pipe-token " + quoteArg(winrt::to_hstring(token).c_str());
+        }
+
+        // Pass CWD from the active pane.
+        winrt::hstring activeCwd;
+        if (const auto& activeControl = _GetActiveControl())
+        {
+            activeCwd = activeControl.WorkingDirectory();
+        }
+        if (activeCwd.empty())
+        {
+            wchar_t homePath[MAX_PATH];
+            if (GetEnvironmentVariableW(L"USERPROFILE", homePath, MAX_PATH) > 0)
+            {
+                activeCwd = winrt::hstring{ homePath };
+            }
+        }
+        if (!activeCwd.empty())
+        {
+            cmdline += L" --cwd " + quoteArg(std::wstring_view{ activeCwd });
+        }
+
+        // Pass the source pane ID so the delegate agent can read terminal context.
+        if (const auto activeTab = _GetFocusedTabImpl())
+        {
+            if (const auto sourcePane = activeTab->GetActivePane())
+            {
+                if (const auto paneId = sourcePane->ContentId())
+                {
+                    cmdline += L" --source-pane " + std::to_wstring(paneId.value());
+                }
+            }
+        }
+
+        // Append the prompt as a positional argument.
+        std::wstring escapedPrompt{ prompt };
+        for (size_t pos = 0; (pos = escapedPrompt.find(L'"', pos)) != std::wstring::npos; pos += 2)
+        {
+            escapedPrompt.replace(pos, 1, L"\"\"");
+        }
+        cmdline += fmt::format(FMT_COMPILE(L" \"{}\""), escapedPrompt);
+
+        _agentPaneLog("launching: " + winrt::to_string(winrt::hstring{ cmdline }));
+
+        // Launch as a hidden background process.
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE;
+
+        PROCESS_INFORMATION pi{};
+        auto mutableCmdline = cmdline;
+        const auto launched = CreateProcessW(
+            wtaPath.c_str(),
+            mutableCmdline.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            CREATE_NO_WINDOW,
+            nullptr,
+            nullptr,
+            &si,
+            &pi);
+        if (!launched)
+        {
+            _agentPaneLog("FAILED to launch delegate process");
+            return;
+        }
+
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        _agentPaneLog("delegate process launched OK");
+    }
+
     void TerminalPage::_OpenOrReuseAgentPane(const winrt::hstring& prompt)
     {
-        OutputDebugStringW(fmt::format(FMT_COMPILE(L"[AgentPane] _OpenOrReuseAgentPane called, prompt='{}'\n"),
-                                       std::wstring_view{ prompt }).c_str());
+        _agentPaneLog("_OpenOrReuseAgentPane called, prompt='" + winrt::to_string(prompt) + "'");
 
         const auto& globals = _settings.GlobalSettings();
         std::wstring cmdline;
@@ -895,30 +1037,71 @@ namespace winrt::TerminalApp::implementation
 
         if (cmdline.empty())
         {
-            OutputDebugStringW(L"[AgentPane] no AI assistant command line configured\n");
+            _agentPaneLog("EARLY RETURN: cmdline is empty — no AI assistant configured");
+            return;
+        }
+        _agentPaneLog("cmdline built OK");
+
+        // 2. Try to reuse an existing agent pane in the current tab.
+        //    When a prompt is provided, broadcast it as a protocol event so WTA
+        //    can delegate to a new tab agent directly — no need to focus or show
+        //    the agent pane itself.
+        _agentPaneLog("step 2: checking for existing agent pane");
+        if (const auto existingPane = _FindAgentPaneInCurrentTab())
+        {
+            if (!prompt.empty())
+            {
+                Json::Value evt;
+                evt["type"] = "event";
+                evt["method"] = "agent_prompt";
+                Json::Value params;
+                params["prompt"] = winrt::to_string(prompt);
+                evt["params"] = params;
+                Json::StreamWriterBuilder wb;
+                wb["indentation"] = "";
+                ProtocolVtSequenceReceived.raise(
+                    *this,
+                    winrt::to_hstring(Json::writeString(wb, evt)));
+            }
+            else
+            {
+                // No prompt — just focus the agent pane (e.g., user opened palette without typing).
+                const auto activeTab = _GetFocusedTabImpl();
+                if (activeTab)
+                {
+                    if (const auto paneId = existingPane->Id())
+                    {
+                        activeTab->FocusPane(paneId.value());
+                    }
+                }
+                if (const auto existingControl = existingPane->GetTerminalControl())
+                {
+                    existingControl.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
+                }
+            }
             return;
         }
 
-        // 2. Try to reuse an existing agent pane in the current tab.
-        if (const auto existingPane = _FindAgentPaneInCurrentTab())
+        // 2b. No existing agent pane, but a prompt was given — broadcast through
+        //     the pipe so the background WTA process can delegate to a new tab.
+        //     Don't create the agent pane just for a prompt.
+        if (!prompt.empty())
         {
-            const auto activeTab = _GetFocusedTabImpl();
-            if (activeTab)
-            {
-                if (const auto paneId = existingPane->Id())
-                {
-                    activeTab->FocusPane(paneId.value());
-                }
-            }
-
-            if (const auto existingControl = existingPane->GetTerminalControl())
-            {
-                if (!prompt.empty())
-                {
-                    existingControl.SendInput(prompt + L"\r");
-                }
-                existingControl.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
-            }
+            _agentPaneLog("step 2b: broadcasting agent_prompt event");
+            Json::Value evt;
+            evt["type"] = "event";
+            evt["method"] = "agent_prompt";
+            Json::Value params;
+            params["prompt"] = winrt::to_string(prompt);
+            evt["params"] = params;
+            Json::StreamWriterBuilder wb;
+            wb["indentation"] = "";
+            const auto eventJson = Json::writeString(wb, evt);
+            _agentPaneLog("step 2b: raising event: " + eventJson);
+            ProtocolVtSequenceReceived.raise(
+                *this,
+                winrt::to_hstring(eventJson));
+            _agentPaneLog("step 2b: event raised, returning");
             return;
         }
 
@@ -995,7 +1178,7 @@ namespace winrt::TerminalApp::implementation
         {
             if (const auto sourcePane = activeTab->GetActivePane())
             {
-                SetPendingProtocolEnv(L"WTA_SOURCE_PANE_ID", winrt::hstring{ std::to_wstring(sourcePane->Id().value_or(0)) });
+                SetPendingProtocolEnv(L"WTA_SOURCE_PANE_ID", winrt::hstring{ std::to_wstring(sourcePane->ContentId().value_or(0)) });
             }
         }
         if (!startingDirectory.empty())

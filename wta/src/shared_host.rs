@@ -1526,24 +1526,26 @@ impl HostSessionState {
         let text = std::mem::take(&mut self.pending_agent_response);
         match parse_recommendation_set(&text) {
             Ok(recommendations) => {
-                if validate_recommendation_set_for_coordinator_target(
+                match validate_recommendation_set_for_coordinator_target(
                     &recommendations,
                     self.current_prompt_pane_context
                         .as_ref()
                         .and_then(|context| context.pane_id.as_deref()),
-                )
-                .is_err()
-                {
-                    self.recommendations = None;
-                    self.pending_completed_turn = None;
-                    self.stage_completed_turn(text);
-                    self.commit_pending_completed_turn();
-                    self.clear_chat_history();
-                    return FinalizeOutcome::None;
+                ) {
+                    Ok(filtered) => {
+                        self.stage_completed_turn(text);
+                        self.recommendations = Some(filtered);
+                        FinalizeOutcome::SelectionReady
+                    }
+                    Err(_) => {
+                        self.recommendations = None;
+                        self.pending_completed_turn = None;
+                        self.stage_completed_turn(text);
+                        self.commit_pending_completed_turn();
+                        self.clear_chat_history();
+                        FinalizeOutcome::None
+                    }
                 }
-                self.stage_completed_turn(text);
-                self.recommendations = Some(recommendations);
-                FinalizeOutcome::SelectionReady
             }
             Err(_) => {
                 self.recommendations = None;

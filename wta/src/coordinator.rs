@@ -58,6 +58,7 @@ pub enum OpenTarget {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RecommendedAction {
     Send {
+        #[serde(default)]
         parent: String,
         input: String,
     },
@@ -114,32 +115,46 @@ pub fn parse_recommendation_set(text: &str) -> Result<RecommendationSet> {
     Ok(parsed)
 }
 
+/// Filter out choices that target the coordinator's own pane.
+/// Returns the filtered set. If all choices are removed, returns an error.
 pub fn validate_recommendation_set_for_coordinator_target(
     set: &RecommendationSet,
     coordinator_target: Option<&str>,
-) -> Result<()> {
+) -> Result<RecommendationSet> {
     let Some(coordinator_target) = coordinator_target
         .map(str::trim)
         .filter(|id| !id.is_empty())
     else {
-        return Ok(());
+        return Ok(set.clone());
     };
 
-    for choice in &set.choices {
-        for action in &choice.actions {
-            if let RecommendedAction::Send { parent, .. } = action {
-                if parent == coordinator_target {
-                    bail!(
-                        "choice {} send targets the current coordinator pane {}; use another existing pane or open_and_send instead",
-                        choice.choice,
-                        coordinator_target
-                    );
-                }
-            }
-        }
+    let filtered: Vec<RecommendationChoice> = set
+        .choices
+        .iter()
+        .filter(|choice| {
+            !choice.actions.iter().any(|action| {
+                matches!(action, RecommendedAction::Send { parent, .. } if parent == coordinator_target)
+            })
+        })
+        .cloned()
+        .collect();
+
+    if filtered.is_empty() {
+        bail!(
+            "all choices target the current coordinator pane {}",
+            coordinator_target
+        );
     }
 
-    Ok(())
+    // Adjust recommended_choice if the original was filtered out.
+    let recommended_choice = set.recommended_choice.filter(|rc| {
+        filtered.iter().any(|c| c.choice == *rc)
+    });
+
+    Ok(RecommendationSet {
+        recommended_choice,
+        choices: filtered,
+    })
 }
 
 pub fn recommended_choice_index(set: &RecommendationSet) -> usize {
@@ -338,8 +353,8 @@ fn validate_recommendation_set(set: &RecommendationSet) -> Result<()> {
 
 fn validate_action(action: &RecommendedAction) -> Result<()> {
     match action {
-        RecommendedAction::Send { parent, input } => {
-            ensure_non_empty("parent", parent)?;
+        RecommendedAction::Send { parent: _, input } => {
+            // parent may be empty for auto-fix actions (filled in at execution time)
             ensure_non_empty("input", input)?;
         }
         RecommendedAction::OpenAndSend {
@@ -373,6 +388,14 @@ fn lookup_delegate_agent<'a>(
         .iter()
         .find(|agent| agent.id == id)
         .ok_or_else(|| anyhow!("unsupported delegate agent '{}'", id))
+}
+
+/// Build the full commandline for launching a delegate agent with a prompt.
+pub fn build_delegate_commandline(
+    runtime: &DelegateAgentRuntime,
+    input: &str,
+) -> Result<String> {
+    build_delegate_launch_commandline(runtime, input)
 }
 
 fn build_delegate_launch_commandline(
@@ -911,10 +934,15 @@ mod tests {
 ```"#;
 
         let parsed = parse_recommendation_set(text).expect("recommendation set should parse");
-        let err = validate_recommendation_set_for_coordinator_target(&parsed, Some("14"))
-            .expect_err("self-targeted send should be rejected");
+        let filtered = validate_recommendation_set_for_coordinator_target(&parsed, Some("14"))
+            .expect("should filter instead of rejecting");
 
-        assert!(format!("{:#}", err).contains("send targets the current coordinator pane 14"));
+        // Choice 1 (self-targeted) should be removed, choices 2 and 3 remain.
+        assert_eq!(filtered.choices.len(), 2);
+        assert_eq!(filtered.choices[0].choice, 2);
+        assert_eq!(filtered.choices[1].choice, 3);
+        // recommended_choice was 1 (now filtered out), so it should be None.
+        assert_eq!(filtered.recommended_choice, None);
     }
 
     #[test]

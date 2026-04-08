@@ -517,6 +517,7 @@ namespace winrt::TerminalApp::implementation
         std::shared_ptr<Pane> _CreateAcpAgentPane(const winrt::hstring& startingDirectory,
                                                    const winrt::hstring& agentCliPath,
                                                    const winrt::hstring& initialPrompt);
+        void _DelegatePromptToAgent(const winrt::hstring& prompt);
         void _OpenOrReuseAgentPane(const winrt::hstring& prompt);
 
         void _Find(const Tab& tab);
