@@ -1665,13 +1665,6 @@ namespace winrt::TerminalApp::implementation
         args.Handled(true);
     }
 
-    void TerminalPage::_HandleToggleCoordinator(const IInspectable& /*sender*/,
-                                                const ActionEventArgs& args)
-    {
-        ToggleCoordinator();
-        args.Handled(true);
-    }
-
     void TerminalPage::_HandleShowProtocolInfo(const IInspectable& /*sender*/,
                                                const ActionEventArgs& args)
     {

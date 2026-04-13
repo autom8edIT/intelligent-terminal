@@ -156,7 +156,6 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
                 { ShortcutAction::ToggleBlockSelection, USES_RESOURCE(L"ToggleBlockSelectionCommandKey") },
                 { ShortcutAction::ToggleBroadcastInput, USES_RESOURCE(L"ToggleBroadcastInputCommandKey") },
                 { ShortcutAction::ToggleCommandPalette, USES_RESOURCE(L"ToggleCommandPaletteCommandKey") },
-                { ShortcutAction::ToggleCoordinator, USES_RESOURCE(L"ToggleCoordinatorCommandKey") },
                 { ShortcutAction::ShowProtocolInfo, USES_RESOURCE(L"ShowProtocolInfoCommandKey") },
                 { ShortcutAction::ToggleFocusMode, USES_RESOURCE(L"ToggleFocusModeCommandKey") },
                 { ShortcutAction::ToggleFullscreen, USES_RESOURCE(L"ToggleFullscreenCommandKey") },

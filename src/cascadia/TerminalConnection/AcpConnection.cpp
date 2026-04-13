@@ -273,23 +273,25 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
         sa.nLength = sizeof(sa);
         sa.bInheritHandle = TRUE;
 
-        // Create pipes for agent's stdin
-        HANDLE stdinRead = nullptr, stdinWrite = nullptr;
-        THROW_IF_WIN32_BOOL_FALSE(CreatePipe(&stdinRead, &stdinWrite, &sa, 0));
+        // Create pipes for agent's stdin — RAII wrappers ensure cleanup on exception.
+        HANDLE hStdinRead = nullptr, hStdinWrite = nullptr;
+        THROW_IF_WIN32_BOOL_FALSE(CreatePipe(&hStdinRead, &hStdinWrite, &sa, 0));
+        wil::unique_hfile stdinRead{ hStdinRead }, stdinWrite{ hStdinWrite };
         // Ensure our write end is not inherited
-        THROW_IF_WIN32_BOOL_FALSE(SetHandleInformation(stdinWrite, HANDLE_FLAG_INHERIT, 0));
+        THROW_IF_WIN32_BOOL_FALSE(SetHandleInformation(stdinWrite.get(), HANDLE_FLAG_INHERIT, 0));
 
         // Create pipes for agent's stdout
-        HANDLE stdoutRead = nullptr, stdoutWrite = nullptr;
-        THROW_IF_WIN32_BOOL_FALSE(CreatePipe(&stdoutRead, &stdoutWrite, &sa, 0));
+        HANDLE hStdoutRead = nullptr, hStdoutWrite = nullptr;
+        THROW_IF_WIN32_BOOL_FALSE(CreatePipe(&hStdoutRead, &hStdoutWrite, &sa, 0));
+        wil::unique_hfile stdoutRead{ hStdoutRead }, stdoutWrite{ hStdoutWrite };
         // Ensure our read end is not inherited
-        THROW_IF_WIN32_BOOL_FALSE(SetHandleInformation(stdoutRead, HANDLE_FLAG_INHERIT, 0));
+        THROW_IF_WIN32_BOOL_FALSE(SetHandleInformation(stdoutRead.get(), HANDLE_FLAG_INHERIT, 0));
 
         STARTUPINFOW si{};
         si.cb = sizeof(si);
         si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdInput = stdinRead;
-        si.hStdOutput = stdoutWrite;
+        si.hStdInput = stdinRead.get();
+        si.hStdOutput = stdoutWrite.get();
         si.hStdError = GetStdHandle(STD_ERROR_HANDLE); // let agent stderr go to our stderr for debugging
 
         auto cmdline = wil::ExpandEnvironmentStringsW<std::wstring>(_agentCliPath.c_str());
@@ -314,12 +316,12 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
             &si,
             &_agentProcess));
 
-        // Close child's ends of the pipes
-        CloseHandle(stdinRead);
-        CloseHandle(stdoutWrite);
+        // Child's ends are no longer needed — RAII handles close them.
+        stdinRead.reset();
+        stdoutWrite.reset();
 
-        _pipeToAgent.reset(stdinWrite);
-        _pipeFromAgent.reset(stdoutRead);
+        _pipeToAgent = std::move(stdinWrite);
+        _pipeFromAgent = std::move(stdoutRead);
 
         OutputDebugStringW(fmt::format(FMT_COMPILE(L"[AcpConnection] Agent process launched, PID: {}\n"),
                                        GetProcessId(_agentProcess.hProcess))
@@ -354,8 +356,32 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
                                .c_str());
 
         DWORD written;
-        std::lock_guard<std::mutex> lock{ _writeMutex };
-        WriteFile(_pipeToAgent.get(), jsonStr.data(), gsl::narrow<DWORD>(jsonStr.size()), &written, nullptr);
+        bool writeFailed;
+        {
+            std::lock_guard<std::mutex> lock{ _writeMutex };
+            writeFailed = !WriteFile(_pipeToAgent.get(), jsonStr.data(), gsl::narrow<DWORD>(jsonStr.size()), &written, nullptr);
+        }
+
+        if (writeFailed)
+        {
+            // Pipe broken — reject all pending requests so callers don't hang forever.
+            {
+                std::lock_guard<std::mutex> pLock{ _pendingMutex };
+                for (auto& [_, req] : _pendingRequests)
+                {
+                    try
+                    {
+                        req.promise.set_exception(
+                            std::make_exception_ptr(std::runtime_error("Agent pipe closed")));
+                    }
+                    catch (...)
+                    {
+                    }
+                }
+                _pendingRequests.clear();
+            }
+            _transitionToState(ConnectionState::Failed);
+        }
     }
 
     std::future<WDJ::JsonObject> AcpConnection::_SendRequest(const winrt::hstring& method,
@@ -519,8 +545,9 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
             // Run on a separate thread to avoid blocking the reader loop.
             // The reader must stay free to process other messages while we wait.
             auto paramsCopy = params; // prevent ref invalidation
-            std::thread([this, paramsCopy, id]() {
-                _HandleTerminalWaitForExit(paramsCopy, id);
+            auto strong = get_strong();
+            std::thread([strong, paramsCopy, id]() {
+                strong->_HandleTerminalWaitForExit(paramsCopy, id);
             }).detach();
         }
         else if (method == L"terminal/kill")
@@ -536,8 +563,9 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
             // Run on a separate thread to avoid blocking the reader loop
             // while waiting for user input.
             auto paramsCopy = params; // prevent ref invalidation
-            std::thread([this, paramsCopy, id]() {
-                _HandleRequestPermission(paramsCopy, id);
+            auto strong = get_strong();
+            std::thread([strong, paramsCopy, id]() {
+                strong->_HandleRequestPermission(paramsCopy, id);
             }).detach();
         }
         else if (method == L"fs/read_text_file")
@@ -1125,27 +1153,29 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
             //    also reading. The simplest approach: reader is this thread,
             //    handshake/prompt is on a separate thread that uses futures.
 
-            // Start handshake + prompt loop on a background thread
-            auto handshakeThread = std::thread([this]() {
+            // Start handshake + prompt loop on a background thread.
+            // Capture a strong ref to prevent use-after-free if Close() races.
+            auto strong = get_strong();
+            auto handshakeThread = std::thread([strong]() {
                 try
                 {
-                    _DoHandshake();
+                    strong->_DoHandshake();
 
-                    _transitionToState(ConnectionState::Connected);
-                    _WriteStringWithNewline(_colorize(PROMPT_COLOR, L"Connected to agent."));
+                    strong->_transitionToState(ConnectionState::Connected);
+                    strong->_WriteStringWithNewline(_colorize(PROMPT_COLOR, L"Connected to agent."));
 
-                    _PromptLoop();
+                    strong->_PromptLoop();
                 }
                 catch (const std::exception& e)
                 {
-                    _WriteStringWithNewline(_colorize(ERROR_COLOR, fmt::format(L"Agent error: {}", til::u8u16(e.what()))));
-                    _transitionToState(ConnectionState::Failed);
+                    strong->_WriteStringWithNewline(_colorize(ERROR_COLOR, fmt::format(L"Agent error: {}", til::u8u16(e.what()))));
+                    strong->_transitionToState(ConnectionState::Failed);
                 }
                 catch (...)
                 {
                     LOG_CAUGHT_EXCEPTION();
-                    _WriteStringWithNewline(_colorize(ERROR_COLOR, L"Agent connection failed unexpectedly."));
-                    _transitionToState(ConnectionState::Failed);
+                    strong->_WriteStringWithNewline(_colorize(ERROR_COLOR, L"Agent connection failed unexpectedly."));
+                    strong->_transitionToState(ConnectionState::Failed);
                 }
             });
             handshakeThread.detach();

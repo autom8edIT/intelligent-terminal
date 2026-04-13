@@ -8,6 +8,8 @@
 //
 // IMPORTANT: These methods are called from background threads (COM).
 // All access to UI state must be marshaled to the UI thread via Dispatcher().
+// Each method is a direct coroutine that uses co_await to switch threads.
+// The ComServer calls .get() on the returned IAsyncOperation to block.
 
 #include "pch.h"
 #include "TerminalPage.h"
@@ -15,6 +17,7 @@
 #include "../TerminalSettingsAppAdapterLib/TerminalSettings.h"
 
 #include <json/json.h>
+#include <wil/resource.h>
 
 using namespace winrt;
 using namespace winrt::Windows::Foundation;
@@ -23,87 +26,16 @@ using namespace winrt::Microsoft::Terminal;
 using namespace winrt::Microsoft::Terminal::Control;
 using namespace winrt::Microsoft::Terminal::TerminalConnection;
 using namespace winrt::Microsoft::Terminal::Settings::Model;
+namespace Protocol = winrt::Microsoft::Terminal::Protocol;
 
 namespace winrt::TerminalApp::implementation
 {
     // Cross-thread state for ShowProtocolQuickPick.
     struct QuickPickState
     {
-        HANDLE completedEvent = nullptr;
+        wil::unique_event completedEvent;
         winrt::hstring result;
     };
-
-    // Helper: run a function on the UI thread and block until it completes.
-    // If already on the UI thread, runs directly.
-    template<typename F>
-    static auto _runOnUIThread(const TerminalPage& page, F&& func) -> decltype(func())
-    {
-        using R = decltype(func());
-
-        if (page.Dispatcher().HasThreadAccess())
-        {
-            return func();
-        }
-
-        R result{};
-        std::exception_ptr exPtr;
-        HANDLE completedEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-
-        page.Dispatcher().RunAsync(CoreDispatcherPriority::Normal, [&]() {
-            try
-            {
-                result = func();
-            }
-            catch (...)
-            {
-                exPtr = std::current_exception();
-            }
-            SetEvent(completedEvent);
-        });
-
-        WaitForSingleObject(completedEvent, INFINITE);
-        CloseHandle(completedEvent);
-
-        if (exPtr)
-        {
-            std::rethrow_exception(exPtr);
-        }
-        return result;
-    }
-
-    // Specialization for void return type
-    template<typename F>
-    static void _runOnUIThreadVoid(const TerminalPage& page, F&& func)
-    {
-        if (page.Dispatcher().HasThreadAccess())
-        {
-            func();
-            return;
-        }
-
-        std::exception_ptr exPtr;
-        HANDLE completedEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-
-        page.Dispatcher().RunAsync(CoreDispatcherPriority::Normal, [&]() {
-            try
-            {
-                func();
-            }
-            catch (...)
-            {
-                exPtr = std::current_exception();
-            }
-            SetEvent(completedEvent);
-        });
-
-        WaitForSingleObject(completedEvent, INFINITE);
-        CloseHandle(completedEvent);
-
-        if (exPtr)
-        {
-            std::rethrow_exception(exPtr);
-        }
-    }
 
     // Helper to get PID from a pane's terminal control connection.
     static uint32_t _getPidFromPane(const std::shared_ptr<Pane>& pane)
@@ -128,563 +60,567 @@ namespace winrt::TerminalApp::implementation
 
     uint32_t TerminalPage::TabCount() const
     {
-        return _runOnUIThread(*this, [&]() -> uint32_t {
-            return NumberOfTabs();
-        });
+        return [this]() -> IAsyncOperation<uint32_t> {
+            co_await wil::resume_foreground(Dispatcher());
+            co_return NumberOfTabs();
+        }().get();
     }
 
     Windows::Foundation::IReference<uint32_t> TerminalPage::FocusedTabIndex() const
     {
-        return _runOnUIThread(*this, [&]() -> Windows::Foundation::IReference<uint32_t> {
+        return [this]() -> IAsyncOperation<Windows::Foundation::IReference<uint32_t>> {
+            co_await wil::resume_foreground(Dispatcher());
             const auto idx = _GetFocusedTabIndex();
             if (idx.has_value())
             {
-                return Windows::Foundation::IReference<uint32_t>(idx.value());
+                co_return Windows::Foundation::IReference<uint32_t>(idx.value());
             }
-            return nullptr;
-        });
+            co_return nullptr;
+        }().get();
     }
 
     // ============================================================================
     // Queries — return typed WinRT structs
     // ============================================================================
 
-    TerminalApp::ProtocolPaneInfo TerminalPage::GetProtocolActivePane()
+    IAsyncOperation<Protocol::PaneInfo> TerminalPage::GetProtocolActivePane()
     {
-        return _runOnUIThread(*this, [&]() -> TerminalApp::ProtocolPaneInfo {
-            TerminalApp::ProtocolPaneInfo result{};
+        auto strong = get_strong();
+        co_await wil::resume_foreground(Dispatcher());
 
-            const auto focusedTabIdx = _GetFocusedTabIndex();
-            if (!focusedTabIdx.has_value())
-                return result;
+        Protocol::PaneInfo result{};
 
-            const auto tab = _tabs.GetAt(focusedTabIdx.value());
+        const auto focusedTabIdx = _GetFocusedTabIndex();
+        if (!focusedTabIdx.has_value())
+            co_return result;
+
+        const auto tab = _tabs.GetAt(focusedTabIdx.value());
+        const auto tabImpl = _GetTabImpl(tab);
+        if (!tabImpl)
+            co_return result;
+
+        const auto activePane = tabImpl->GetActivePane();
+        if (!activePane)
+            co_return result;
+
+        result.PaneId = activePane->ContentId().value();
+        result.TabId = focusedTabIdx.value();
+        result.IsActive = true;
+
+        if (const auto termContent = activePane->GetContent().try_as<TerminalApp::TerminalPaneContent>())
+        {
+            result.Title = termContent.Title();
+            const auto profile = termContent.GetProfile();
+            result.Profile = profile ? profile.Name() : L"";
+        }
+
+        result.Pid = _getPidFromPane(activePane);
+        co_return result;
+    }
+
+    IAsyncOperation<Windows::Foundation::Collections::IVector<Protocol::TabInfo>> TerminalPage::GetProtocolTabs()
+    {
+        auto strong = get_strong();
+        co_await wil::resume_foreground(Dispatcher());
+
+        auto tabs = winrt::single_threaded_vector<Protocol::TabInfo>();
+        const auto focusedIdx = _GetFocusedTabIndex();
+
+        for (uint32_t i = 0; i < _tabs.Size(); ++i)
+        {
+            const auto tab = _tabs.GetAt(i);
             const auto tabImpl = _GetTabImpl(tab);
             if (!tabImpl)
-                return result;
+                continue;
+
+            Protocol::TabInfo info{};
+            info.TabId = i;
+            info.Title = tab.Title();
+            info.IsActive = focusedIdx.has_value() && (focusedIdx.value() == i);
+            info.PaneCount = tabImpl->GetLeafPaneCount();
+            tabs.Append(info);
+        }
+
+        co_return tabs;
+    }
+
+    IAsyncOperation<Windows::Foundation::Collections::IVector<Protocol::PaneInfo>> TerminalPage::GetProtocolPanes(uint32_t tabIdFilter)
+    {
+        auto strong = get_strong();
+
+        co_await wil::resume_foreground(Dispatcher());
+
+        auto panes = winrt::single_threaded_vector<Protocol::PaneInfo>();
+
+        for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
+        {
+            if (tabIdFilter != UINT32_MAX && tabIdx != tabIdFilter)
+                continue;
+
+            const auto tab = _tabs.GetAt(tabIdx);
+            const auto tabImpl = _GetTabImpl(tab);
+            if (!tabImpl)
+                continue;
+
+            const auto rootPane = tabImpl->GetRootPane();
+            if (!rootPane)
+                continue;
 
             const auto activePane = tabImpl->GetActivePane();
-            if (!activePane)
-                return result;
 
-            result.PaneId = winrt::to_hstring(std::to_string(activePane->ContentId().value()));
-            result.TabId = winrt::to_hstring(std::to_string(focusedTabIdx.value()));
-            result.IsActive = true;
+            rootPane->WalkTree([&](const auto& pane) {
+                if (!pane->GetContent())
+                    return; // Skip branch nodes
 
-            if (const auto termContent = activePane->GetContent().try_as<TerminalApp::TerminalPaneContent>())
-            {
-                result.Title = termContent.Title();
-                const auto profile = termContent.GetProfile();
-                result.Profile = profile ? profile.Name() : L"";
-            }
+                Protocol::PaneInfo info{};
+                info.PaneId = pane->ContentId().value();
+                info.TabId = tabIdx;
+                info.IsActive = (activePane == pane);
+                info.Pid = _getPidFromPane(pane);
 
-            result.Pid = _getPidFromPane(activePane);
-            return result;
-        });
-    }
+                if (const auto termContent = pane->GetContent().try_as<TerminalApp::TerminalPaneContent>())
+                {
+                    info.Title = termContent.Title();
+                    const auto profile = termContent.GetProfile();
+                    info.Profile = profile ? profile.Name() : L"";
 
-    Windows::Foundation::Collections::IVector<TerminalApp::ProtocolTabInfo> TerminalPage::GetProtocolTabs()
-    {
-        return _runOnUIThread(*this, [&]() -> Windows::Foundation::Collections::IVector<TerminalApp::ProtocolTabInfo> {
-            auto tabs = winrt::single_threaded_vector<TerminalApp::ProtocolTabInfo>();
-            const auto focusedIdx = _GetFocusedTabIndex();
-
-            for (uint32_t i = 0; i < _tabs.Size(); ++i)
-            {
-                const auto tab = _tabs.GetAt(i);
-                const auto tabImpl = _GetTabImpl(tab);
-                if (!tabImpl)
-                    continue;
-
-                TerminalApp::ProtocolTabInfo info{};
-                info.TabId = winrt::to_hstring(std::to_string(i));
-                info.Title = tab.Title();
-                info.IsActive = focusedIdx.has_value() && (focusedIdx.value() == i);
-                info.PaneCount = tabImpl->GetLeafPaneCount();
-                tabs.Append(info);
-            }
-
-            return tabs;
-        });
-    }
-
-    Windows::Foundation::Collections::IVector<TerminalApp::ProtocolPaneInfo> TerminalPage::GetProtocolPanes(hstring tabIdFilter)
-    {
-        return _runOnUIThread(*this, [&]() -> Windows::Foundation::Collections::IVector<TerminalApp::ProtocolPaneInfo> {
-            auto panes = winrt::single_threaded_vector<TerminalApp::ProtocolPaneInfo>();
-            const auto tabIdFilterStr = winrt::to_string(tabIdFilter);
-
-            for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
-            {
-                const auto tabIdStr = std::to_string(tabIdx);
-                if (!tabIdFilterStr.empty() && tabIdStr != tabIdFilterStr)
-                    continue;
-
-                const auto tab = _tabs.GetAt(tabIdx);
-                const auto tabImpl = _GetTabImpl(tab);
-                if (!tabImpl)
-                    continue;
-
-                const auto rootPane = tabImpl->GetRootPane();
-                if (!rootPane)
-                    continue;
-
-                const auto activePane = tabImpl->GetActivePane();
-
-                rootPane->WalkTree([&](const auto& pane) {
-                    if (!pane->GetContent())
-                        return; // Skip branch nodes
-
-                    TerminalApp::ProtocolPaneInfo info{};
-                    info.PaneId = winrt::to_hstring(std::to_string(pane->ContentId().value()));
-                    info.TabId = winrt::to_hstring(tabIdStr);
-                    info.IsActive = (activePane == pane);
-                    info.Pid = _getPidFromPane(pane);
-
-                    if (const auto termContent = pane->GetContent().try_as<TerminalApp::TerminalPaneContent>())
+                    if (const auto termControl = pane->GetTerminalControl())
                     {
-                        info.Title = termContent.Title();
-                        const auto profile = termContent.GetProfile();
-                        info.Profile = profile ? profile.Name() : L"";
-
-                        if (const auto termControl = pane->GetTerminalControl())
-                        {
-                            info.Rows = termControl.ViewHeight();
-                            info.Columns = 0;
-                        }
+                        info.Rows = termControl.ViewHeight();
+                        info.Columns = 0;
                     }
-                    else
-                    {
-                        info.Title = pane->GetContent().Title();
-                        info.Profile = L"";
-                    }
-
-                    panes.Append(info);
-                });
-            }
-
-            return panes;
-        });
-    }
-
-    TerminalApp::ProtocolPaneOutput TerminalPage::ReadProtocolPaneOutput(hstring paneId, hstring source, int32_t maxLines)
-    {
-        return _runOnUIThread(*this, [&]() -> TerminalApp::ProtocolPaneOutput {
-            TerminalApp::ProtocolPaneOutput result{};
-            const auto paneIdVal = static_cast<uint32_t>(std::stoul(winrt::to_string(paneId)));
-            const auto sourceStr = winrt::to_string(source);
-            if (maxLines <= 0)
-                maxLines = 200;
-
-            for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
-            {
-                const auto tabImpl = _GetTabImpl(_tabs.GetAt(tabIdx));
-                if (!tabImpl)
-                    continue;
-
-                const auto rootPane = tabImpl->GetRootPane();
-                if (!rootPane)
-                    continue;
-
-                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
-                if (!foundPane)
-                    continue;
-
-                const auto termControl = foundPane->GetTerminalControl();
-                if (!termControl)
-                    return result; // empty PaneId signals not-ready
-
-                hstring fullBuffer;
-                try
-                {
-                    fullBuffer = termControl.ReadEntireBuffer();
-                }
-                catch (...)
-                {
-                    return result; // empty PaneId signals error
-                }
-
-                auto fullBufferStr = winrt::to_string(fullBuffer);
-                std::vector<std::string> lines;
-                std::istringstream iss(fullBufferStr);
-                std::string line;
-                while (std::getline(iss, line))
-                {
-                    if (!line.empty() && line.back() == '\r')
-                        line.pop_back();
-                    lines.push_back(line);
-                }
-
-                result.PaneId = paneId;
-
-                if (sourceStr == "screen")
-                {
-                    const auto viewHeight = termControl.ViewHeight();
-                    const auto startIdx = lines.size() > static_cast<size_t>(viewHeight)
-                                              ? lines.size() - viewHeight
-                                              : 0;
-
-                    std::string content;
-                    int lineCount = 0;
-                    for (size_t i = startIdx; i < lines.size(); ++i)
-                    {
-                        if (!content.empty())
-                            content += "\n";
-                        content += lines[i];
-                        lineCount++;
-                    }
-
-                    result.Content = winrt::to_hstring(content);
-                    result.LineCount = lineCount;
-                    result.Truncated = false;
                 }
                 else
                 {
-                    const auto truncated = (static_cast<int32_t>(lines.size()) > maxLines);
-                    const auto startIdx = truncated ? lines.size() - maxLines : 0;
-
-                    std::string content;
-                    int lineCount = 0;
-                    for (size_t i = startIdx; i < lines.size(); ++i)
-                    {
-                        if (!content.empty())
-                            content += "\n";
-                        content += lines[i];
-                        lineCount++;
-                    }
-
-                    result.Content = winrt::to_hstring(content);
-                    result.LineCount = lineCount;
-                    result.Truncated = truncated;
+                    info.Title = pane->GetContent().Title();
+                    info.Profile = L"";
                 }
 
-                return result;
-            }
+                panes.Append(info);
+            });
+        }
 
-            return result; // empty PaneId = not found
-        });
+        co_return panes;
     }
 
-    TerminalApp::ProtocolProcessStatus TerminalPage::GetProtocolProcessStatus(hstring paneId)
+    IAsyncOperation<Protocol::PaneOutput> TerminalPage::ReadProtocolPaneOutput(uint32_t paneId, hstring source, int32_t maxLines)
     {
-        return _runOnUIThread(*this, [&]() -> TerminalApp::ProtocolProcessStatus {
-            TerminalApp::ProtocolProcessStatus result{};
-            const auto paneIdVal = static_cast<uint32_t>(std::stoul(winrt::to_string(paneId)));
+        auto strong = get_strong();
+        const auto sourceStr = winrt::to_string(source);
+        const auto effectiveMaxLines = (maxLines <= 0) ? 200 : maxLines;
 
-            for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
+        co_await wil::resume_foreground(Dispatcher());
+
+        Protocol::PaneOutput result{};
+
+        // UI-thread work: find pane, read buffer.
+        hstring fullBuffer;
+        int32_t viewHeight = 0;
+        for (const auto& tab : _tabs)
+        {
+            const auto tabImpl = _GetTabImpl(tab);
+            if (!tabImpl)
+                continue;
+
+            const auto rootPane = tabImpl->GetRootPane();
+            if (!rootPane)
+                continue;
+
+            const auto foundPane = rootPane->FindPaneByContentId(paneId);
+            if (!foundPane)
+                continue;
+
+            const auto termControl = foundPane->GetTerminalControl();
+            if (!termControl)
+                co_return result; // PaneId == 0 signals not-ready
+
+            try
             {
-                const auto tabImpl = _GetTabImpl(_tabs.GetAt(tabIdx));
-                if (!tabImpl)
-                    continue;
+                fullBuffer = termControl.ReadEntireBuffer();
+                viewHeight = termControl.ViewHeight();
+            }
+            catch (...)
+            {
+                co_return result; // PaneId == 0 signals error
+            }
 
-                const auto rootPane = tabImpl->GetRootPane();
-                if (!rootPane)
-                    continue;
+            result.PaneId = paneId;
+            break;
+        }
 
-                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
-                if (!foundPane)
-                    continue;
+        if (result.PaneId == 0)
+            co_return result; // not found
 
-                result.PaneId = paneId;
+        // Move off UI thread for string processing.
+        co_await winrt::resume_background();
 
-                const auto termControl = foundPane->GetTerminalControl();
-                if (!termControl)
+        auto fullBufferStr = winrt::to_string(fullBuffer);
+        std::vector<std::string> lines;
+        std::istringstream iss(fullBufferStr);
+        std::string line;
+        while (std::getline(iss, line))
+        {
+            if (!line.empty() && line.back() == '\r')
+                line.pop_back();
+            lines.push_back(line);
+        }
+
+        if (sourceStr == "screen")
+        {
+            const auto startIdx = lines.size() > static_cast<size_t>(viewHeight)
+                                      ? lines.size() - viewHeight
+                                      : 0;
+
+            std::string content;
+            int lineCount = 0;
+            for (size_t i = startIdx; i < lines.size(); ++i)
+            {
+                if (!content.empty())
+                    content += "\n";
+                content += lines[i];
+                lineCount++;
+            }
+
+            result.Content = winrt::to_hstring(content);
+            result.LineCount = lineCount;
+            result.Truncated = false;
+        }
+        else
+        {
+            const auto truncated = (static_cast<int32_t>(lines.size()) > effectiveMaxLines);
+            const auto startIdx = truncated ? lines.size() - effectiveMaxLines : 0;
+
+            std::string content;
+            int lineCount = 0;
+            for (size_t i = startIdx; i < lines.size(); ++i)
+            {
+                if (!content.empty())
+                    content += "\n";
+                content += lines[i];
+                lineCount++;
+            }
+
+            result.Content = winrt::to_hstring(content);
+            result.LineCount = lineCount;
+            result.Truncated = truncated;
+        }
+
+        co_return result;
+    }
+
+    IAsyncOperation<Protocol::ProcessStatus> TerminalPage::GetProtocolProcessStatus(uint32_t paneId)
+    {
+        auto strong = get_strong();
+
+        co_await wil::resume_foreground(Dispatcher());
+
+        Protocol::ProcessStatus result{};
+
+        for (const auto& tab : _tabs)
+        {
+            const auto tabImpl = _GetTabImpl(tab);
+            if (!tabImpl)
+                continue;
+
+            const auto rootPane = tabImpl->GetRootPane();
+            if (!rootPane)
+                continue;
+
+            const auto foundPane = rootPane->FindPaneByContentId(paneId);
+            if (!foundPane)
+                continue;
+
+            result.PaneId = paneId;
+
+            const auto termControl = foundPane->GetTerminalControl();
+            if (!termControl)
+            {
+                result.State = L"unknown";
+                co_return result;
+            }
+
+            const auto conn = termControl.Connection();
+            if (!conn)
+            {
+                result.State = L"exited";
+                co_return result;
+            }
+
+            const auto connState = termControl.ConnectionState();
+
+            if (connState == ConnectionState::Connected)
+            {
+                result.State = L"running";
+                result.Pid = _getPidFromPane(foundPane);
+            }
+            else
+            {
+                result.State = L"exited";
+                if (const auto conpty = conn.try_as<ConptyConnection>())
                 {
-                    result.State = L"unknown";
-                    return result;
-                }
-
-                const auto conn = termControl.Connection();
-                if (!conn)
-                {
-                    result.State = L"exited";
-                    return result;
-                }
-
-                const auto connState = termControl.ConnectionState();
-
-                if (connState == ConnectionState::Connected)
-                {
-                    result.State = L"running";
-                    result.Pid = _getPidFromPane(foundPane);
-                }
-                else
-                {
-                    result.State = L"exited";
-                    if (const auto conpty = conn.try_as<ConptyConnection>())
+                    const auto handle = conpty.RootProcessHandle();
+                    if (handle)
                     {
-                        const auto handle = conpty.RootProcessHandle();
-                        if (handle)
+                        DWORD exitCode = 0;
+                        if (GetExitCodeProcess(reinterpret_cast<HANDLE>(handle), &exitCode))
                         {
-                            DWORD exitCode = 0;
-                            if (GetExitCodeProcess(reinterpret_cast<HANDLE>(handle), &exitCode))
+                            if (exitCode != STILL_ACTIVE)
                             {
-                                if (exitCode != STILL_ACTIVE)
-                                {
-                                    result.ExitCode = static_cast<int32_t>(exitCode);
-                                    result.HasExitCode = true;
-                                }
+                                result.ExitCode = static_cast<int32_t>(exitCode);
+                                result.HasExitCode = true;
                             }
-                            result.Pid = static_cast<uint32_t>(GetProcessId(reinterpret_cast<HANDLE>(handle)));
                         }
+                        result.Pid = static_cast<uint32_t>(GetProcessId(reinterpret_cast<HANDLE>(handle)));
                     }
                 }
-
-                return result;
             }
 
-            return result; // empty PaneId = not found
-        });
+            co_return result;
+        }
+
+        co_return result; // empty PaneId = not found
     }
 
-    TerminalApp::ProtocolSessionVariable TerminalPage::GetProtocolSessionVariable(hstring paneId, hstring name)
+    IAsyncOperation<Protocol::SessionVariable> TerminalPage::GetProtocolSessionVariable(uint32_t paneId, hstring name)
     {
-        return _runOnUIThread(*this, [&]() -> TerminalApp::ProtocolSessionVariable {
-            TerminalApp::ProtocolSessionVariable result{};
-            const auto paneIdVal = static_cast<uint32_t>(std::stoul(winrt::to_string(paneId)));
+        auto strong = get_strong();
 
-            for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
+        co_await wil::resume_foreground(Dispatcher());
+
+        Protocol::SessionVariable result{};
+
+        for (const auto& tab : _tabs)
+        {
+            const auto tabImpl = _GetTabImpl(tab);
+            if (!tabImpl)
+                continue;
+
+            const auto rootPane = tabImpl->GetRootPane();
+            if (!rootPane)
+                continue;
+
+            const auto foundPane = rootPane->FindPaneByContentId(paneId);
+            if (!foundPane)
+                continue;
+
+            result.PaneId = paneId;
+            result.Name = name;
+
+            const auto value = foundPane->GetSessionVariable(name);
+            if (value.has_value())
             {
-                const auto tabImpl = _GetTabImpl(_tabs.GetAt(tabIdx));
-                if (!tabImpl)
-                    continue;
-
-                const auto rootPane = tabImpl->GetRootPane();
-                if (!rootPane)
-                    continue;
-
-                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
-                if (!foundPane)
-                    continue;
-
-                result.PaneId = paneId;
-                result.Name = name;
-
-                const auto value = foundPane->GetSessionVariable(name);
-                if (value.has_value())
-                {
-                    result.Value = value.value();
-                    result.Exists = true;
-                }
-                else
-                {
-                    result.Value = L"";
-                    result.Exists = false;
-                }
-
-                return result;
+                result.Value = value.value();
+                result.Exists = true;
+            }
+            else
+            {
+                result.Value = L"";
+                result.Exists = false;
             }
 
-            return result; // empty PaneId = not found
-        });
+            co_return result;
+        }
+
+        co_return result; // empty PaneId = not found
     }
 
     // ============================================================================
     // Mutations — return typed structs or bool
     // ============================================================================
 
-    bool TerminalPage::SetProtocolSessionVariable(hstring paneId, hstring name, hstring value)
+    IAsyncOperation<bool> TerminalPage::SetProtocolSessionVariable(uint32_t paneId, hstring name, hstring value)
     {
-        return _runOnUIThread(*this, [&]() -> bool {
-            const auto paneIdVal = static_cast<uint32_t>(std::stoul(winrt::to_string(paneId)));
+        auto strong = get_strong();
 
-            for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
+        co_await wil::resume_foreground(Dispatcher());
+
+        for (const auto& tab : _tabs)
+        {
+            const auto tabImpl = _GetTabImpl(tab);
+            if (!tabImpl)
+                continue;
+
+            const auto rootPane = tabImpl->GetRootPane();
+            if (!rootPane)
+                continue;
+
+            const auto foundPane = rootPane->FindPaneByContentId(paneId);
+            if (!foundPane)
+                continue;
+
+            if (value.empty())
+                foundPane->RemoveSessionVariable(name);
+            else
+                foundPane->SetSessionVariable(name, value);
+            co_return true;
+        }
+
+        co_return false;
+    }
+
+    IAsyncOperation<Protocol::TabCreationResult> TerminalPage::CreateProtocolTab(NewTerminalArgs args, bool background)
+    {
+        auto strong = get_strong();
+        co_await wil::resume_foreground(Dispatcher());
+
+        Protocol::TabCreationResult result{};
+
+        auto pane = _MakePane(args, nullptr);
+        if (!pane)
+            co_return result;
+
+        _CreateNewTabFromPane(pane, -1, /*openInBackground=*/background);
+        _tabContent.UpdateLayout(); // Force synchronous terminal initialization
+
+        if (_tabs.Size() == 0)
+            co_return result;
+
+        const auto newTabIdx = _tabs.Size() - 1;
+        const auto newTab = _tabs.GetAt(newTabIdx);
+        const auto tabImpl = _GetTabImpl(newTab);
+
+        result.TabId = newTabIdx;
+
+        if (tabImpl)
+        {
+            const auto rootPane = tabImpl->GetRootPane();
+            if (rootPane)
             {
-                const auto tabImpl = _GetTabImpl(_tabs.GetAt(tabIdx));
-                if (!tabImpl)
-                    continue;
+                result.PaneId = rootPane->ContentId().value();
+                result.Pid = _getPidFromPane(rootPane);
+            }
+        }
 
-                const auto rootPane = tabImpl->GetRootPane();
-                if (!rootPane)
-                    continue;
+        co_return result;
+    }
 
-                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
-                if (!foundPane)
-                    continue;
+    IAsyncOperation<Protocol::TabCreationResult> TerminalPage::SplitProtocolPane(uint32_t paneId, SplitDirection direction, float size, NewTerminalArgs args, bool background)
+    {
+        auto strong = get_strong();
 
-                if (value.empty())
-                    foundPane->RemoveSessionVariable(name);
-                else
-                    foundPane->SetSessionVariable(name, value);
-                return true;
+        co_await wil::resume_foreground(Dispatcher());
+
+        Protocol::TabCreationResult result{};
+
+        for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
+        {
+            const auto tab = _tabs.GetAt(tabIdx);
+            const auto tabImpl = _GetTabImpl(tab);
+            if (!tabImpl)
+                continue;
+
+            const auto rootPane = tabImpl->GetRootPane();
+            if (!rootPane)
+                continue;
+
+            const auto foundPane = rootPane->FindPaneByContentId(paneId);
+            if (!foundPane)
+                continue;
+
+            if (const auto id = foundPane->Id())
+            {
+                tabImpl->FocusPane(id.value());
             }
 
-            return false;
-        });
-    }
+            auto newPane = _MakePane(args, nullptr);
+            if (!newPane)
+                co_return result;
 
-    void TerminalPage::SetPendingProtocolEnv(hstring key, hstring value)
-    {
-        _runOnUIThreadVoid(*this, [&]() {
-            if (!_pendingProtocolEnvVars.has_value())
-            {
-                _pendingProtocolEnvVars.emplace();
-            }
-            _pendingProtocolEnvVars.value()[std::wstring{ key }] = std::wstring{ value };
-        });
-    }
+            // Capture new pane info before moving it into the split.
+            const auto newPaneContentId = newPane->ContentId().value();
+            const auto newPanePid = _getPidFromPane(newPane);
 
-    void TerminalPage::ClearPendingProtocolEnv()
-    {
-        _runOnUIThreadVoid(*this, [&]() {
-            _pendingProtocolEnvVars.reset();
-        });
-    }
-
-    TerminalApp::ProtocolCreationResult TerminalPage::CreateProtocolTab(NewTerminalArgs args, bool background)
-    {
-        return _runOnUIThread(*this, [&]() -> TerminalApp::ProtocolCreationResult {
-            TerminalApp::ProtocolCreationResult result{};
-
-            auto pane = _MakePane(args, nullptr);
-            _pendingProtocolEnvVars.reset();
-            if (!pane)
-                return result;
-
-            _CreateNewTabFromPane(pane, -1, /*openInBackground=*/background);
+            _SplitPane(tabImpl, direction, size, std::move(newPane), /*focusNewPane=*/!background);
             _tabContent.UpdateLayout(); // Force synchronous terminal initialization
 
-            if (_tabs.Size() == 0)
-                return result;
+            result.TabId = tabIdx;
+            result.PaneId = newPaneContentId;
+            result.Pid = newPanePid;
+            co_return result;
+        }
 
-            const auto newTabIdx = _tabs.Size() - 1;
-            const auto newTab = _tabs.GetAt(newTabIdx);
-            const auto tabImpl = _GetTabImpl(newTab);
-
-            result.TabId = winrt::to_hstring(std::to_string(newTabIdx));
-
-            if (tabImpl)
-            {
-                const auto rootPane = tabImpl->GetRootPane();
-                if (rootPane)
-                {
-                    result.PaneId = winrt::to_hstring(std::to_string(rootPane->ContentId().value()));
-                    result.Pid = _getPidFromPane(rootPane);
-                }
-            }
-
-            return result;
-        });
+        co_return result;
     }
 
-    TerminalApp::ProtocolCreationResult TerminalPage::SplitProtocolPane(hstring paneId, SplitDirection direction, float size, NewTerminalArgs args, bool background)
+    IAsyncOperation<bool> TerminalPage::CloseProtocolPane(uint32_t paneId)
     {
-        return _runOnUIThread(*this, [&]() -> TerminalApp::ProtocolCreationResult {
-            TerminalApp::ProtocolCreationResult result{};
-            const auto paneIdVal = static_cast<uint32_t>(std::stoul(winrt::to_string(paneId)));
+        auto strong = get_strong();
 
-            for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
-            {
-                const auto tab = _tabs.GetAt(tabIdx);
-                const auto tabImpl = _GetTabImpl(tab);
-                if (!tabImpl)
-                    continue;
+        co_await wil::resume_foreground(Dispatcher());
 
-                const auto rootPane = tabImpl->GetRootPane();
-                if (!rootPane)
-                    continue;
+        for (const auto& tab : _tabs)
+        {
+            const auto tabImpl = _GetTabImpl(tab);
+            if (!tabImpl)
+                continue;
 
-                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
-                if (!foundPane)
-                    continue;
+            const auto rootPane = tabImpl->GetRootPane();
+            if (!rootPane)
+                continue;
 
-                if (const auto id = foundPane->Id())
-                {
-                    tabImpl->FocusPane(id.value());
-                }
+            const auto foundPane = rootPane->FindPaneByContentId(paneId);
+            if (!foundPane)
+                continue;
 
-                auto newPane = _MakePane(args, nullptr);
-                _pendingProtocolEnvVars.reset();
-                if (!newPane)
-                    return result;
+            foundPane->Close();
+            co_return true;
+        }
 
-                // Capture new pane info before moving it into the split.
-                const auto newPaneContentId = newPane->ContentId().value();
-                const auto newPanePid = _getPidFromPane(newPane);
-
-                _SplitPane(tabImpl, direction, size, std::move(newPane), /*focusNewPane=*/!background);
-                _tabContent.UpdateLayout(); // Force synchronous terminal initialization
-
-                result.TabId = winrt::to_hstring(std::to_string(tabIdx));
-                result.PaneId = winrt::to_hstring(std::to_string(newPaneContentId));
-                result.Pid = newPanePid;
-                return result;
-            }
-
-            _pendingProtocolEnvVars.reset();
-            return result;
-        });
+        co_return false;
     }
 
-    bool TerminalPage::CloseProtocolPane(hstring paneId)
+    IAsyncOperation<bool> TerminalPage::SendProtocolInput(uint32_t paneId, hstring text)
     {
-        return _runOnUIThread(*this, [&]() -> bool {
-            const auto paneIdVal = static_cast<uint32_t>(std::stoul(winrt::to_string(paneId)));
+        auto strong = get_strong();
+        // Replace \n with \r — shells expect carriage return (Enter key)
+        // rather than line feed to execute commands.
+        std::wstring input{ text };
+        std::replace(input.begin(), input.end(), L'\n', L'\r');
 
-            for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
-            {
-                const auto tabImpl = _GetTabImpl(_tabs.GetAt(tabIdx));
-                if (!tabImpl)
-                    continue;
+        co_await wil::resume_foreground(Dispatcher());
 
-                const auto rootPane = tabImpl->GetRootPane();
-                if (!rootPane)
-                    continue;
+        for (const auto& tab : _tabs)
+        {
+            const auto tabImpl = _GetTabImpl(tab);
+            if (!tabImpl)
+                continue;
 
-                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
-                if (!foundPane)
-                    continue;
+            const auto rootPane = tabImpl->GetRootPane();
+            if (!rootPane)
+                continue;
 
-                foundPane->Close();
-                return true;
-            }
+            const auto foundPane = rootPane->FindPaneByContentId(paneId);
+            if (!foundPane)
+                continue;
 
-            return false;
-        });
-    }
+            const auto termControl = foundPane->GetTerminalControl();
+            if (!termControl)
+                co_return false;
 
-    bool TerminalPage::SendProtocolInput(hstring paneId, hstring text)
-    {
-        return _runOnUIThread(*this, [&]() -> bool {
-            const auto paneIdVal = static_cast<uint32_t>(std::stoul(winrt::to_string(paneId)));
+            termControl.SendInput(winrt::hstring{ input });
+            co_return true;
+        }
 
-            for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
-            {
-                const auto tabImpl = _GetTabImpl(_tabs.GetAt(tabIdx));
-                if (!tabImpl)
-                    continue;
-
-                const auto rootPane = tabImpl->GetRootPane();
-                if (!rootPane)
-                    continue;
-
-                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
-                if (!foundPane)
-                    continue;
-
-                const auto termControl = foundPane->GetTerminalControl();
-                if (!termControl)
-                    return false;
-
-                // Replace \n with \r — shells expect carriage return (Enter key)
-                // rather than line feed to execute commands.
-                std::wstring input{ text };
-                std::replace(input.begin(), input.end(), L'\n', L'\r');
-                termControl.SendInput(winrt::hstring{ input });
-                return true;
-            }
-
-            return false;
-        });
+        co_return false;
     }
 
     // ============================================================================
     // QuickPick — still uses JSON for the choices parameter (UI-facing, not IPC)
     // ============================================================================
 
-    hstring TerminalPage::ShowProtocolQuickPick(hstring /*title*/, hstring choicesJson, bool /*allowFreeInput*/)
+    IAsyncOperation<hstring> TerminalPage::ShowProtocolQuickPick(hstring /*title*/, hstring choicesJson, bool /*allowFreeInput*/)
     {
-        // Parse choices on the calling (I/O) thread — no UI needed.
+        auto strong = get_strong();
+
+        // Reentry guard — only one quick-pick can be active at a time.
+        bool expected = false;
+        if (!_quickPickInProgress.compare_exchange_strong(expected, true))
+        {
+            co_return winrt::to_hstring("{\"cancelled\":true,\"selected\":\"\"}");
+        }
+        auto guard = wil::scope_exit([this]() { _quickPickInProgress.store(false); });
+
+        // Parse choices on the calling thread — no UI needed.
         Json::Value choices;
         {
             Json::CharReaderBuilder rb;
@@ -693,194 +629,87 @@ namespace winrt::TerminalApp::implementation
             std::istringstream stream(choicesStr);
             if (!Json::parseFromStream(rb, stream, &choices, &errors) || !choices.isArray())
             {
-                return L"";
+                co_return L"";
             }
         }
 
-        // Shared state for cross-thread result passing.
+        // Shared state for bridging UI event callbacks to this coroutine.
         auto state = std::make_shared<QuickPickState>();
-        state->completedEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        state->completedEvent.create(wil::EventOptions::ManualReset);
 
-        auto capturedChoices = std::move(choices);
         auto weakThis = get_weak();
+        co_await wil::resume_foreground(Dispatcher());
 
-        Dispatcher().RunAsync(CoreDispatcherPriority::Normal,
-            [state, capturedChoices = std::move(capturedChoices), weakThis]() {
-                auto strongThis = weakThis.get();
-                if (!strongThis)
+        // Build Command objects for each choice (name only, no action needed).
+        auto commands = winrt::single_threaded_vector<Command>();
+        for (Json::ArrayIndex i = 0; i < choices.size(); ++i)
+        {
+            auto choiceText = winrt::to_hstring(choices[i].asString());
+            auto cmd = Command{};
+            cmd.Name(choiceText);
+            commands.Append(cmd);
+        }
+
+        auto palette = LoadCommandPalette();
+        palette.SetQuickPickCommands(commands);
+
+        // Subscribe to QuickPickCompleted for the selection path.
+        // The event fires BEFORE _close() in _dispatchQuickPick,
+        // so we can set the result and signal the I/O thread directly.
+        auto qpToken = std::make_shared<winrt::event_token>();
+        *qpToken = palette.QuickPickCompleted(
+            [state, weakThis, qpToken](auto&&, const winrt::hstring& selectedName) {
+                // Build properly-escaped JSON result.
+                Json::Value result;
+                result["cancelled"] = false;
+                result["selected"] = winrt::to_string(selectedName);
+                Json::StreamWriterBuilder wb;
+                wb["indentation"] = "";
+                state->result = winrt::to_hstring(Json::writeString(wb, result));
+                SetEvent(state->completedEvent.get());
+            });
+
+        // Visibility callback handles cancellation (Escape / click-away)
+        // and cleanup (unregister event handlers, restore action map).
+        auto visToken = std::make_shared<int64_t>(0);
+        *visToken = palette.RegisterPropertyChangedCallback(
+            winrt::Windows::UI::Xaml::UIElement::VisibilityProperty(),
+            [state, weakThis, visToken, qpToken](
+                winrt::Windows::UI::Xaml::DependencyObject const& sender,
+                winrt::Windows::UI::Xaml::DependencyProperty const&) {
+                auto vis = winrt::unbox_value<winrt::Windows::UI::Xaml::Visibility>(
+                    sender.GetValue(winrt::Windows::UI::Xaml::UIElement::VisibilityProperty()));
+
+                if (vis != winrt::Windows::UI::Xaml::Visibility::Collapsed)
                 {
-                    SetEvent(state->completedEvent);
                     return;
                 }
 
-                // Build Command objects for each choice (name only, no action needed).
-                auto commands = winrt::single_threaded_vector<Command>();
-                for (Json::ArrayIndex i = 0; i < capturedChoices.size(); ++i)
+                // Unregister both callbacks immediately.
+                sender.UnregisterPropertyChangedCallback(
+                    winrt::Windows::UI::Xaml::UIElement::VisibilityProperty(), *visToken);
+
+                if (auto page = weakThis.get())
                 {
-                    auto choiceText = winrt::to_hstring(capturedChoices[i].asString());
-                    auto cmd = Command{};
-                    cmd.Name(choiceText);
-                    commands.Append(cmd);
+                    auto palette2 = page->LoadCommandPalette();
+                    palette2.QuickPickCompleted(*qpToken);
+                    palette2.SetActionMap(page->_settings.ActionMap());
                 }
 
-                auto palette = strongThis->LoadCommandPalette();
-                palette.SetQuickPickCommands(commands);
-
-                // Subscribe to QuickPickCompleted for the selection path.
-                // The event fires BEFORE _close() in _dispatchQuickPick,
-                // so we store the result here but defer signaling to the
-                // Visibility→Collapsed callback to ensure the caller sees
-                // the result only after the palette has fully closed.
-                auto qpToken = std::make_shared<winrt::event_token>();
-                *qpToken = palette.QuickPickCompleted(
-                    [state, weakThis, qpToken](auto&&, const winrt::hstring& selectedName) {
-                        // Build properly-escaped JSON result.
-                        Json::Value result;
-                        result["cancelled"] = false;
-                        result["selected"] = winrt::to_string(selectedName);
-                        Json::StreamWriterBuilder wb;
-                        wb["indentation"] = "";
-                        state->result = winrt::to_hstring(Json::writeString(wb, result));
-                    });
-
-                // Visibility callback handles cancellation (Escape / click-away)
-                // and cleanup (unregister event handlers, restore action map).
-                auto visToken = std::make_shared<int64_t>(0);
-                *visToken = palette.RegisterPropertyChangedCallback(
-                    winrt::Windows::UI::Xaml::UIElement::VisibilityProperty(),
-                    [state, weakThis, visToken, qpToken](
-                        winrt::Windows::UI::Xaml::DependencyObject const& sender,
-                        winrt::Windows::UI::Xaml::DependencyProperty const&) {
-                        auto vis = winrt::unbox_value<winrt::Windows::UI::Xaml::Visibility>(
-                            sender.GetValue(winrt::Windows::UI::Xaml::UIElement::VisibilityProperty()));
-
-                        if (vis != winrt::Windows::UI::Xaml::Visibility::Collapsed)
-                        {
-                            return;
-                        }
-
-                        // Unregister both callbacks immediately.
-                        sender.UnregisterPropertyChangedCallback(
-                            winrt::Windows::UI::Xaml::UIElement::VisibilityProperty(), *visToken);
-
-                        if (auto page = weakThis.get())
-                        {
-                            auto palette2 = page->LoadCommandPalette();
-                            palette2.QuickPickCompleted(*qpToken);
-                            palette2.SetActionMap(page->_settings.ActionMap());
-                        }
-
-                        // If result is still empty, the user cancelled (Escape / click-away).
-                        if (state->result.empty())
-                        {
-                            state->result = winrt::to_hstring("{\"cancelled\":true,\"selected\":\"\"}");
-                        }
-                        // Always signal after the palette has fully collapsed.
-                        SetEvent(state->completedEvent);
-                    });
-
-                palette.Visibility(winrt::Windows::UI::Xaml::Visibility::Visible);
+                // If result is still empty, the user cancelled (Escape / click-away).
+                if (state->result.empty())
+                {
+                    state->result = winrt::to_hstring("{\"cancelled\":true,\"selected\":\"\"}");
+                    SetEvent(state->completedEvent.get());
+                }
             });
 
-        // Block the I/O thread until the palette completes.
-        WaitForSingleObject(state->completedEvent, INFINITE);
-        CloseHandle(state->completedEvent);
-        return state->result;
+        palette.Visibility(winrt::Windows::UI::Xaml::Visibility::Visible);
+
+        // Asynchronously wait — UI thread is FREE during this wait.
+        co_await winrt::resume_on_signal(state->completedEvent.get());
+
+        co_return state->result;
     }
 
-    // ============================================================================
-    // Coordinator
-    // ============================================================================
-
-    void TerminalPage::InitializeCoordinator(NewTerminalArgs args)
-    {
-        _runOnUIThreadVoid(*this, [&]() {
-            if (_coordinatorInitialized)
-            {
-                return;
-            }
-
-            // Resolve the profile and create terminal settings.
-            const auto profile = _settings.GetProfileForArgs(args);
-            const auto controlSettings = winrt::Microsoft::Terminal::Settings::TerminalSettings::CreateWithNewTerminalArgs(_settings, args);
-
-            // Create the connection (this picks up _pendingProtocolEnvVars).
-            auto connection = _CreateConnectionFromSettings(profile, *controlSettings.DefaultSettings(), false);
-            _pendingProtocolEnvVars.reset();
-
-            // Create the TermControl.
-            _coordinatorControl = _CreateNewControlAndContent(controlSettings, connection);
-
-            // Host the control in the sidecar container.
-            CoordinatorContainer().Children().Clear();
-            CoordinatorContainer().Children().Append(_coordinatorControl);
-
-            _coordinatorInitialized = true;
-        });
-    }
-
-    void TerminalPage::ToggleCoordinator()
-    {
-        _runOnUIThreadVoid(*this, [&]() {
-            // Lazily initialize the coordinator panel if it hasn't been set up yet.
-            // This allows the toggle command to work even when the coordinator
-            // wasn't started automatically (e.g. no commandline configured).
-            if (!_coordinatorInitialized)
-            {
-                const auto& globals = _settings.GlobalSettings();
-                auto commandline = std::wstring{ globals.AiCoordinatorCommandline() };
-
-                // Fall back to the default shell if no coordinator CLI is configured.
-                if (commandline.empty())
-                {
-                    commandline = L"cmd.exe";
-                }
-
-                NewTerminalArgs newTermArgs;
-                newTermArgs.Commandline(winrt::hstring{ commandline });
-
-                const auto profile = globals.AiCoordinatorProfile();
-                if (!profile.empty())
-                {
-                    newTermArgs.Profile(profile);
-                }
-
-                newTermArgs.TabTitle(L"AI Assistant");
-                newTermArgs.SuppressApplicationTitle(true);
-
-                InitializeCoordinator(newTermArgs);
-            }
-
-            const auto border = CoordinatorBorder();
-            if (border.Visibility() == winrt::Windows::UI::Xaml::Visibility::Visible)
-            {
-                border.Visibility(winrt::Windows::UI::Xaml::Visibility::Collapsed);
-                // Return focus to the active pane in the current tab.
-                if (const auto tab = _GetFocusedTab())
-                {
-                    tab.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
-                }
-            }
-            else
-            {
-                border.Visibility(winrt::Windows::UI::Xaml::Visibility::Visible);
-                // Focus the coordinator when showing it.
-                if (_coordinatorControl)
-                {
-                    _coordinatorControl.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
-                }
-            }
-        });
-    }
-
-    bool TerminalPage::CoordinatorVisible()
-    {
-        return _runOnUIThread(*this, [&]() -> bool {
-            if (!_coordinatorInitialized)
-            {
-                return false;
-            }
-            return CoordinatorBorder().Visibility() == winrt::Windows::UI::Xaml::Visibility::Visible;
-        });
-    }
 }

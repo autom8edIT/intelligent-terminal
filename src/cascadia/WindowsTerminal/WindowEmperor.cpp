@@ -13,8 +13,6 @@
 #include <sddl.h>
 
 #include "AppHost.h"
-#include "TerminalProtocolServer.h"
-#include "ProtocolRequestHandler.h"
 #include "TerminalProtocolComServer.h"
 #include "resource.h"
 #include "VirtualDesktopUtils.h"
@@ -33,12 +31,10 @@ using namespace ::Microsoft::Console;
 using namespace std::chrono_literals;
 using VirtualKeyModifiers = winrt::Windows::System::VirtualKeyModifiers;
 
-// Constructor and destructor must be defined here where TerminalProtocolServer
-// and ProtocolRequestHandler are complete types (unique_ptr needs this).
 WindowEmperor::WindowEmperor() = default;
 WindowEmperor::~WindowEmperor()
 {
-    // Revoke COM class factory before destroying the handler it references.
+    // Revoke COM class factory before destroying resources.
     LOG_IF_FAILED(TerminalProtocolComServer::s_StopListening());
 }
 
@@ -122,87 +118,6 @@ static const uint8_t* deserializeString(const uint8_t* it, const uint8_t* end, w
 
     str = { reinterpret_cast<const wchar_t*>(it), len - 1 };
     return it + bytes;
-}
-
-static std::wstring detectWtaPathForHostPrewarm()
-{
-    wchar_t buffer[MAX_PATH];
-    if (SearchPathW(nullptr, L"wta", L".exe", MAX_PATH, buffer, nullptr) > 0)
-    {
-        return buffer;
-    }
-
-    auto cursor = std::filesystem::path{ wil::GetModuleFileNameW<std::wstring>(nullptr) }.parent_path();
-    while (!cursor.empty())
-    {
-        for (const auto& relative : {
-                 std::filesystem::path{ L"wta\\target\\debug\\wta.exe" },
-                 std::filesystem::path{ L"wta\\target\\release\\wta.exe" },
-             })
-        {
-            const auto candidate = cursor / relative;
-            std::error_code ec;
-            if (std::filesystem::exists(candidate, ec))
-            {
-                return candidate.lexically_normal().wstring();
-            }
-        }
-
-        const auto parent = cursor.parent_path();
-        if (parent == cursor)
-        {
-            break;
-        }
-        cursor = parent;
-    }
-
-    static constexpr std::wstring_view devPath =
-        L"C:\\Users\\xianghong\\Documents\\wta-unified\\wta\\target\\debug\\wta.exe";
-    if (std::filesystem::exists(devPath))
-    {
-        return std::wstring{ devPath };
-    }
-
-    return {};
-}
-
-static std::wstring detectDefaultAgentCliForHostPrewarm()
-{
-    wchar_t buffer[MAX_PATH];
-
-    if (SearchPathW(nullptr, L"copilot", L".exe", MAX_PATH, buffer, nullptr) > 0)
-    {
-        return L"copilot --acp --stdio";
-    }
-
-    static constexpr std::wstring_view fallbackClis[] = { L"claude" };
-    for (const auto& cli : fallbackClis)
-    {
-        if (SearchPathW(nullptr, cli.data(), L".exe", MAX_PATH, buffer, nullptr) > 0)
-        {
-            return std::wstring{ cli };
-        }
-    }
-
-    return {};
-}
-
-static void appendQuotedCommandArg(std::wstring& cmdline, std::wstring_view arg)
-{
-    if (!cmdline.empty())
-    {
-        cmdline.push_back(L' ');
-    }
-
-    std::wstring escaped{ arg };
-    for (size_t pos = 0; (pos = escaped.find(L'"', pos)) != std::wstring::npos; pos += 2)
-    {
-        escaped.replace(pos, 1, L"\"\"");
-    }
-
-    cmdline.push_back(L'"');
-    cmdline += escaped;
-    cmdline.push_back(L'"');
 }
 
 struct Handoff
@@ -472,7 +387,6 @@ void WindowEmperor::HandleCommandlineArgs(int nCmdShow)
 
     // Initialize the protocol server for AI CLI integration.
     _initializeProtocolServer();
-    _startCoordinatorIfEnabled();
 
     // When the settings change, we'll want to update our global hotkeys
     // and our notification icon based on the new settings.
@@ -483,7 +397,6 @@ void WindowEmperor::HandleCommandlineArgs(int nCmdShow)
             _setupGlobalHotkeys();
             _checkWindowsForNotificationIcon();
             _setupSessionPersistence(args.NewSettings().GlobalSettings().ShouldUsePersistedLayout());
-            _startCoordinatorIfEnabled();
         }
     });
 
@@ -1561,42 +1474,7 @@ void WindowEmperor::_checkWindowsForNotificationIcon()
 
 void WindowEmperor::_initializeProtocolServer()
 {
-    // Generate a random 32-byte hex token for MCP authentication.
-    {
-        BYTE tokenBytes[32];
-        const auto status = BCryptGenRandom(nullptr, tokenBytes, sizeof(tokenBytes), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-        if (!BCRYPT_SUCCESS(status))
-        {
-            LOG_WIN32(HRESULT_FROM_NT(status));
-            return; // Protocol server won't start without a token.
-        }
-
-        _mcpToken.reserve(sizeof(tokenBytes) * 2);
-        for (size_t i = 0; i < sizeof(tokenBytes); ++i)
-        {
-            char hex[3];
-            sprintf_s(hex, "%02x", tokenBytes[i]);
-            _mcpToken += hex;
-        }
-    }
-
-    // Create the named pipe name using the process ID for uniqueness.
-    _protocolPipeName = fmt::format(L"\\\\.\\pipe\\WindowsTerminal-{}", GetCurrentProcessId());
-
-    // Inject WT_PIPE_NAME into the process environment so ALL child panes
-    // inherit it automatically (like WT_SESSION). This lets wta and other
-    // tools discover the pipe without VT escape sequences.
-    SetEnvironmentVariableW(L"WT_PIPE_NAME", _protocolPipeName.c_str());
-
-    // Create the handler and server.
-    _protocolHandler = std::make_unique<ProtocolRequestHandler>(*this);
-    _protocolHandler->SetAuthToken(_mcpToken);
-
-    _protocolServer = std::make_unique<TerminalProtocolServer>(_protocolPipeName, _mcpToken, *_protocolHandler);
-    _protocolHandler->SetServer(_protocolServer.get());
-    _protocolServer->Start();
-
-    // Register COM class factory for cross-process access (runs on STA/UI thread).
+    // Register COM class factory for cross-process access (runs on MTA thread).
     TerminalProtocolComServer::s_setEmperor(this);
     if (SUCCEEDED_LOG(TerminalProtocolComServer::s_StartListening()))
     {
@@ -1610,128 +1488,7 @@ void WindowEmperor::_initializeProtocolServer()
         }
     }
 
-    // Debug: print credentials so dev builds can manually set WT_PIPE_NAME / WT_MCP_TOKEN.
-    OutputDebugStringA(fmt::format("WT Protocol Server started\n  WT_PIPE_NAME={}\n  WT_MCP_TOKEN={}\n  WT_COM_CLSID={}\n",
-                                   winrt::to_string(_protocolPipeName),
-                                   _mcpToken,
+    OutputDebugStringA(fmt::format("WT Protocol Server started\n  WT_COM_CLSID={}\n",
                                    winrt::to_string(_comClsid))
                            .c_str());
-}
-
-void WindowEmperor::_startCoordinatorIfEnabled()
-{
-    if (_coordinatorHostPrewarmRequested)
-    {
-        return;
-    }
-
-    const auto& settings = _app.Logic().Settings();
-    const auto& globals = settings.GlobalSettings();
-
-    if (!globals.AiCoordinatorEnabled())
-    {
-        return;
-    }
-
-    if (_protocolPipeName.empty())
-    {
-        return;
-    }
-
-    const auto wtaPath = detectWtaPathForHostPrewarm();
-    if (wtaPath.empty())
-    {
-        return;
-    }
-
-    // Resolve agent CLI from structured settings (acpAgent/acpModel) or legacy agentCliPath.
-    winrt::hstring agentCliPath;
-    if (globals.HasAcpAgent())
-    {
-        const auto acpAgent = globals.AcpAgent();
-        const auto acpAgentLower = winrt::to_string(acpAgent);
-        if (acpAgentLower == "copilot" || acpAgentLower == "gemini")
-        {
-            std::wstring cmd{ acpAgent };
-            if (acpAgentLower == "copilot") { cmd += L" --acp --stdio"; }
-            else if (acpAgentLower == "gemini") { cmd += L" --experimental-acp"; }
-            const auto acpModel = globals.AcpModel();
-            if (!acpModel.empty()) { cmd += L" --model "; cmd += std::wstring_view{ acpModel }; }
-            agentCliPath = winrt::hstring{ cmd };
-        }
-    }
-    if (agentCliPath.empty())
-    {
-        agentCliPath = globals.AgentCliPath();
-        if (agentCliPath.empty())
-        {
-            agentCliPath = winrt::hstring{ detectDefaultAgentCliForHostPrewarm() };
-        }
-    }
-
-    // Resolve delegate from structured setting or legacy.
-    auto delegateAgentCliPath = globals.HasDelegateAgent()
-        ? globals.DelegateAgent()
-        : globals.DelegateAgentCliPath();
-
-    std::wstring cmdline;
-    appendQuotedCommandArg(cmdline, wtaPath);
-    cmdline += L" ensure-host";
-    if (!agentCliPath.empty())
-    {
-        cmdline += L" --agent";
-        appendQuotedCommandArg(cmdline, std::wstring_view{ agentCliPath });
-    }
-    if (!delegateAgentCliPath.empty())
-    {
-        cmdline += L" --delegate-agent";
-        appendQuotedCommandArg(cmdline, std::wstring_view{ delegateAgentCliPath });
-    }
-    const auto delegateModel = globals.DelegateModel();
-    if (!delegateModel.empty())
-    {
-        cmdline += L" --delegate-model";
-        appendQuotedCommandArg(cmdline, std::wstring_view{ delegateModel });
-    }
-    if (!globals.AutoFixEnabled())
-    {
-        cmdline += L" --no-autofix";
-    }
-    cmdline += L" --pipe-name";
-    appendQuotedCommandArg(cmdline, _protocolPipeName);
-    if (!_mcpToken.empty())
-    {
-        cmdline += L" --pipe-token";
-        appendQuotedCommandArg(cmdline, winrt::to_hstring(_mcpToken).c_str());
-    }
-
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-
-    PROCESS_INFORMATION pi{};
-    auto mutableCmdline = cmdline;
-    const auto launched = CreateProcessW(
-        wtaPath.c_str(),
-        mutableCmdline.data(),
-        nullptr,
-        nullptr,
-        FALSE,
-        CREATE_NO_WINDOW,
-        nullptr,
-        nullptr,
-        &si,
-        &pi);
-    if (!launched)
-    {
-        OutputDebugStringW(fmt::format(
-            FMT_COMPILE(L"[AgentHost] failed to prewarm shared host via '{}'\n"),
-            cmdline).c_str());
-        return;
-    }
-
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    _coordinatorHostPrewarmRequested = true;
 }

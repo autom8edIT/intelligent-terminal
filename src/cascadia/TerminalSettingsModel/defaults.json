@@ -536,7 +536,6 @@
         { "command": "renameTab", "id": "Terminal.RenameTab" },
         { "command": "openTabRenamer", "id": "Terminal.OpenTabRenamer" },
         { "command": "commandPalette", "id": "Terminal.ToggleCommandPalette" },
-        { "command": "toggleCoordinator", "id": "Terminal.ToggleCoordinator" },
         { "command": "showProtocolInfo", "id": "Terminal.ShowProtocolInfo" },
         { "command": "identifyWindow", "id": "Terminal.IdentifyWindow" },
         { "command": "openWindowRenamer", "id": "Terminal.OpenWindowRenamer" },
