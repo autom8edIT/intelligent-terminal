@@ -7,9 +7,9 @@ use crate::app::{App, ChatMessage, PlanEntryStatus};
 use crate::theme;
 use crate::ui_trace;
 
-const ACTIVITY_LABEL: &str = "working";
+const ACTIVITY_LABEL: &str = "thinking";
 const ACTIVITY_ICON_FRAMES: [&str; 4] = [".", "o", "O", "o"];
-const ACTIVITY_HIGHLIGHT_WINDOWS: [(usize, usize); 9] = [
+const ACTIVITY_HIGHLIGHT_WINDOWS: [(usize, usize); 10] = [
     (0, 1),
     (0, 2),
     (0, 3),
@@ -17,8 +17,9 @@ const ACTIVITY_HIGHLIGHT_WINDOWS: [(usize, usize); 9] = [
     (2, 5),
     (3, 6),
     (4, 7),
-    (5, 7),
-    (6, 7),
+    (5, 8),
+    (6, 8),
+    (7, 8),
 ];
 const ACTIVITY_PREVIEW_MAX_CHARS: usize = 180;
 const MAX_RENDER_LINE_CHARS: usize = 4096;
@@ -167,6 +168,8 @@ fn activity_preview(app: &App) -> Option<(String, Style)> {
 
     app.progress_status
         .as_deref()
+        // "Thinking..." is redundant now that the animated label says "thinking".
+        .filter(|s| *s != "Thinking...")
         .map(single_line_tail_preview)
         .filter(|text| !text.is_empty())
         .map(|text| (text, theme::DIM))

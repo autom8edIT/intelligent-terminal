@@ -628,7 +628,7 @@ impl App {
             AppEvent::Key(key) => self.handle_key(key),
             AppEvent::Tick => {
                 if self.has_activity_indicator() {
-                    self.activity_frame = (self.activity_frame + 1) % 9;
+                    self.activity_frame = (self.activity_frame + 1) % 10; // Must match ACTIVITY_HIGHLIGHT_WINDOWS.len() in ui/chat.rs
                 }
                 // Age and auto-dismiss notifications
                 for n in self.wt_notifications.iter_mut() {
