@@ -42,7 +42,7 @@
             "guid": "{fd19208a-412b-4857-8a2d-9ca592b4b16e}",
             "name": "Agent Pane",
             "hidden": true,
-            "padding": "0",
+            "padding": "8, 8, 8, 0",
             "background": "#0c0c0c",
             "scrollbarState": "hidden",
             "closeOnExit": "always",

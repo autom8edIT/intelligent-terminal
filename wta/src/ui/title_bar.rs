@@ -1,22 +1,35 @@
 use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Paragraph};
 
 use crate::app::{App, ConnectionState};
 use crate::theme;
 
-pub const HEIGHT: u16 = 1;
+/// Two rows: title content, then a `─` separator vertically centered in the
+/// row beneath it. The separator cell's natural top/bottom half-cell padding
+/// gives the title some breathing room without an extra padding row.
+pub const HEIGHT: u16 = 2;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     if area.height == 0 || area.width == 0 {
         return;
     }
 
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(4)])
-        .split(area);
+    // Row 0: title content. Row 1: separator.
+    let title_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 1,
+    };
 
-    // ── Left: [●] AgentName [version] [∨] ───────────────────────────────────
+    // Paint the full bar with TITLE_BAR_BG so the title row and the bg
+    // behind the separator glyph read as one contiguous band.
+    frame.render_widget(
+        Block::default().style(theme::TITLE_BAR_STYLE),
+        area,
+    );
+
+    // ── [●] AgentName [version] [∨] ─────────────────────────────────────────
     let display_name = if app.agent_name.is_empty() {
         "Agent".to_string()
     } else {
@@ -51,13 +64,23 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     ];
 
     frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(theme::PANEL_STYLE),
-        chunks[0],
+        Paragraph::new(Line::from(spans)).style(theme::TITLE_BAR_STYLE),
+        title_area,
     );
 
-    // ── Right: history button ────────────────────────────────────────────────
-    frame.render_widget(
-        Paragraph::new(" ↺  ").style(theme::PANEL_STYLE),
-        chunks[1],
-    );
+    // ── Row 1: separator ───────────────────────────────────────────────────
+    // `─` is vertically centered in its cell, so the line sits in the
+    // middle of row 1 with half a cell of black padding above and below it.
+    if area.height >= HEIGHT {
+        frame.render_widget(
+            Paragraph::new("─".repeat(area.width as usize))
+                .style(theme::TITLE_BAR_SEPARATOR),
+            Rect {
+                x: area.x,
+                y: area.y + HEIGHT - 1,
+                width: area.width,
+                height: 1,
+            },
+        );
+    }
 }

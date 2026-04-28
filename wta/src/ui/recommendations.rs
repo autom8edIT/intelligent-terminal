@@ -124,7 +124,11 @@ fn extract_card_content(
             RecommendedAction::Send { input, .. } => {
                 return (
                     input.clone(),
-                    vec!["Insert in Terminal".into(), "Run ↵".into()],
+                    vec![
+                        "Copy".into(),
+                        "Insert in Terminal".into(),
+                        "Run ↵".into(),
+                    ],
                 );
             }
             RecommendedAction::OpenAndSend {

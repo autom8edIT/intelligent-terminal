@@ -3,6 +3,7 @@ mod app;
 mod coordinator;
 mod event;
 mod logging;
+mod osc52;
 mod preflight;
 mod protocol;
 mod runtime_paths;

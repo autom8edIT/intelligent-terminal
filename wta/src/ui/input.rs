@@ -28,16 +28,16 @@ struct WrappedInput {
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
-        .borders(Borders::TOP | Borders::BOTTOM)
+        .borders(Borders::ALL)
         .border_style(theme::INPUT_BORDER)
         .style(Style::new().bg(theme::INPUT_BG))
         .padding(Padding::new(INPUT_LEFT_PAD, 0, 0, 0));
-    let viewport = input_viewport(&app.input, app.cursor_pos, area.width.saturating_sub(INPUT_LEFT_PAD));
+    let viewport = input_viewport(&app.input, app.cursor_pos, area.width.saturating_sub(INPUT_LEFT_PAD + 2));
 
     let lines: Vec<Line> = if app.input.is_empty() {
         // Show a placeholder reflecting connection state.
         let placeholder = match &app.state {
-            ConnectionState::Connected => " >  Ask anything, / for commands..".to_string(),
+            ConnectionState::Connected => ">  Ask anything, / for commands..".to_string(),
             ConnectionState::Connecting(_) => "connecting...".to_string(),
             ConnectionState::Disconnected => "disconnect".to_string(),
             ConnectionState::Failed(_) => "disconnect".to_string(),
@@ -61,24 +61,25 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 pub(crate) fn input_height(input: &str, cursor_pos: usize, total_width: u16) -> u16 {
-    let viewport = input_viewport(input, cursor_pos, total_width.saturating_sub(INPUT_LEFT_PAD));
+    let viewport = input_viewport(input, cursor_pos, total_width.saturating_sub(INPUT_LEFT_PAD + 2));
     (viewport.visible_lines.len() as u16 + 2).clamp(INPUT_MIN_HEIGHT, INPUT_MAX_HEIGHT)
 }
 
 pub(crate) fn cursor_position(app: &App, area: Rect) -> Option<Position> {
-    if area.width <= INPUT_LEFT_PAD || area.height <= 2 {
+    if area.width <= INPUT_LEFT_PAD + 2 || area.height <= 2 {
         return None;
     }
 
-    let text_width = area.width.saturating_sub(INPUT_LEFT_PAD);
+    let text_width = area.width.saturating_sub(INPUT_LEFT_PAD + 2);
     let viewport = input_viewport(&app.input, app.cursor_pos, text_width);
     let cursor_col = viewport.cursor_col.min(text_width.saturating_sub(1) as usize);
     let cursor_row = viewport
         .cursor_row
         .min(viewport.visible_lines.len().saturating_sub(1));
 
+    // +1 for the left `│` border, then the inner left padding, then column.
     Some(Position::new(
-        area.x + INPUT_LEFT_PAD + cursor_col as u16,
+        area.x + 1 + INPUT_LEFT_PAD + cursor_col as u16,
         area.y + 1 + cursor_row as u16,
     ))
 }
