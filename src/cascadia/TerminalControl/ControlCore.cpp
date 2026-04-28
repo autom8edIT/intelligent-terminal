@@ -2388,12 +2388,12 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         return hstring{ str };
     }
 
-    // Returns the text of the most recent shell prompt — the command typed
-    // at the last OSC 133;A mark plus its output (if the command has finished),
-    // or whatever has been written so far for an in-flight command. Used by
-    // external agents (wtcli / wta) to fetch a tightly-scoped pane snapshot
-    // instead of an arbitrary tail of the buffer (which may contain unrelated
-    // commands and secrets).
+    // Returns the most recent *finished* shell prompt — the command typed
+    // at an OSC 133;B mark plus its output, sliced exactly between the
+    // command-start and command-end markers. Used by external agents
+    // (wtcli / wta) to fetch a tightly-scoped pane snapshot instead of an
+    // arbitrary tail of the buffer (which may contain unrelated commands
+    // and secrets).
     //
     // Behavior (walking marks in reverse, picking the first match):
     //   * Finished command, with output       → [B..D] exact slice.
@@ -2408,8 +2408,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     //                              output also fall through to the prior
     //                              completed prompt rather than returning a
     //                              half-baked truncated read.
-    //   * No marks present         → empty hstring (caller falls back to a
-    //                              line-count read).
+    //   * No marks present, or no finished command found
+    //                                         → empty hstring (caller may
+    //                                           fall back to a line-count
+    //                                           read).
     //
     // We key the "finished" decision off the FTCS CommandEnd / OSC 133;D
     // marker, which the buffer surfaces as ScrollbarData::exitCode. Note
