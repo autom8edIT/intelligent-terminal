@@ -2334,7 +2334,6 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "async-trait",
- "base64",
  "clap",
  "crossterm",
  "futures",

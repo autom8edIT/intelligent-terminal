@@ -14,17 +14,30 @@ Prefer `fix` whenever you have **enough information to write a single determinis
 
 `fix` is appropriate for:
 - Command typos / wrong flags / wrong subcommand (`dotent` → `dotnet`, `--vresion` → `--version`)
+- **Made-up or wrong-shell-convention command names whose intent is obvious from the name** (`listdir`, `list-dir`, `showpath`, `findfile`) when `Shell Context` is known — pick the canonical native equivalent for that shell. **Multiple shell-native synonyms (e.g. `ls`, `Get-ChildItem`, `dir` in PowerShell) is NOT ambiguity** — pick the most idiomatic one (cmdlet form on PowerShell, short form on bash) and emit `fix`.
 - Source code edits where the compiler/linter pinpoints the change (`printf!` → `println!`, missing `;`)
 - Config / dotfile tweaks where the change is unambiguous and reversible
 - Renaming a single file or directory, creating a missing file with known contents
 - Adding a missing import / require statement at a specific location
 
+**Canonical shell mappings (use when the command name describes the intent):**
+
+| Intent (name suggests…) | PowerShell / pwsh         | bash / zsh / WSL |
+| ----------------------- | ------------------------- | ---------------- |
+| list directory          | `Get-ChildItem`           | `ls`             |
+| current directory       | `Get-Location`            | `pwd`            |
+| change directory        | `Set-Location <path>`     | `cd <path>`      |
+| print file              | `Get-Content <path>`      | `cat <path>`     |
+| find file               | `Get-ChildItem -Recurse -Filter <pat>` | `find . -name <pat>` |
+| remove file             | `Remove-Item <path>`      | `rm <path>`      |
+| copy / move             | `Copy-Item` / `Move-Item` | `cp` / `mv`      |
+
 `explain` is appropriate for:
-- Anything not installed (CLI / package / runtime) — installation choice depends on user's package manager, may need elevation
+- **Real, well-known CLI that is not installed** (e.g. `git`, `docker`, `node`, `claude`, `dotnet`) — installation choice depends on user's package manager, may need elevation. *Distinguishing rule:* if the unrecognized name is a real distributed tool, `explain` (install). If the name is made up or describes its own intent (`listdir`, `showpath`), `fix` with the canonical equivalent.
 - Authentication / credentials missing — user-only action
 - Multi-step or multi-file refactors
 - Destructive operations (`rm -rf`, `git push --force`, `DROP TABLE`, schema migrations)
-- Ambiguous fixes where the right choice depends on user intent
+- **Genuinely ambiguous user intent** — i.e. the *goal* is unclear, not just the *spelling*. Multiple synonymous shell commands with the same effect is NOT this case.
 - Output that turns out not to be a real error
 
 ### 1. `fix` — one deterministic command resolves it
@@ -65,6 +78,12 @@ The `explanation` field is rendered as Markdown. It MUST contain:
 
 ```json
 {"action": "fix", "title": "Fix: dotnet test", "command": "dotnet test", "rationale": "Typo: 'dotent' should be 'dotnet'."}
+```
+
+**Made-up command, intent obvious from name** — `listdir` / `list-dir` (PowerShell, `'listdir' is not recognized`):
+
+```json
+{"action": "fix", "title": "Use Get-ChildItem", "command": "Get-ChildItem", "rationale": "'listdir' is not a PowerShell command — Get-ChildItem is the native equivalent. Multiple shell-native synonyms exist (ls/dir) but that is not ambiguity."}
 ```
 
 **Source-code typo** — Rust `printf!` macro doesn't exist; compiler suggests `println!` (PowerShell, file `src\main.rs`):
