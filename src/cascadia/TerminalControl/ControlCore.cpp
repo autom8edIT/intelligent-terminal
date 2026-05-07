@@ -1451,6 +1451,14 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     //   before sending it over the terminal's connection.
     void ControlCore::PasteText(const winrt::hstring& hstr)
     {
+        _pasteInProgress.store(true, std::memory_order_release);
+        // _pasteInProgress is true only during the synchronous body of PasteText.
+        // Suppression of inline-suggestion triggers in the immediate post-paste
+        // window is handled separately via a controller-side timestamp (see
+        // InlineSuggestionController spec); we do not attempt to extend this flag
+        // across the lock-release window here.
+        auto pasteGuard = wil::scope_exit([this]() noexcept { _pasteInProgress.store(false, std::memory_order_release); });
+
         using namespace ::Microsoft::Console::Utils;
 
         auto filtered = FilterStringForPaste(hstr, CarriageReturnNewline | ControlCodes);
@@ -1519,6 +1527,11 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     {
         const auto lock = _terminal->LockForReading();
         return _terminal->IsXtermBracketedPasteModeEnabled();
+    }
+
+    bool ControlCore::IsPasteInProgress() const noexcept
+    {
+        return _pasteInProgress.load(std::memory_order_acquire);
     }
 
     Windows::Foundation::IReference<winrt::Windows::UI::Color> ControlCore::TabColor() noexcept

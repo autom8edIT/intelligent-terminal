@@ -129,6 +129,8 @@ namespace Microsoft.Terminal.Control
                               Microsoft.Terminal.Core.ControlKeyStates modifiers);
         void SendInput(String text);
         void PasteText(String text);
+        // Used by inline-suggestion controller to suppress triggering during/just-after paste.
+        Boolean IsPasteInProgress();
         void SelectAll();
         void ClearSelection();
         Boolean ToggleBlockSelection();
