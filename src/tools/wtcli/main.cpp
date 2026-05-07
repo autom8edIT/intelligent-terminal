@@ -6,6 +6,7 @@
 #include <winrt/Microsoft.Terminal.Protocol.h>
 
 #include "Formatting.h"
+#include "wtcli_functions.h"
 
 #include <CLI/CLI.hpp>
 
@@ -100,33 +101,7 @@ static uint32_t GetFirstTabId(const Protocol::IProtocolServer& server, uint64_t 
 // Translate tmux-style key names to actual characters.
 static std::wstring TranslateKeys(const std::vector<std::string>& keys)
 {
-    std::wstring result;
-    for (const auto& key : keys)
-    {
-        if (key == "Enter" || key == "enter")
-            result += L"\r\n";
-        else if (key == "Space" || key == "space")
-            result += L" ";
-        else if (key == "Tab" || key == "tab")
-            result += L"\t";
-        else if (key == "Escape" || key == "escape" || key == "Esc")
-            result += L"\x1b";
-        else if (key == "BSpace" || key == "bspace")
-            result += L"\b";
-        else if (key == "C-c")
-            result += L"\x03";
-        else if (key == "C-d")
-            result += L"\x04";
-        else if (key == "C-z")
-            result += L"\x1a";
-        else if (key == "C-l")
-            result += L"\x0c";
-        else if (key.size() == 3 && key[0] == 'C' && key[1] == '-' && key[2] >= 'a' && key[2] <= 'z')
-            result += static_cast<wchar_t>(key[2] - 'a' + 1);
-        else
-            result += winrt::to_hstring(key);
-    }
-    return result;
+    return wtcli::TranslateKeys(keys);
 }
 
 // ── Main ──
@@ -771,30 +746,15 @@ int main()
         try
         {
             Json::Value evt;
-            evt["type"] = "event";
-            evt["method"] = "agent_event";
-
-            Json::Value params;
-            if (!sendEventJson.empty())
+            auto resolvedPaneId = !sendEventPaneTarget.empty()
+                ? sendEventPaneTarget
+                : std::to_string(ResolvePaneId(server, ""));
+            if (!wtcli::BuildSendEventJson(sendEventType, sendEventJson, resolvedPaneId, evt))
             {
-                Json::CharReaderBuilder rb;
-                std::string errs;
-                std::istringstream ss(sendEventJson);
-                if (!Json::parseFromStream(rb, ss, &params, &errs) || !params.isObject())
-                {
-                    fprintf(stderr, "Invalid JSON: expected an object\n");
-                    exitCode = 1;
-                    return;
-                }
+                fprintf(stderr, "Invalid JSON: expected an object\n");
+                exitCode = 1;
+                return;
             }
-
-            params["event"] = sendEventType;
-            if (!sendEventPaneTarget.empty())
-                params["pane_id"] = sendEventPaneTarget;
-            else
-                params["pane_id"] = std::to_string(ResolvePaneId(server, ""));
-
-            evt["params"] = params;
 
             Json::StreamWriterBuilder wb;
             wb["indentation"] = "";
@@ -831,37 +791,9 @@ int main()
             auto eventUtf8 = winrt::to_string(eventJson);
 
             // Optionally filter by pane_id and/or event type
-            if (!listenTarget.empty() || !listenEventFilter.empty())
+            if (!wtcli::MatchesEventFilter(eventUtf8, listenTarget, listenEventFilter))
             {
-                Json::Value ev;
-                Json::CharReaderBuilder rb;
-                std::string errs;
-                std::istringstream ss(eventUtf8);
-                if (Json::parseFromStream(rb, ss, &ev, &errs))
-                {
-                    if (!listenTarget.empty())
-                    {
-                        auto paneId = ev["params"].get("pane_id", "").asString();
-                        if (paneId != listenTarget)
-                            return;
-                    }
-
-                    if (!listenEventFilter.empty())
-                    {
-                        auto eventType = ev["params"].get("event", "").asString();
-                        // Support trailing wildcard: "agent.*" matches "agent.task.started"
-                        if (listenEventFilter.back() == '*')
-                        {
-                            auto prefix = listenEventFilter.substr(0, listenEventFilter.size() - 1);
-                            if (eventType.substr(0, prefix.size()) != prefix)
-                                return;
-                        }
-                        else if (eventType != listenEventFilter)
-                        {
-                            return;
-                        }
-                    }
-                }
+                return;
             }
 
             printf("%s\n", eventUtf8.c_str());
