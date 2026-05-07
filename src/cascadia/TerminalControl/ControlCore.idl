@@ -84,6 +84,15 @@ namespace Microsoft.Terminal.Control
         IVector<String> QuickFixes { get; };
     };
 
+    struct EditLineState
+    {
+        String CursorPrefix;
+        Boolean CursorAtEnd;
+        Boolean HasPromptMark;
+        Boolean CommandRunning;
+        Boolean InAltBuffer;
+    };
+
     [default_interface] runtimeclass ControlCore : ICoreState
     {
         ControlCore(IControlSettings settings,
@@ -131,6 +140,8 @@ namespace Microsoft.Terminal.Control
         void PasteText(String text);
         // Used by inline-suggestion controller to suppress triggering during/just-after paste.
         Boolean IsPasteInProgress();
+        EditLineState GetEditLineState();
+        Boolean IsInAlternateScreenBuffer();
         void SelectAll();
         void ClearSelection();
         Boolean ToggleBlockSelection();
@@ -214,6 +225,7 @@ namespace Microsoft.Terminal.Control
         event Windows.Foundation.TypedEventHandler<Object, NoticeEventArgs> RaiseNotice;
         event Windows.Foundation.TypedEventHandler<Object, TransparencyChangedEventArgs> TransparencyChanged;
         event Windows.Foundation.TypedEventHandler<Object, Object> OutputIdle;
+        event Windows.Foundation.TypedEventHandler<Object, Object> EditLineStateChanged;
         event Windows.Foundation.TypedEventHandler<Object, UpdateSelectionMarkersEventArgs> UpdateSelectionMarkers;
         event Windows.Foundation.TypedEventHandler<Object, OpenHyperlinkEventArgs> OpenHyperlink;
         event Windows.Foundation.TypedEventHandler<Object, Object> CloseTerminalRequested;

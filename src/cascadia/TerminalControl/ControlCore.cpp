@@ -1534,6 +1534,34 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         return _pasteInProgress.load(std::memory_order_acquire);
     }
 
+    Control::EditLineState ControlCore::GetEditLineState() const
+    {
+        Control::EditLineState result{};
+        if (!_terminal)
+        {
+            result.CursorAtEnd = true;
+            return result;
+        }
+
+        const auto snap = _terminal->CurrentEditLineSnapshot();
+        result.CursorPrefix = winrt::hstring{ snap.cursorPrefix };
+        result.CursorAtEnd = snap.cursorAtEnd;
+        result.HasPromptMark = snap.hasPromptMark;
+        result.CommandRunning = snap.commandRunning;
+        result.InAltBuffer = snap.inAltBuffer;
+        return result;
+    }
+
+    bool ControlCore::IsInAlternateScreenBuffer() const
+    {
+        if (!_terminal)
+        {
+            return false;
+        }
+
+        return _terminal->CurrentEditLineSnapshot().inAltBuffer;
+    }
+
     Windows::Foundation::IReference<winrt::Windows::UI::Color> ControlCore::TabColor() noexcept
     {
         const auto lock = _terminal->LockForReading();
@@ -2289,11 +2317,46 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             {
                 (*shared->outputIdle)();
             }
+
+            _maybeFireEditLineStateChanged();
         }
         catch (...)
         {
             // We're expecting to receive an exception here if the terminal
             // is closed while we're blocked playing a MIDI note.
+        }
+    }
+
+    void ControlCore::_maybeFireEditLineStateChanged()
+    {
+        if (!_terminal)
+        {
+            return;
+        }
+
+        const auto snap = _terminal->CurrentEditLineSnapshot();
+
+        bool changed = false;
+        {
+            std::scoped_lock guard{ _editLineStateMutex };
+            if (snap.cursorPrefix != _lastEditLineState.cursorPrefix ||
+                snap.cursorAtEnd != _lastEditLineState.cursorAtEnd ||
+                snap.hasPromptMark != _lastEditLineState.hasPromptMark ||
+                snap.commandRunning != _lastEditLineState.commandRunning ||
+                snap.inAltBuffer != _lastEditLineState.inAltBuffer)
+            {
+                _lastEditLineState.cursorPrefix = snap.cursorPrefix;
+                _lastEditLineState.cursorAtEnd = snap.cursorAtEnd;
+                _lastEditLineState.hasPromptMark = snap.hasPromptMark;
+                _lastEditLineState.commandRunning = snap.commandRunning;
+                _lastEditLineState.inAltBuffer = snap.inAltBuffer;
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            EditLineStateChanged.raise(*this, nullptr);
         }
     }
 

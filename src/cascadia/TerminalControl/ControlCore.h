@@ -19,6 +19,8 @@
 #include "SelectionColor.g.h"
 #include "CommandHistoryContext.g.h"
 
+#include <mutex>
+
 #include "../../audio/midi/MidiAudio.hpp"
 #include "../../buffer/out/search.h"
 #include "../../cascadia/TerminalCore/Terminal.hpp"
@@ -125,6 +127,8 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         void SendInput(std::wstring_view wstr);
         void PasteText(const winrt::hstring& hstr);
         bool IsPasteInProgress() const noexcept;
+        Control::EditLineState GetEditLineState() const;
+        bool IsInAlternateScreenBuffer() const;
         bool CopySelectionToClipboard(bool singleLine, bool withControlSequences, const CopyFormat formats);
         void SelectAll();
         void ClearSelection();
@@ -290,6 +294,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         til::typed_event<IInspectable, Control::NoticeEventArgs> RaiseNotice;
         til::typed_event<IInspectable, Control::TransparencyChangedEventArgs> TransparencyChanged;
         til::typed_event<> OutputIdle;
+        til::typed_event<> EditLineStateChanged;
         til::typed_event<IInspectable, Control::ShowWindowArgs> ShowWindowChanged;
         til::typed_event<IInspectable, Control::UpdateSelectionMarkersEventArgs> UpdateSelectionMarkers;
         til::typed_event<IInspectable, Control::OpenHyperlinkEventArgs> OpenHyperlink;
@@ -354,6 +359,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         void _updateAntiAliasingMode();
         void _connectionOutputHandler(winrt::array_view<const char16_t> str);
         void _connectionStateChangedHandler(const TerminalConnection::ITerminalConnection&, const Windows::Foundation::IInspectable&);
+        void _maybeFireEditLineStateChanged();
         void _updateHoveredCell(const std::optional<til::point> terminalPosition);
         void _setOpacity(const float opacity, const bool focused = true);
 
@@ -417,6 +423,16 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         Core::ICoreScheme _focusedColorSchemeOverride{ nullptr };
         til::point _contextMenuBufferPosition{ 0, 0 };
         Windows::Foundation::Collections::IVector<hstring> _cachedQuickFixes{ nullptr };
+        struct _LastEditLineStateSnapshot
+        {
+            std::wstring cursorPrefix;
+            bool cursorAtEnd = true;
+            bool hasPromptMark = false;
+            bool commandRunning = false;
+            bool inAltBuffer = false;
+        };
+        _LastEditLineStateSnapshot _lastEditLineState;
+        std::mutex _editLineStateMutex;
         ::Search _searcher;
         std::optional<interval_tree::IntervalTree<til::point, size_t>::interval> _lastHoveredInterval;
         std::optional<wchar_t> _leadingSurrogate;
