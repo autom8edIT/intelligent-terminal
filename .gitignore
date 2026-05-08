@@ -3,6 +3,7 @@
 
 # Rust build output
 wta/target/
+installer/bootstrap/target/
 
 # Claude Code local settings
 .claude/settings.local.json
