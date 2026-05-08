@@ -1,0 +1,52 @@
+# Inline Agent — Risk Register
+
+| # | Risk | Severity | Likelihood | Mitigation |
+|---|------|----------|------------|------------|
+| 1 | **Preview ownership collision with Action Preview / IME.** `PreviewText` has shared ownership; AI could hide Action Preview or IME composition. | Critical | Medium | Enforce explicit `IRenderData::GetActiveComposition()` priority: 1. **TSF/IME composition** (`tsfPreview` non-empty), 2. **Action Preview** (`PreviewSource::ActionPreview`), 3. **Inline Suggestion** (`PreviewSource::InlineSuggestion`). Higher-priority activation clears lower-priority sources; lower sources must request renewal after the higher source clears. Phase 0.5 prototypes this before controller work. |
+| 2 | **PSReadLine "AI wins visually" policy may surprise users.** Users may expect shell prediction to remain visible. | High | Medium | Make policy explicit in Settings and first-run text. Default `aiWinsVisually`; provide `suppressIfShellPredicting` and `aiAlwaysSuppresses` alternatives. When AI dismisses, shell prediction reappears naturally. |
+| 3 | **Atomic undo is best-effort through PSReadLine.** Accepted suggestion may require repeated Ctrl+Z. | High | Medium | V1 uses per-char `SendCharEvent`; PSReadLine sees N typed chars and `Ctrl+Z` may un-type one at a time. Fallback: expose **Pause inline suggestions for this command** (Esc while showing → suppress current line until Enter/Ctrl+C), and Ctrl+C can clear the whole line. V2 investigates PSReadLine `BeginUndoGroup` / shell-side cooperation for atomic undo if a public mechanism is found. |
+| 4 | **Tab-hijacking surprise vs shell completion.** Visible suggestions could steal Tab from completion menus. | High | Medium | Enforce hierarchy: user keybindings win; Tab accepts only when AI is showing and no visible or recently closed shell completion candidate/menu exists; Tab goes to shell and AI dismisses when completion is visible or inside the 100ms close-transition safety window. RightArrow at EOL provides an alternate accept path. |
+| 5 | **Feature-OFF perf regression if early-out check is misplaced.** Keystroke hot path cannot pay controller costs when disabled. | Critical | Low | Phase 1 entry requires baseline measurement. Keep disabled-path check before controller lookup/allocation. Enforce budget: feature-off hard cap baseline+50µs. |
+| 6 | **EditLineState API correctness.** PSReadLine prediction inherits Command marks, so full-line or attribute-filter extraction includes ghost text. | High | Confirmed | Phase 0 creates `GetEditLineState()` with cursor-clipped `CursorPrefix`, deterministic `CursorAtEnd`, prompt/command state, and 10 invariant tests including real-pwsh PSReadLine prediction. |
+| 7 | **Append-only contract violation.** Provider could return a replacement that changes command meaning. | High | Medium | Controller rejects results that do not start with `EditLineState.CursorPrefix` exactly; `result.suggestion` is the suffix only. |
+| 8 | **Stale suggestions race with fast typing.** Provider returns for old state. | Medium | High | Monotonic request IDs plus buffer-mismatch check before showing. Track `InlineSuggestion_StaleDiscarded`. |
+| 9 | **Paste misclassified as typing.** Suggestion fires during or immediately after paste. | Medium | Medium | Add `_pasteInProgress` in `ControlCore::PasteText`; suppress during paste and for 500ms after completion. |
+| 10 | **Alt-buffer/TUI contamination.** Ghost text appears in vim/less/fullscreen apps. | High | Low | Expose alt-buffer state on `ICoreState`; suppress whenever active. |
+| 11 | **Provider crash/hang takes down terminal.** | Critical | Low | V1 `StubProvider` is tiny, in-proc, cancellable, and off-UI-thread. V2 providers need separate failure containment and privacy review. |
+| 12 | **Preview source resumes too eagerly after Action Preview.** AI may flicker immediately after a higher-priority preview clears. | Medium | Medium | When Action Preview clears, AI waits 300ms before re-triggering. |
+| 13 | **Settings live reload doesn't propagate.** Existing tabs keep showing after disabled. | Low | Medium | Hook existing settings update chain; disabling cancels requests and clears preview. |
+| 14 | **Theme/contrast not readable.** Preview dimness may be too subtle. | Medium | Medium | Phase 0.5 adds a small `PreviewText` extension with an optional `IDisplayAttributesOverride`-style parameter so InlineSuggestion can request dim/secondary color (40% alpha foreground or `secondaryForeground` brush), while ActionPreview keeps existing italic styling. Then validate high-contrast/accessibility scenarios. |
+| 15 | **Future cross-shell scope creep.** V1 PowerShell assumptions leak into shared abstractions. | Medium | Medium | Keep controller and preview shell-agnostic; PSReadLine-specific compatibility lives in policy/tests. |
+| 16 | **Existing wtcli/wta agent-pane code paths break.** | High | Low | Feature default off; existing `?<prompt>`, `wta delegate`, and `openAgentPane` included in regression sheet. |
+| 17 | **`EditLineStateChanged` fires too often.** | Medium | Medium | Coalesce and fire only when resolved struct changes. |
+| 18 | **Unicode/newline rendering edge cases.** | Medium | Medium | **V1 ASCII-only is a STUB-PROVIDER limitation, not a feature limitation.** The architecture supports any code points through `PreviewText` (`Terminal.cpp:1630-1633`); V2 real providers may return CJK, emoji, or RTL text. The non-ASCII suppression guard is removed; V1 suppresses newline/multiline suggestions only. |
+| 19 | **Right-edge clipping.** Suffix may wrap or collide with viewport edge. | Medium | Medium | Suppress when cursor is within suggestion length cells of viewport right edge. |
+| 20 | **User enables feature but never sees suggestions because shell integration is missing.** Inline suggestions require OSC 133;B prompt marks, and a shell without integration would otherwise look broken. | High | Medium | Add V1 first-run detection and reuse Autofix shell integration: enabling Inline Suggestions **REUSES the autofix shell-integration** prerequisite/installer and does not duplicate it. If Autofix is already enabled and installed, Inline Suggestions works; otherwise the notice says to enable Autofix in Settings → AI Agents for one-time setup. Diagnostics reports `Shell integration: detected / not detected`. |
+| 21 | **Tab race during menu close transition.** `SuggestionsControl` is global while `TermControl::_KeyHandler` owns low-latency Tab handling; ownership and cached visibility can change near a close event. | Medium | Medium | Track `_shellCompletionMenuOwner`, propagate visibility to that owner, and apply a conservative 100ms safety window using `_shellCompletionMenuLastVisibleAt`: Tab does not accept AI while the menu is visible or was visible recently. RightArrow remains the safe accept path. |
+| 22 | **Privacy for V2 real providers.** | High | Not applicable to V1 | V1 has only `StubProvider`; V2 requires explicit privacy review, provider naming, and user-facing data-flow disclosure. |
+| 23 | **No kill criteria → patch-spiral risk during impl.** Without explicit stop-redesign gates, implementation could keep patching foundational failures. | Critical | Medium | The new Kill Criteria section defines hard Phase 0, 0.5, and 3 gates; any hit becomes a **Confirmed Blocker** and forces plan reset / V1 feasibility review. |
+| 24 | **Hot-path telemetry could swamp ETW.** Verbose key-path events can become high-volume and distort perf measurements. | High | Medium | Build-flag gating plus sampling: dev-only hot-path events compile only behind `INLINE_SUGGESTIONS_VERBOSE_TELEMETRY`; production-safe events are low-frequency and provider errors are rate-limited. |
+| 25 | **Repeated controller exceptions could leave terminal in stale ghost-text state.** Exceptions during preview, state reads, or provider calls could strand preview text or subscriptions. | High | Medium | No-throw boundary, diagnostics ring buffer, same-call exception counting, auto-disable after three consecutive failures, and Diagnostics disable reason. |
+| 26 | **Settings hot-reload state inconsistency.** Live changes can leave stale requests, visible previews, subscriptions, or policy state active after disable/change. | High | Medium | Explicit hot-reload contract for enabled, debounce, PSReadLine policy, accept keys, and provider changes; cancel + generation-id drops late results. |
+| 27 | **ARM64/IME/screen-reader untested.** V1 could pass x64 keyboard-only validation while failing required accessibility/input environments. | High | Medium | Manual validation matrix requires Windows 11 x64, ARM64, Canary smoke, Japanese/Chinese/Korean IME, touch keyboard, NVDA, Narrator, and High Contrast coverage before ship. |
+
+## Severity × Likelihood Heatmap (top concerns)
+
+```
+              Likelihood →
+    Sev ↓     Low          Medium            High/Confirmed
+    Crit      5, 11        1, 23            —
+    High      10, 16, 22   2, 3, 4, 7, 15, 20, 24, 25, 26, 27 6
+    Medium    —            9,12,14,17,18,19,21 8
+    Low       —            13                —
+```
+
+## Top-5 Risks Driving the Plan
+
+1. **Preview ownership collision with Action Preview / IME** — drives `PreviewSource`, priority tests, and IME precedence correction.
+2. **PSReadLine "AI wins" policy may surprise users** — drives explicit setting text, first-run disclosure, and diagnostics.
+3. **Atomic undo is best-effort through PSReadLine** — drives typed-character-compatible insertion, the Esc-based current-command pause fallback, and V2 shell-side undo-group investigation.
+4. **Tab-hijacking surprise vs shell-completion** — drives the `TermControl`-owned accept path, owner-tracked shell-completion visibility, and 100ms close-transition safety window.
+5. **Missing shell integration makes the feature appear broken** — drives OSC 133;B detection, reuse of Autofix shell-integration install, one-time prerequisite notice, and diagnostics status.
+
+Risks demoted from the earlier plan: visual placement, font/DPI mismatch, acrylic/retro/software renderer behavior, and resize anchoring are materially reduced by reusing `PreviewText`. Theme/contrast remains a Phase 0.5 design spike because InlineSuggestion now requests explicit dim/secondary attributes instead of relying only on validation.
