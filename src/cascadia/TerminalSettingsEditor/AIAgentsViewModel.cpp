@@ -8,6 +8,9 @@
 #include "EnumEntry.h"
 #include "../inc/AgentRegistry.h"
 
+#include <fstream>
+#include <sstream>
+
 using namespace winrt::Windows::Foundation;
 using namespace winrt::Windows::Foundation::Collections;
 using namespace winrt::Microsoft::Terminal::Settings::Model;
@@ -581,22 +584,35 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
     bool AIAgentsViewModel::_IsClaudeHookInstalled(const std::wstring& home)
     {
-        // Claude installs into a tagged hooks block in
-        // ~/.claude/settings.json. As a lightweight proxy, look for the
-        // shared bridge script that the installer always writes, plus any
-        // settings.json under ~/.claude (the install branch only runs when
-        // the dir exists).
+        // Claude installs the wt-agent-hooks plugin via
+        // `claude plugin marketplace add` + `claude plugin install`. After a
+        // successful registration, Claude writes our marketplace into
+        // `~/.claude/plugins/known_marketplaces.json` keyed under
+        // "wt-local". Detect that entry plus the existence of our staged
+        // plugin source files (which the wta installer always writes
+        // before invoking the CLI) as a proxy for "hooks installed".
         if (home.empty()) return false;
         std::error_code ec;
-        const auto settingsPath = std::filesystem::path{ home } / L".claude" / L"settings.json";
-        if (!std::filesystem::exists(settingsPath, ec)) return false;
+
+        const auto knownPath = std::filesystem::path{ home } /
+                               L".claude" / L"plugins" / L"known_marketplaces.json";
+        if (!std::filesystem::exists(knownPath, ec)) return false;
+
+        std::ifstream in{ knownPath };
+        if (!in) return false;
+        std::stringstream ss;
+        ss << in.rdbuf();
+        const auto text = ss.str();
+        // Substring check is enough — the marketplace name is unique to wta.
+        if (text.find("\"wt-local\"") == std::string::npos) return false;
 
         wchar_t buf[MAX_PATH];
         DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
         if (n == 0 || n >= MAX_PATH) return false;
-        const auto bridgePath = std::filesystem::path{ buf, buf + n } /
-                                L"IntelligentTerminal" / L"hooks" / L"send-event.ps1";
-        return std::filesystem::exists(bridgePath, ec);
+        const auto stagedManifest = std::filesystem::path{ buf, buf + n } /
+                                    L"IntelligentTerminal" / L"claude-plugin-src" /
+                                    L"wt-local" / L".claude-plugin" / L"marketplace.json";
+        return std::filesystem::exists(stagedManifest, ec);
     }
 
     bool AIAgentsViewModel::_IsGeminiHookInstalled(const std::wstring& home)
