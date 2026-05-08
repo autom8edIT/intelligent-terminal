@@ -1,6 +1,7 @@
 mod cli_channel;
 
 pub use cli_channel::CliChannel;
+pub(crate) use cli_channel::resolve_wtcli_path;
 
 // Re-export CliChannel as PipeChannel for backward compatibility.
 // All callers that used PipeChannel now get CliChannel (wraps wtcli.exe).

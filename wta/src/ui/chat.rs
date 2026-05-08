@@ -51,10 +51,8 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    for (idx, turn) in app.current_tab().completed_turns.iter().enumerate().rev() {
-        let selected = app.history_row_selected(idx);
-        let expanded = app.history_row_expanded(idx);
-        let mut turn_lines = build_completed_turn_lines(turn, selected, expanded);
+    for turn in app.current_tab().completed_turns.iter().rev() {
+        let mut turn_lines = build_completed_turn_lines(turn);
         reversed_lines.extend(turn_lines.drain(..).rev());
         if reversed_lines.len() >= requested_lines {
             break;
@@ -86,34 +84,14 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     });
 }
 
-fn build_completed_turn_lines<'a>(
-    turn: &'a crate::app::CompletedTurn,
-    selected: bool,
-    expanded: bool,
-) -> Vec<Line<'a>> {
-    let mut lines = Vec::new();
-    let prompt_style = if selected {
-        theme::SELECTED
-    } else {
-        theme::USER_PROMPT
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled("> ", prompt_style),
-        Span::styled(truncate_render_text(&turn.prompt), prompt_style),
-    ]));
-
-    if expanded {
-        for message in &turn.details {
-            let mut detail_lines = build_message_lines(message, false, false);
-            for line in detail_lines.drain(..) {
-                lines.push(indent_line(line));
-            }
-        }
-    }
-
-    lines.push(Line::default());
-    lines
+fn build_completed_turn_lines<'a>(turn: &'a crate::app::CompletedTurn) -> Vec<Line<'a>> {
+    vec![
+        Line::from(vec![
+            Span::styled("> ", theme::USER_PROMPT),
+            Span::styled(truncate_render_text(&turn.prompt), theme::USER_PROMPT),
+        ]),
+        Line::default(),
+    ]
 }
 
 fn build_activity_line(app: &App) -> Option<Line<'static>> {
@@ -294,17 +272,6 @@ fn build_message_lines<'a>(
         }
     }
     lines
-}
-
-fn indent_line<'a>(line: Line<'a>) -> Line<'a> {
-    if line.spans.is_empty() {
-        return line;
-    }
-
-    let mut spans = Vec::with_capacity(line.spans.len() + 1);
-    spans.push(Span::styled("  ", theme::DIM));
-    spans.extend(line.spans);
-    Line::from(spans)
 }
 
 fn truncate_render_text(text: &str) -> Cow<'_, str> {

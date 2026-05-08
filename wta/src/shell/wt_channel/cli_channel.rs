@@ -17,7 +17,7 @@ fn json_id_as_str(v: &serde_json::Value) -> Option<String> {
 }
 
 /// Resolve the full path to `wtcli.exe` at startup.
-fn resolve_wtcli_path() -> String {
+pub(crate) fn resolve_wtcli_path() -> String {
     // 1. Explicit override via environment variable.
     if let Ok(p) = std::env::var("WT_WTCLI_PATH") {
         if std::path::Path::new(&p).exists() {

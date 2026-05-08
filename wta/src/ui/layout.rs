@@ -1,7 +1,7 @@
 use ratatui::prelude::*;
 use crate::app::App;
 
-use super::{chat, debug_panel, input, permission, recommendations};
+use super::{chat, command_popup, debug_panel, input, permission, recommendations};
 
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
@@ -52,9 +52,20 @@ pub fn render(frame: &mut Frame, app: &App) {
         debug_panel::render(frame, app, debug_area);
     }
 
+    // Slash-command autocomplete: anchored above the input box. Drawn
+    // before permission/help so those overlays still cover it if they
+    // happen to be visible at the same time.
+    if let Some(popup_state) = app.command_popup_state() {
+        command_popup::render_popup(frame, popup_state, chunks[2]);
+    }
+
     if app.current_tab().permission.is_some() {
         permission::render(frame, app, area);
     }
+
+    // `/help` overlay sits on top of everything (including permission) so
+    // the user can always dismiss it with Esc.
+    command_popup::render_help_overlay(frame, app, area);
 }
 
 pub fn input_cursor_position(app: &App, area: Rect) -> Option<Position> {

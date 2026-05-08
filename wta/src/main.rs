@@ -1,5 +1,6 @@
 mod agent_registry;
 mod app;
+mod commands;
 mod coordinator;
 mod event;
 mod logging;
@@ -11,7 +12,7 @@ mod theme;
 mod ui;
 mod ui_trace;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -457,38 +458,45 @@ async fn main() -> Result<()> {
         }
 
         // ── Wait for ──
+        // Delegate to `wtcli wait-for` so the poll loop runs inside a single
+        // wtcli process (one COM handshake) instead of re-spawning wtcli per
+        // tick through CliChannel.
         Some(Command::WaitFor {
             target,
             interval,
             timeout,
         }) => {
-            let channel = connect_channel(&pipe_override).await?;
-            let start = std::time::Instant::now();
-            loop {
-                let result = channel
-                    .request(
-                        "get_process_status",
-                        json!({ "pane_id": target }),
-                    )
-                    .await?;
+            let wtcli = shell::wt_channel::resolve_wtcli_path();
+            let interval_str = interval.to_string();
+            let timeout_str = timeout.to_string();
+            let output = tokio::process::Command::new(&wtcli)
+                .args([
+                    "--json",
+                    "wait-for",
+                    "-t",
+                    &target,
+                    "--interval",
+                    &interval_str,
+                    "--timeout",
+                    &timeout_str,
+                ])
+                .output()
+                .await
+                .context("Failed to spawn wtcli wait-for")?;
 
-                let is_running = result
-                    .get("state")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s == "running")
-                    .unwrap_or(false);
-
-                if !is_running {
-                    print_output(&result, json_mode, format_pane_status);
-                    return Ok(());
-                }
-
-                if timeout > 0 && start.elapsed().as_secs() >= timeout {
-                    bail!("Timeout after {}s waiting for pane {} to exit", timeout, target);
-                }
-
-                tokio::time::sleep(std::time::Duration::from_millis(interval)).await;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                bail!("wtcli wait-for failed: {}", stderr.trim());
             }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let trimmed = stdout.trim();
+            if !trimmed.is_empty() {
+                let val: serde_json::Value = serde_json::from_str(trimmed)
+                    .context("Failed to parse wtcli wait-for output")?;
+                print_output(&val, json_mode, format_pane_status);
+            }
+            Ok(())
         }
 
         // ── Pipe discovery ──
@@ -1402,6 +1410,15 @@ async fn run_acp_app(
             // Cancel channel for Ctrl+C handling: App produces, ACP client
             // task consumes (one listener task inside run_acp_client).
             let (cancel_tx, cancel_rx) = tokio::sync::mpsc::unbounded_channel();
+            // /new channel: App emits a NewSessionForTab, the ACP client
+            // drops the cached SessionId for that tab and re-issues
+            // new_session(). The resulting SessionAttached event flows
+            // back through event_tx like the lazy-create path.
+            let (new_session_tx, new_session_rx) = tokio::sync::mpsc::unbounded_channel();
+            // /restart channel: App emits a RestartRequest, the ACP client
+            // kills the agent child process, drops the connection, and
+            // respawns from scratch. State is cleaned up on both sides.
+            let (restart_tx, restart_rx) = tokio::sync::mpsc::unbounded_channel();
 
             // Spawn the ACP client directly. If the agent isn't installed or
             // fails to authenticate, the error surfaces inline as a Failed
@@ -1412,6 +1429,8 @@ async fn run_acp_app(
                 event_tx.clone(),
                 prompt_rx,
                 cancel_rx,
+                new_session_rx,
+                restart_rx,
                 Arc::clone(&shell_mgr),
                 wt_connected,
             ));
@@ -1436,7 +1455,7 @@ async fn run_acp_app(
             ));
 
             let autofix_enabled = !cli.no_autofix;
-            let mut app_state = app::App::new(prompt_tx, recommendation_tx, permission_tx, cancel_tx, debug_capture_enabled, wt_connected, autofix_enabled);
+            let mut app_state = app::App::new(prompt_tx, recommendation_tx, permission_tx, cancel_tx, new_session_tx, restart_tx, debug_capture_enabled, wt_connected, autofix_enabled);
 
             if let Some((pane_id, tab_id, window_id)) = pane_identity {
                 app_state.pane_id = Some(pane_id);

@@ -1498,20 +1498,44 @@ namespace winrt::TerminalApp::implementation
                 termControlWeak = winrt::make_weak(termControl),
                 tokenHolder
             ](auto&& /*sender*/, auto&& /*args*/) {
-                _agentPaneLog("_AutoCreateHiddenAgentPane: TermControl Initialized — hiding pane now");
                 if (const auto tc = termControlWeak.get())
                 {
                     tc.Initialized(*tokenHolder);
                 }
-                if (auto self = weakSelfForHide.get())
+                auto self = weakSelfForHide.get();
+                if (!self)
                 {
-                    if (auto rootPane = weakRootPane.lock())
+                    return;
+                }
+                // If the user already toggled the agent pane open before
+                // Initialized fired, don't hide it — that would leave the
+                // bottom bar lit but no pane visible (the very first toggle
+                // after launch would silently fail).
+                bool anyTabWantsOpen = false;
+                for (const auto& t : self->_tabs)
+                {
+                    if (auto tabImpl = TerminalPage::_GetTabImpl(t))
                     {
-                        if (auto pane = weakNewPane.lock())
+                        if (tabImpl->AgentPaneOpen())
                         {
-                            rootPane->HidePane(pane);
-                            self->_UpdateBottomBarState();
+                            anyTabWantsOpen = true;
+                            break;
                         }
+                    }
+                }
+                if (anyTabWantsOpen)
+                {
+                    _agentPaneLog("_AutoCreateHiddenAgentPane: TermControl Initialized — user already opened pane, skipping hide");
+                    self->_UpdateBottomBarState();
+                    return;
+                }
+                _agentPaneLog("_AutoCreateHiddenAgentPane: TermControl Initialized — hiding pane now");
+                if (auto rootPane = weakRootPane.lock())
+                {
+                    if (auto pane = weakNewPane.lock())
+                    {
+                        rootPane->HidePane(pane);
+                        self->_UpdateBottomBarState();
                     }
                 }
             });

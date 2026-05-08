@@ -9,13 +9,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use crate::commands::{self, CommandKind, CommandSpec, ParsedCommand};
 use crate::coordinator::{
     parse_autofix_response, parse_recommendation_set, recommended_choice_index,
     validate_recommendation_set_for_coordinator_target, AutofixDecision, RecommendationChoice,
     RecommendationSet,
 };
 use crate::pane_context::PaneContext;
-use crate::protocol::acp::client::{prompt_timing_log, CancelRequest, PromptSubmission};
+use crate::protocol::acp::client::{
+    prompt_timing_log, CancelRequest, NewSessionForTab, PromptSubmission, RestartRequest,
+};
 use crate::ui;
 use crate::ui_trace;
 
@@ -373,8 +376,6 @@ pub struct TabSession {
     // Conversation history
     pub messages: Vec<ChatMessage>,
     pub completed_turns: Vec<CompletedTurn>,
-    pub selected_history: Option<usize>,
-    pub expanded_history: Option<usize>,
     pub scroll_offset: usize,
 
     // Streaming state
@@ -484,18 +485,6 @@ impl TabSession {
         };
 
         self.completed_turns.push(turn);
-        self.focus_latest_completed_turn();
-    }
-
-    pub fn focus_latest_completed_turn(&mut self) {
-        let Some(last) = self.completed_turns.len().checked_sub(1) else {
-            self.selected_history = None;
-            self.expanded_history = None;
-            return;
-        };
-
-        self.selected_history = Some(last);
-        self.expanded_history = None;
         self.scroll_to_bottom();
     }
 }
@@ -525,7 +514,18 @@ pub struct App {
     recommendation_tx: mpsc::UnboundedSender<crate::coordinator::ChoiceExecution>,
     permission_tx: mpsc::UnboundedSender<String>,
     cancel_tx: mpsc::UnboundedSender<CancelRequest>,
+    new_session_tx: mpsc::UnboundedSender<NewSessionForTab>,
+    restart_tx: mpsc::UnboundedSender<RestartRequest>,
     debug_capture_enabled: Arc<AtomicBool>,
+    // Slash-command UI state.
+    pub help_overlay_visible: bool,
+    /// Recomputed on every input mutation. Empty when not in
+    /// command-prefix mode. The popup renderer treats an empty Vec as
+    /// "do not render".
+    command_popup_candidates: Vec<&'static CommandSpec>,
+    /// Index into [`Self::command_popup_candidates`]. Clamped on every
+    /// mutation that could shrink the list.
+    command_popup_selected: usize,
     // Debug panel
     pub debug_messages: Vec<DebugMessage>,
     pub show_debug_panel: bool,
@@ -571,6 +571,8 @@ impl App {
         recommendation_tx: mpsc::UnboundedSender<crate::coordinator::ChoiceExecution>,
         permission_tx: mpsc::UnboundedSender<String>,
         cancel_tx: mpsc::UnboundedSender<CancelRequest>,
+        new_session_tx: mpsc::UnboundedSender<NewSessionForTab>,
+        restart_tx: mpsc::UnboundedSender<RestartRequest>,
         debug_capture_enabled: Arc<AtomicBool>,
         wt_connected: bool,
         autofix_enabled: bool,
@@ -596,7 +598,12 @@ impl App {
             recommendation_tx,
             permission_tx,
             cancel_tx,
+            new_session_tx,
+            restart_tx,
             debug_capture_enabled,
+            help_overlay_visible: false,
+            command_popup_candidates: Vec::new(),
+            command_popup_selected: 0,
             debug_messages: Vec::new(),
             show_debug_panel: false,
             debug_scroll: 0,
@@ -1432,12 +1439,6 @@ impl App {
                     self.current_tab_mut().selected_button = (self.current_tab_mut().selected_button + button_count - 1) % button_count;
                 }
             }
-            KeyCode::Up if self.history_navigation_enabled() => {
-                self.select_previous_history_turn();
-            }
-            KeyCode::Down if self.history_navigation_enabled() => {
-                self.select_next_history_turn();
-            }
             KeyCode::F(12) => {
                 self.show_debug_panel = !self.show_debug_panel;
                 self.debug_capture_enabled
@@ -1488,6 +1489,9 @@ impl App {
                     self.should_quit = true;
                 }
             }
+            KeyCode::Esc if self.help_overlay_visible => {
+                self.help_overlay_visible = false;
+            }
             KeyCode::Esc if self.show_notification_banner => {
                 self.dismiss_notifications();
             }
@@ -1521,19 +1525,86 @@ impl App {
                 let pane = self.suggested_pane_id.take().unwrap();
                 self.emit_autofix_state_cleared(&pane);
             }
-            KeyCode::Esc if self.input.is_empty() => {
-                self.collapse_selected_history_turn();
-            }
             KeyCode::Esc => {
                 self.input.clear();
                 self.cursor_pos = 0;
+                self.refresh_command_popup();
+            }
+            KeyCode::Up if self.command_popup_visible() => {
+                if self.command_popup_selected > 0 {
+                    self.command_popup_selected -= 1;
+                }
+            }
+            KeyCode::Down if self.command_popup_visible() => {
+                if self.command_popup_selected + 1 < self.command_popup_candidates.len() {
+                    self.command_popup_selected += 1;
+                }
+            }
+            KeyCode::Tab if self.command_popup_visible() => {
+                self.accept_command_popup_completion();
             }
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.insert_input_char('\n');
             }
+            KeyCode::Enter if self.command_popup_visible() => {
+                // Popup is showing — Enter runs the highlighted command
+                // (/, /h, /he etc. → /help) instead of committing the
+                // raw text as a prompt. Esc dismisses if the user
+                // doesn't want any command.
+                if let Some(spec) = self
+                    .command_popup_candidates
+                    .get(self.command_popup_selected)
+                    .copied()
+                {
+                    let parsed = ParsedCommand {
+                        kind: spec.kind,
+                        spec,
+                        rest: String::new(),
+                    };
+                    self.input.clear();
+                    self.cursor_pos = 0;
+                    self.refresh_command_popup();
+                    self.handle_slash_command(parsed);
+                }
+            }
             KeyCode::Enter => {
                 let _tab = self.current_tab();
                 tracing::debug!(target: "autofix", input_empty = self.input.is_empty(), state = ?self.state, has_recs = _tab.recommendations.is_some(), autofix_pane = ?self.autofix_pane_id, selected_idx = _tab.selected_recommendation, "Enter");
+                // Slash-command intercept. Runs before the prompt path so
+                // commands like /stop work even mid-flight, and /help / /clear
+                // / /exit work even when the agent isn't Connected.
+                //
+                // `//literal` falls through to the prompt path (parse() returns
+                // None), and the leading `/` is left intact — the agent sees
+                // exactly what the user typed.
+                if !self.input.is_empty() {
+                    if let Some(cmd) = commands::parse(&self.input) {
+                        self.input.clear();
+                        self.cursor_pos = 0;
+                        self.refresh_command_popup();
+                        self.handle_slash_command(cmd);
+                        return;
+                    } else if self.input.trim_start().starts_with('/')
+                        && !self.input.trim_start().starts_with("//")
+                    {
+                        // Looks like an attempted command but the name isn't
+                        // registered: warn the user but still send the line as
+                        // a prompt so they don't lose what they typed.
+                        let unknown = self
+                            .input
+                            .trim_start()
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or("/")
+                            .to_string();
+                        let tab = self.current_tab_mut();
+                        tab.messages.push(ChatMessage::System(format!(
+                            "Unknown command \"{}\" — sent as prompt. Type /help for the list.",
+                            unknown
+                        )));
+                        // Fall through to the prompt path below.
+                    }
+                }
                 if self.input.is_empty()
                     && self.state == ConnectionState::Connected
                     && self.current_tab_mut().recommendations.is_some()
@@ -1571,8 +1642,6 @@ impl App {
                             self.emit_autofix_state_cleared(&pane_id);
                         }
                     }
-                } else if self.history_navigation_enabled() {
-                    self.toggle_selected_history_turn();
                 } else if !self.input.is_empty() && self.state == ConnectionState::Connected {
                     // Same-tab single-flight: refuse a new prompt if this
                     // tab is still streaming the previous one. The ACP
@@ -1707,6 +1776,7 @@ impl App {
         self.cursor_pos = clamp_cursor_to_boundary(&self.input, self.cursor_pos);
         self.input.insert(self.cursor_pos, ch);
         self.cursor_pos += ch.len_utf8();
+        self.refresh_command_popup();
     }
 
     fn delete_before_cursor(&mut self) {
@@ -1718,6 +1788,7 @@ impl App {
         let previous = prev_char_boundary(&self.input, self.cursor_pos);
         self.input.replace_range(previous..self.cursor_pos, "");
         self.cursor_pos = previous;
+        self.refresh_command_popup();
     }
 
     fn delete_at_cursor(&mut self) {
@@ -1728,6 +1799,160 @@ impl App {
 
         let next = next_char_boundary(&self.input, self.cursor_pos);
         self.input.replace_range(self.cursor_pos..next, "");
+        self.refresh_command_popup();
+    }
+
+    /// Recompute the slash-command popup candidates from the current
+    /// input. Called after every input mutation. Clamps the selected
+    /// index so it stays valid when the candidate list shrinks.
+    fn refresh_command_popup(&mut self) {
+        if commands::is_command_prefix(&self.input) {
+            // Strip leading whitespace + the `/` to get the user's
+            // partial name. `is_command_prefix` already guarantees the
+            // shape, so the unwrap is safe.
+            let trimmed = self.input.trim_start();
+            let name = trimmed.strip_prefix('/').unwrap_or("");
+            self.command_popup_candidates = commands::matches(name);
+        } else {
+            self.command_popup_candidates.clear();
+        }
+        if self.command_popup_candidates.is_empty() {
+            self.command_popup_selected = 0;
+        } else if self.command_popup_selected >= self.command_popup_candidates.len() {
+            self.command_popup_selected = self.command_popup_candidates.len() - 1;
+        }
+    }
+
+    /// Visible popup state for the renderer. Returns `None` when the
+    /// popup should not be drawn this frame.
+    pub fn command_popup_state(&self) -> Option<crate::ui::PopupState<'_>> {
+        if self.command_popup_candidates.is_empty() {
+            None
+        } else {
+            Some(crate::ui::PopupState {
+                candidates: &self.command_popup_candidates,
+                selected: self.command_popup_selected,
+            })
+        }
+    }
+
+    fn command_popup_visible(&self) -> bool {
+        !self.command_popup_candidates.is_empty()
+    }
+
+    /// Tab-completion: replace the input buffer with `/<name> ` (with a
+    /// trailing space if the command takes args, otherwise just the
+    /// name) and reset the cursor to the end. Triggered by Tab when the
+    /// popup is visible.
+    fn accept_command_popup_completion(&mut self) {
+        if let Some(spec) = self
+            .command_popup_candidates
+            .get(self.command_popup_selected)
+            .copied()
+        {
+            self.input = if spec.takes_args {
+                format!("/{} ", spec.name)
+            } else {
+                format!("/{}", spec.name)
+            };
+            self.cursor_pos = self.input.len();
+            self.refresh_command_popup();
+        }
+    }
+
+    /// Dispatch a parsed slash-command. The Enter handler is responsible
+    /// for clearing the input and cursor before calling this.
+    fn handle_slash_command(&mut self, cmd: ParsedCommand) {
+        let in_flight = self.current_tab().prompt_in_flight;
+        tracing::info!(
+            target: "slash_cmd",
+            name = cmd.spec.name,
+            in_flight,
+            "dispatch"
+        );
+
+        match cmd.kind {
+            CommandKind::Help => {
+                self.help_overlay_visible = !self.help_overlay_visible;
+            }
+            CommandKind::Clear => {
+                let tab = self.current_tab_mut();
+                tab.clear_chat_history();
+                tab.completed_turns.clear();
+                tab.scroll_to_bottom();
+            }
+            CommandKind::Stop => {
+                if in_flight {
+                    let session_id = self.current_tab().session_id.clone();
+                    if let Some(sid) = session_id {
+                        let _ = self.cancel_tx.send(CancelRequest { session_id: sid });
+                    }
+                    let tab = self.current_tab_mut();
+                    tab.prompt_in_flight = false;
+                    tab.agent_streaming = false;
+                    tab.pending_agent_response.clear();
+                    tab.pending_thought_response.clear();
+                    tab.progress_status = None;
+                    tab.activity_frame = 0;
+                    tab.pending_completed_turn = None;
+                    tab.messages
+                        .push(ChatMessage::System("Cancelled.".to_string()));
+                    tab.scroll_to_bottom();
+                } else {
+                    let tab = self.current_tab_mut();
+                    tab.messages
+                        .push(ChatMessage::System("No prompt in flight.".to_string()));
+                    tab.scroll_to_bottom();
+                }
+            }
+            CommandKind::New => {
+                if in_flight {
+                    let tab = self.current_tab_mut();
+                    tab.messages.push(ChatMessage::System(
+                        "Wait for the current prompt to finish, or /stop first.".to_string(),
+                    ));
+                    tab.scroll_to_bottom();
+                    return;
+                }
+                let tab_id = self
+                    .tab_id
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_TAB_ID.to_string());
+                let _ = self.new_session_tx.send(NewSessionForTab {
+                    tab_id,
+                    cwd: None,
+                });
+                let tab = self.current_tab_mut();
+                tab.clear_chat_history();
+                tab.completed_turns.clear();
+                tab.session_id = None;
+                tab.scroll_to_bottom();
+            }
+            CommandKind::Restart => {
+                // Full reconnect. Reset every tab: drop session_id (the
+                // old SessionIds are about to become invalid), clear
+                // streaming state, wipe scrollback. The ACP client side
+                // will kill the agent child and respawn it; subsequent
+                // prompts on each tab will lazily get a fresh session.
+                self.state = ConnectionState::Connecting("Restarting agent...".to_string());
+                self.session_to_tab.clear();
+                self.session_id.clear();
+                for (_, tab) in self.tab_sessions.iter_mut() {
+                    tab.clear_chat_history();
+                    tab.completed_turns.clear();
+                    tab.session_id = None;
+                    tab.prompt_in_flight = false;
+                    tab.agent_streaming = false;
+                    tab.pending_agent_response.clear();
+                    tab.pending_thought_response.clear();
+                    tab.progress_status = None;
+                    tab.activity_frame = 0;
+                    tab.pending_completed_turn = None;
+                }
+                let _ = self.restart_tx.send(RestartRequest);
+                self.publish_agent_status();
+            }
+        }
     }
 
     fn move_cursor_left(&mut self) {
@@ -1791,27 +2016,6 @@ impl App {
             }
             line_top += card_h;
         }
-    }
-
-    pub fn history_navigation_enabled(&self) -> bool {
-        let tab = self.current_tab();
-        self.input.is_empty()
-            && tab.recommendations.is_none()
-            && tab.permission.is_none()
-            && !tab.prompt_in_flight
-            && !tab.agent_streaming
-            && tab.messages.is_empty()
-            && tab.pending_agent_response.is_empty()
-            && tab.pending_thought_response.is_empty()
-            && !tab.completed_turns.is_empty()
-    }
-
-    pub fn history_row_selected(&self, index: usize) -> bool {
-        self.current_tab().selected_history == Some(index)
-    }
-
-    pub fn history_row_expanded(&self, index: usize) -> bool {
-        self.current_tab().expanded_history == Some(index)
     }
 
     /// Switch the active tab. Per-tab state lives in `tab_sessions`, so all
@@ -2075,47 +2279,6 @@ impl App {
 
     fn push_execution_info(&mut self, _message: String) {}
 
-    fn select_previous_history_turn(&mut self) {
-        let Some(selected) = self.current_tab_mut().selected_history else {
-            self.current_tab_mut().selected_history = Some(self.current_tab_mut().completed_turns.len().saturating_sub(1));
-            return;
-        };
-
-        if selected > 0 {
-            self.current_tab_mut().selected_history = Some(selected - 1);
-        }
-    }
-
-    fn select_next_history_turn(&mut self) {
-        let Some(selected) = self.current_tab_mut().selected_history else {
-            self.current_tab_mut().selected_history = Some(self.current_tab_mut().completed_turns.len().saturating_sub(1));
-            return;
-        };
-
-        if selected + 1 < self.current_tab_mut().completed_turns.len() {
-            self.current_tab_mut().selected_history = Some(selected + 1);
-        }
-    }
-
-    fn toggle_selected_history_turn(&mut self) {
-        let Some(selected) = self.current_tab_mut().selected_history else {
-            return;
-        };
-
-        if self.current_tab_mut().expanded_history == Some(selected) {
-            self.current_tab_mut().expanded_history = None;
-        } else {
-            self.current_tab_mut().expanded_history = Some(selected);
-        }
-    }
-
-    fn collapse_selected_history_turn(&mut self) {
-        let tab = self.current_tab_mut();
-        if tab.expanded_history == tab.selected_history {
-            tab.expanded_history = None;
-        }
-    }
-
     fn selected_recommendation_choice(&self) -> Option<&RecommendationChoice> {
         let tab = self.current_tab();
         tab.recommendations
@@ -2257,10 +2420,6 @@ impl App {
                         details,
                     });
                     tab.commit_pending_completed_turn();
-                    // Auto-expand: the diagnosis is the whole point of this turn,
-                    // and the user shouldn't have to guess that the prompt header
-                    // is collapsible to reveal it.
-                    tab.expanded_history = tab.selected_history;
                 }
 
                 self.emit_autofix_state_suggested(&pane_id, &title);
@@ -2621,8 +2780,10 @@ mod tests {
         let (recommendation_tx, _recommendation_rx) = tokio::sync::mpsc::unbounded_channel();
         let (permission_tx, _permission_rx) = tokio::sync::mpsc::unbounded_channel();
         let (cancel_tx, _cancel_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (new_session_tx, _new_session_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (restart_tx, _restart_rx) = tokio::sync::mpsc::unbounded_channel();
         let debug_capture = Arc::new(AtomicBool::new(false));
-        App::new(prompt_tx, recommendation_tx, permission_tx, cancel_tx, debug_capture, true, false)
+        App::new(prompt_tx, recommendation_tx, permission_tx, cancel_tx, new_session_tx, restart_tx, debug_capture, true, false)
     }
 
     // ─── word boundary helpers ──────────────────────────────────────────────
