@@ -76,7 +76,7 @@ Set-StrictMode -Version Latest
 # Schema version this script understands. Mirrors STATUS_SCHEMA_VERSION
 # in wta/src/agent_hooks_installer.rs and SupportedStatusSchemaVersion
 # in src/cascadia/inc/AgentHooksStatus.h. Bump in lockstep.
-$script:SupportedStatusSchemaVersion = 2
+$script:SupportedStatusSchemaVersion = 3
 
 $script:CliDisplayNames = @{
     copilot = 'Copilot CLI'
@@ -196,8 +196,16 @@ function Get-AgentHookCliRow {
     $marketplace = [bool]$Cli.marketplace_registered
     $plugin      = [bool]$Cli.plugin_installed
     $enabled     = [bool]$Cli.plugin_enabled
+    # v3 (#25): marketplace_registered alone no longer guarantees the
+    # registered source path still exists on disk. Default to $true when
+    # the field is missing so older payloads (rejected upstream by the
+    # schema check, but defensive) don't quietly down-grade.
+    $pathValid = $true
+    if (Get-Member -InputObject $Cli -Name marketplace_path_valid -ErrorAction SilentlyContinue) {
+        $pathValid = [bool]$Cli.marketplace_path_valid
+    }
 
-    if ($marketplace -and $plugin -and $enabled) {
+    if ($marketplace -and $pathValid -and $plugin -and $enabled) {
         $state = 'installed'
         $color = 'Green'
     } elseif (-not $marketplace -and -not $plugin) {
@@ -208,6 +216,7 @@ function Get-AgentHookCliRow {
         $bits += if ($marketplace) { 'marketplace=yes' } else { 'marketplace=no' }
         $bits += if ($plugin)      { 'plugin=yes' }      else { 'plugin=no' }
         if ($plugin -and -not $enabled) { $bits += 'plugin disabled' }
+        if ($marketplace -and -not $pathValid) { $bits += 'marketplace path stale' }
         $state = 'PARTIAL'
         $color = 'Red'
         $detail = ($bits -join ', ')

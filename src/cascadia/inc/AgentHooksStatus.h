@@ -27,9 +27,14 @@
 namespace Microsoft::Terminal::AgentHooks
 {
     // Major schema version this code understands. The wta-side type is
-    // pinned at 2 (see STATUS_SCHEMA_VERSION in agent_hooks_installer.rs);
+    // pinned at 3 (see STATUS_SCHEMA_VERSION in agent_hooks_installer.rs);
     // mismatch produces a parse failure rather than silent mis-render.
-    inline constexpr uint32_t SupportedStatusSchemaVersion = 2;
+    //
+    // v3 added `marketplace_path` and `marketplace_path_valid` per CLI
+    // (#25) — `marketplace_registered: true` no longer implies the
+    // registered `source.path` actually exists on disk; consumers should
+    // consult `marketplacePathValid` for that.
+    inline constexpr uint32_t SupportedStatusSchemaVersion = 3;
 
     // One entry of `clis[]` from the JSON report.
     struct CliStatus
@@ -38,6 +43,15 @@ namespace Microsoft::Terminal::AgentHooks
         bool binaryOnPath{ false };
         std::optional<std::string> binaryPath;
         bool marketplaceRegistered{ false };
+        // v3: registered local source path of the `wt-local` marketplace
+        // entry. Absent for `github`-shaped sources or when the CLI's
+        // source-of-truth file couldn't be read.
+        std::optional<std::string> marketplacePath;
+        // v3: true when the marketplace entry exists *and* its
+        // registered local path is still resolvable. Drives the
+        // "marketplace path stale" diagnostic when a previous install
+        // pointed at a now-deleted bundle directory.
+        bool marketplacePathValid{ false };
         bool pluginInstalled{ false };
         bool pluginEnabled{ false };
         std::optional<std::string> detectionFallback; // e.g. "fs"
@@ -116,12 +130,17 @@ namespace Microsoft::Terminal::AgentHooks
             // single-CLI write hiccup.
             cli.binaryOnPath = entry.get("binary_on_path", false).asBool();
             cli.marketplaceRegistered = entry.get("marketplace_registered", false).asBool();
+            cli.marketplacePathValid = entry.get("marketplace_path_valid", false).asBool();
             cli.pluginInstalled = entry.get("plugin_installed", false).asBool();
             cli.pluginEnabled = entry.get("plugin_enabled", false).asBool();
 
             if (entry.isMember("binary_path") && entry["binary_path"].isString())
             {
                 cli.binaryPath = entry["binary_path"].asString();
+            }
+            if (entry.isMember("marketplace_path") && entry["marketplace_path"].isString())
+            {
+                cli.marketplacePath = entry["marketplace_path"].asString();
             }
             if (entry.isMember("detection_fallback") && entry["detection_fallback"].isString())
             {
@@ -178,12 +197,16 @@ namespace Microsoft::Terminal::AgentHooks
     }
 
     // Render one row as a localizable-later display string. Mirrors the
-    // strings the previous fs-detection code produced, with two new
+    // strings the previous fs-detection code produced, with three new
     // states added that the JSON contract makes visible:
     //   * "partially installed" — marketplace is registered but the
     //     plugin itself isn't (or vice-versa). The old fs check
     //     conflated this with "installed" or "not installed" depending
     //     on which sentinel file happened to exist.
+    //   * "marketplace path stale" — schema v3 (#25): the CLI still
+    //     remembers the `wt-local` marketplace by name, but the local
+    //     `source.path` it was registered against no longer exists.
+    //     A reinstall is required to repoint it.
     //   * "(filesystem fallback)" suffix when wta couldn't talk to the
     //     CLI and used fs heuristics.
     //
@@ -192,6 +215,7 @@ namespace Microsoft::Terminal::AgentHooks
     //   "Copilot CLI — hooks installed"
     //   "Copilot CLI — hooks not installed"
     //   "Claude Code — partially installed (marketplace registered, plugin missing)"
+    //   "Claude Code — partially installed (marketplace registered, plugin installed, marketplace path stale)"
     //   "Gemini CLI — hooks installed (filesystem fallback)"
     inline std::wstring FormatCliStatusLine(const CliStatus& cli, std::wstring_view displayName)
     {
@@ -204,7 +228,11 @@ namespace Microsoft::Terminal::AgentHooks
             return text;
         }
 
-        const bool fully = cli.marketplaceRegistered && cli.pluginInstalled && cli.pluginEnabled;
+        // v3: "fully installed" requires the marketplace path to still
+        // be valid on disk. Mirrors `wta`'s own
+        // format_hooks_status_human gating.
+        const bool fully = cli.marketplaceRegistered && cli.marketplacePathValid &&
+                           cli.pluginInstalled && cli.pluginEnabled;
         const bool none = !cli.marketplaceRegistered && !cli.pluginInstalled;
 
         if (fully)
@@ -232,6 +260,14 @@ namespace Microsoft::Terminal::AgentHooks
             if (cli.pluginInstalled && !cli.pluginEnabled)
             {
                 append(L"plugin disabled");
+            }
+            // Only useful to surface when the marketplace claims to be
+            // registered — otherwise "marketplace missing" already
+            // covers it and adding "marketplace path stale" would be
+            // redundant noise.
+            if (cli.marketplaceRegistered && !cli.marketplacePathValid)
+            {
+                append(L"marketplace path stale");
             }
             text += L")";
         }

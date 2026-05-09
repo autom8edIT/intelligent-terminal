@@ -44,6 +44,7 @@ namespace TerminalAppUnitTests
         TEST_METHOD(FormatsPartialMarketplaceOnly);
         TEST_METHOD(FormatsPartialPluginOnly);
         TEST_METHOD(FormatsPartialDisabled);
+        TEST_METHOD(FormatsMarketplacePathStale);
         TEST_METHOD(FormatsFilesystemFallbackSuffix);
         TEST_METHOD(NotOnPathStillEmitsFallbackSuffix);
 
@@ -53,14 +54,19 @@ namespace TerminalAppUnitTests
     };
 
     static constexpr std::string_view kHappyPathJson = R"({
-        "schema_version": 2,
+        "schema_version": 3,
         "clis": [
             { "name": "copilot", "binary_on_path": true,  "binary_path": "C:\\copilot.cmd",
-              "marketplace_registered": true, "plugin_installed": true, "plugin_enabled": true },
+              "marketplace_registered": true, "marketplace_path": "C:\\repo\\hooks\\copilot",
+              "marketplace_path_valid": true,
+              "plugin_installed": true, "plugin_enabled": true },
             { "name": "claude",  "binary_on_path": true,  "binary_path": "C:\\claude.exe",
-              "marketplace_registered": true, "plugin_installed": true, "plugin_enabled": true },
+              "marketplace_registered": true, "marketplace_path": "C:\\repo\\hooks\\claude",
+              "marketplace_path_valid": true,
+              "plugin_installed": true, "plugin_enabled": true },
             { "name": "gemini",  "binary_on_path": false,
-              "marketplace_registered": false, "plugin_installed": false, "plugin_enabled": false }
+              "marketplace_registered": false, "marketplace_path_valid": false,
+              "plugin_installed": false, "plugin_enabled": false }
         ],
         "bundle_source": { "kind": "exe-sibling", "path": "C:\\Program Files\\WT\\wt-agent-hooks" }
     })";
@@ -69,7 +75,7 @@ namespace TerminalAppUnitTests
     {
         const auto report = ParseStatusJson(kHappyPathJson);
         VERIFY_IS_TRUE(report.has_value());
-        VERIFY_ARE_EQUAL(2u, report->schemaVersion);
+        VERIFY_ARE_EQUAL(3u, report->schemaVersion);
         VERIFY_ARE_EQUAL(size_t{ 3 }, report->clis.size());
 
         const auto* copilot = FindCli(*report, "copilot");
@@ -78,6 +84,9 @@ namespace TerminalAppUnitTests
         VERIFY_IS_TRUE(copilot->binaryPath.has_value());
         VERIFY_ARE_EQUAL(std::string{ "C:\\copilot.cmd" }, *copilot->binaryPath);
         VERIFY_IS_TRUE(copilot->marketplaceRegistered);
+        VERIFY_IS_TRUE(copilot->marketplacePath.has_value());
+        VERIFY_ARE_EQUAL(std::string{ "C:\\repo\\hooks\\copilot" }, *copilot->marketplacePath);
+        VERIFY_IS_TRUE(copilot->marketplacePathValid);
         VERIFY_IS_TRUE(copilot->pluginInstalled);
         VERIFY_IS_TRUE(copilot->pluginEnabled);
         VERIFY_IS_FALSE(copilot->detectionFallback.has_value());
@@ -86,6 +95,8 @@ namespace TerminalAppUnitTests
         VERIFY_IS_NOT_NULL(gemini);
         VERIFY_IS_FALSE(gemini->binaryOnPath);
         VERIFY_IS_FALSE(gemini->binaryPath.has_value());
+        VERIFY_IS_FALSE(gemini->marketplacePath.has_value());
+        VERIFY_IS_FALSE(gemini->marketplacePathValid);
 
         VERIFY_ARE_EQUAL(std::string{ "exe-sibling" }, report->bundleKind);
         VERIFY_IS_TRUE(report->bundlePath.has_value());
@@ -116,7 +127,7 @@ namespace TerminalAppUnitTests
     void AgentHooksStatusTests::RejectsMissingClis()
     {
         constexpr std::string_view js = R"({
-            "schema_version": 2,
+            "schema_version": 3,
             "bundle_source": { "kind": "none" }
         })";
         VERIFY_IS_FALSE(ParseStatusJson(js).has_value());
@@ -125,7 +136,7 @@ namespace TerminalAppUnitTests
     void AgentHooksStatusTests::RejectsMissingBundleSource()
     {
         constexpr std::string_view js = R"({
-            "schema_version": 2,
+            "schema_version": 3,
             "clis": []
         })";
         VERIFY_IS_FALSE(ParseStatusJson(js).has_value());
@@ -134,7 +145,7 @@ namespace TerminalAppUnitTests
     void AgentHooksStatusTests::ParsesEmptyClisArray()
     {
         constexpr std::string_view js = R"({
-            "schema_version": 2,
+            "schema_version": 3,
             "clis": [],
             "bundle_source": { "kind": "none" }
         })";
@@ -149,10 +160,11 @@ namespace TerminalAppUnitTests
     void AgentHooksStatusTests::ParsesDetectionFallback()
     {
         constexpr std::string_view js = R"({
-            "schema_version": 2,
+            "schema_version": 3,
             "clis": [
                 { "name": "copilot", "binary_on_path": true,
-                  "marketplace_registered": true, "plugin_installed": true, "plugin_enabled": true,
+                  "marketplace_registered": true, "marketplace_path_valid": true,
+                  "plugin_installed": true, "plugin_enabled": true,
                   "detection_fallback": "fs" }
             ],
             "bundle_source": { "kind": "dev-tree", "path": "X" }
@@ -166,7 +178,7 @@ namespace TerminalAppUnitTests
     void AgentHooksStatusTests::ParsesBundleSourceNone()
     {
         constexpr std::string_view js = R"({
-            "schema_version": 2,
+            "schema_version": 3,
             "clis": [],
             "bundle_source": { "kind": "none" }
         })";
@@ -182,11 +194,12 @@ namespace TerminalAppUnitTests
         // bump. We must not reject them as long as schema_version still
         // matches the supported major.
         constexpr std::string_view js = R"({
-            "schema_version": 2,
+            "schema_version": 3,
             "future_field": "ignore me",
             "clis": [
                 { "name": "copilot", "binary_on_path": true,
-                  "marketplace_registered": true, "plugin_installed": true, "plugin_enabled": true,
+                  "marketplace_registered": true, "marketplace_path_valid": true,
+                  "plugin_installed": true, "plugin_enabled": true,
                   "future_per_cli_field": 42 }
             ],
             "bundle_source": { "kind": "dev-tree", "path": "X", "future_bundle_field": true }
@@ -215,6 +228,7 @@ namespace TerminalAppUnitTests
         CliStatus c{};
         c.binaryOnPath = true;
         c.marketplaceRegistered = true;
+        c.marketplacePathValid = true;
         c.pluginInstalled = true;
         c.pluginEnabled = true;
         const auto s = FormatCliStatusLine(c, L"Claude Code");
@@ -235,6 +249,7 @@ namespace TerminalAppUnitTests
         CliStatus c{};
         c.binaryOnPath = true;
         c.marketplaceRegistered = true;
+        c.marketplacePathValid = true;
         // plugin not installed
         const auto s = FormatCliStatusLine(c, L"Copilot CLI");
         VERIFY_ARE_EQUAL(
@@ -260,6 +275,7 @@ namespace TerminalAppUnitTests
         CliStatus c{};
         c.binaryOnPath = true;
         c.marketplaceRegistered = true;
+        c.marketplacePathValid = true;
         c.pluginInstalled = true;
         // pluginEnabled stays false
         const auto s = FormatCliStatusLine(c, L"Claude Code");
@@ -268,11 +284,30 @@ namespace TerminalAppUnitTests
             s);
     }
 
+    void AgentHooksStatusTests::FormatsMarketplacePathStale()
+    {
+        // Schema v3 (#25): plugin reports installed and the marketplace
+        // entry exists by name, but the registered local source path is
+        // gone — the silently-broken state. We surface it inline rather
+        // than mis-rendering as "hooks installed".
+        CliStatus c{};
+        c.binaryOnPath = true;
+        c.marketplaceRegistered = true;
+        c.marketplacePathValid = false;
+        c.pluginInstalled = true;
+        c.pluginEnabled = true;
+        const auto s = FormatCliStatusLine(c, L"Copilot CLI");
+        VERIFY_ARE_EQUAL(
+            std::wstring{ L"Copilot CLI — partially installed (marketplace registered, plugin installed, marketplace path stale)" },
+            s);
+    }
+
     void AgentHooksStatusTests::FormatsFilesystemFallbackSuffix()
     {
         CliStatus c{};
         c.binaryOnPath = true;
         c.marketplaceRegistered = true;
+        c.marketplacePathValid = true;
         c.pluginInstalled = true;
         c.pluginEnabled = true;
         c.detectionFallback = "fs";
@@ -304,12 +339,14 @@ namespace TerminalAppUnitTests
     void AgentHooksStatusTests::AnyBinaryOnPathFalseWhenNone()
     {
         constexpr std::string_view js = R"({
-            "schema_version": 2,
+            "schema_version": 3,
             "clis": [
                 { "name": "copilot", "binary_on_path": false,
-                  "marketplace_registered": false, "plugin_installed": false, "plugin_enabled": false },
+                  "marketplace_registered": false, "marketplace_path_valid": false,
+                  "plugin_installed": false, "plugin_enabled": false },
                 { "name": "claude", "binary_on_path": false,
-                  "marketplace_registered": false, "plugin_installed": false, "plugin_enabled": false }
+                  "marketplace_registered": false, "marketplace_path_valid": false,
+                  "plugin_installed": false, "plugin_enabled": false }
             ],
             "bundle_source": { "kind": "none" }
         })";
