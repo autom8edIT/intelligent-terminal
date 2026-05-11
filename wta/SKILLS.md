@@ -3,8 +3,8 @@
 > This file is for AI agents. It documents the `wta` CLI commands you can use
 > to inspect and control Windows Terminal panes from the shell.
 >
-> **Prerequisite**: `WT_PIPE_NAME` must be set in the environment (Windows
-> Terminal injects it automatically into every pane).
+> **Prerequisite**: `WT_COM_CLSID` must be set in the environment (Windows
+> Terminal injects it automatically into every pane it spawns).
 
 ## Quick Reference
 
@@ -14,7 +14,6 @@
 | `wta list-tabs` | `lst` | List tabs in a window |
 | `wta list-panes` | `lsp` | List panes in a tab |
 | `wta active-pane` | — | Show the focused pane's ID |
-| `wta send-keys` | `send` | Type text/keys into a pane |
 | `wta capture-pane` | `capturep` | Read a pane's terminal output |
 | `wta pane-status` | — | Check if a pane's process is running |
 | `wta new-tab` | `neww` | Create a new tab |
@@ -41,21 +40,11 @@ Use `--json` on any command for machine-readable output.
 
 ## Sending Input to a Pane
 
-```bash
-# Send a command and press Enter
-wta send-keys -t <PANE_ID> "ls -la" Enter
-
-# Send Ctrl+C to interrupt
-wta send-keys -t <PANE_ID> C-c
-
-# Send multiple keys
-wta send-keys -t <PANE_ID> "git status" Enter
-```
-
-**Supported key names**: `Enter`, `Space`, `Escape`, `Tab`, `BSpace`,
-`C-c`, `C-d`, `C-z`, `C-l`, `C-a`, `C-e`, `C-k`, `C-u`, `C-w`.
-
-If `-t` is omitted, the active pane is used.
+`wta` no longer exposes a CLI verb for keystroke injection. Direct shell
+input goes through a per-WTA capability pipe and is only reachable from the
+`wta` process Windows Terminal itself launched for a given pane. To deliver
+a prompt to a fresh agent, embed it in the pane's startup commandline via
+`wta new-tab -c "<agent> <prompt>"` (see Creating New Sessions below).
 
 ## Reading Pane Output
 
@@ -116,13 +105,10 @@ wta capture-pane -t 5 -l 30
 
 ### Delegate work to another AI instance
 ```bash
-# 1. Create a new tab for the delegate
-wta new-tab -c "claude" -n "Delegate"
+# 1. Create a new tab for the delegate with the prompt baked into argv
+wta new-tab -c 'claude "Fix the failing test in src/auth.rs"' -n "Delegate"
 
-# 2. Send it a task
-wta send-keys -t <NEW_PANE_ID> "Fix the failing test in src/auth.rs" Enter
-
-# 3. Monitor progress
+# 2. Monitor progress (capture the new pane's output)
 wta capture-pane -t <NEW_PANE_ID> -l 50
 ```
 
