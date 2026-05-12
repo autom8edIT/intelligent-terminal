@@ -94,7 +94,7 @@ namespace winrt::TerminalApp::implementation
         std::wstring text;
         if (_agentName.empty())
         {
-            text = L"Agent";
+            text = L"";
         }
         else
         {
@@ -115,6 +115,13 @@ namespace winrt::TerminalApp::implementation
 
     void AgentPaneContent::_refreshLogo()
     {
+        // No agent name yet → hide logo entirely (don't default to Copilot).
+        if (_agentName.empty())
+        {
+            AgentLogo().Source(nullptr);
+            return;
+        }
+
         std::wstring uri{ L"ms-appx:///AgentIcons/" };
         uri.append(_logoFileForAgent(_agentName));
         const winrt::Windows::Foundation::Uri parsed{ winrt::hstring{ uri } };
