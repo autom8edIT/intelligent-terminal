@@ -13,7 +13,8 @@ use crate::app::HistoryLoadState;
 
 // Figma palette — keep these in one place so the row renderer and any
 // future status indicators stay in sync with the design tokens.
-const ACCENT_CYAN:   Color = Color::Rgb(0x60, 0xcd, 0xff); // Active / selected title
+const ACCENT_CYAN:   Color = Color::Rgb(0x60, 0xcd, 0xff); // Selected-row title / cursor
+const ACCENT_GREEN:  Color = Color::Rgb(0x6c, 0xcb, 0x5f); // Active status badge
 const ACCENT_YELLOW: Color = Color::Rgb(0xfa, 0xe2, 0x46); // Waiting for input
 const ACCENT_RED:    Color = Color::Rgb(0xff, 0x6b, 0x6b); // Error
 const SOFT_WHITE:    Color = Color::Rgb(0x8b, 0x8b, 0x8b); // Idle
@@ -172,7 +173,10 @@ fn status_badge(s: &AgentSession) -> String {
 
 fn badge_style(s: &AgentSession) -> Style {
     match s.status {
-        AgentStatus::Working   => Style::default().fg(ACCENT_CYAN),
+        // "Active" reads as a healthy / running state, so green — leaving
+        // cyan as the dedicated "selection cursor" color so the two don't
+        // collide visually when a non-selected row is running a tool.
+        AgentStatus::Working   => Style::default().fg(ACCENT_GREEN),
         AgentStatus::Attention => Style::default().fg(ACCENT_YELLOW),
         AgentStatus::Error     => Style::default().fg(ACCENT_RED),
         // Idle: muted off-white so it reads as a real status badge but
