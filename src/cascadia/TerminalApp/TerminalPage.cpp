@@ -8237,28 +8237,34 @@ namespace winrt::TerminalApp::implementation
 
         makeItem(RS_(L"DuplicateTabText"), L"\xF5ED", ActionAndArgs{ ShortcutAction::DuplicateTab, nullptr }, menu);
 
-        const auto focusedProfileName = focusedProfile.Name();
-        const auto focusedProfileIcon = focusedProfile.Icon().Resolved();
-        const auto splitPaneDuplicateText = RS_(L"SplitPaneDuplicateText") + L" " + focusedProfileName; // SplitPaneDuplicateText
-
         const auto splitPaneRightText = RS_(L"SplitPaneRightText");
         const auto splitPaneDownText = RS_(L"SplitPaneDownText");
         const auto splitPaneUpText = RS_(L"SplitPaneUpText");
         const auto splitPaneLeftText = RS_(L"SplitPaneLeftText");
         const auto splitPaneToolTipText = RS_(L"SplitPaneToolTipText");
 
-        MUX::Controls::CommandBarFlyout splitPaneContextMenu{};
-        makeItem(splitPaneRightText, focusedProfileIcon, ActionAndArgs{ ShortcutAction::SplitPane, SplitPaneArgs{ SplitType::Duplicate, SplitDirection::Right, .5, nullptr } }, splitPaneContextMenu);
-        makeItem(splitPaneDownText, focusedProfileIcon, ActionAndArgs{ ShortcutAction::SplitPane, SplitPaneArgs{ SplitType::Duplicate, SplitDirection::Down, .5, nullptr } }, splitPaneContextMenu);
-        makeItem(splitPaneUpText, focusedProfileIcon, ActionAndArgs{ ShortcutAction::SplitPane, SplitPaneArgs{ SplitType::Duplicate, SplitDirection::Up, .5, nullptr } }, splitPaneContextMenu);
-        makeItem(splitPaneLeftText, focusedProfileIcon, ActionAndArgs{ ShortcutAction::SplitPane, SplitPaneArgs{ SplitType::Duplicate, SplitDirection::Left, .5, nullptr } }, splitPaneContextMenu);
+        // GetFocusedProfile can return null if no child of the focused tab
+        // was the last control to be focused (e.g. transient focus states).
+        // Skip the "duplicate current pane" entries when that happens —
+        // calling .Name()/.Icon() on a null IProfile crashes with AV in
+        // consume_*<IProfile>::Icon().
+        if (focusedProfile)
+        {
+            const auto focusedProfileName = focusedProfile.Name();
+            const auto focusedProfileIcon = focusedProfile.Icon().Resolved();
+            const auto splitPaneDuplicateText = RS_(L"SplitPaneDuplicateText") + L" " + focusedProfileName; // SplitPaneDuplicateText
 
-        makeContextItem(splitPaneDuplicateText, focusedProfileIcon, splitPaneToolTipText, ActionAndArgs{ ShortcutAction::SplitPane, SplitPaneArgs{ SplitType::Duplicate, SplitDirection::Automatic, .5, nullptr } }, splitPaneContextMenu, splitPaneMenu);
+            MUX::Controls::CommandBarFlyout splitPaneContextMenu{};
+            makeItem(splitPaneRightText, focusedProfileIcon, ActionAndArgs{ ShortcutAction::SplitPane, SplitPaneArgs{ SplitType::Duplicate, SplitDirection::Right, .5, nullptr } }, splitPaneContextMenu);
+            makeItem(splitPaneDownText, focusedProfileIcon, ActionAndArgs{ ShortcutAction::SplitPane, SplitPaneArgs{ SplitType::Duplicate, SplitDirection::Down, .5, nullptr } }, splitPaneContextMenu);
+            makeItem(splitPaneUpText, focusedProfileIcon, ActionAndArgs{ ShortcutAction::SplitPane, SplitPaneArgs{ SplitType::Duplicate, SplitDirection::Up, .5, nullptr } }, splitPaneContextMenu);
+            makeItem(splitPaneLeftText, focusedProfileIcon, ActionAndArgs{ ShortcutAction::SplitPane, SplitPaneArgs{ SplitType::Duplicate, SplitDirection::Left, .5, nullptr } }, splitPaneContextMenu);
 
-        // add menu separator
-        const auto separatorAutoItem = AppBarSeparator{};
+            makeContextItem(splitPaneDuplicateText, focusedProfileIcon, splitPaneToolTipText, ActionAndArgs{ ShortcutAction::SplitPane, SplitPaneArgs{ SplitType::Duplicate, SplitDirection::Automatic, .5, nullptr } }, splitPaneContextMenu, splitPaneMenu);
 
-        splitPaneMenu.SecondaryCommands().Append(separatorAutoItem);
+            // Separator between the "duplicate current" group and the per-profile list.
+            splitPaneMenu.SecondaryCommands().Append(AppBarSeparator{});
+        }
 
         for (auto profileIndex = 0; profileIndex < activeProfileCount; profileIndex++)
         {
