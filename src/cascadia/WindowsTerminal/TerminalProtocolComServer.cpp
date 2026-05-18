@@ -703,6 +703,19 @@ void TerminalProtocolComServer::SendEvent(winrt::hstring const& eventJson)
         return;
     }
 
+    // resume_in_new_agent_tab: Session view's Shift+Enter handler in the
+    // wta TUI. Carries {session_id, cwd} for a historical session. WT
+    // creates a new tab, reconciles the shared agent pane onto it, then
+    // publishes a `load_session` event back to wta with the new tab's
+    // StableId so the existing ACP connection calls `session/load` for
+    // that tab. See TerminalPage::OnResumeInNewAgentTabRequested.
+    if (evt.isMember("method") && evt["method"].isString() &&
+        evt["method"].asString() == "resume_in_new_agent_tab")
+    {
+        _dispatchResumeInNewAgentTabToPage(eventJson);
+        return;
+    }
+
     // Legacy path: params.event is required for agent_event broadcasts.
     THROW_HR_IF(E_INVALIDARG, !evt.isMember("params") || !evt["params"].isMember("event"));
 
@@ -852,6 +865,42 @@ void TerminalProtocolComServer::_dispatchViewChangedToPage(const winrt::hstring&
                 try
                 {
                     page.OnAgentViewChanged(eventJson);
+                }
+                catch (...)
+                {
+                    // Swallow: page may have been torn down during dispatch.
+                }
+            });
+    }
+}
+
+void TerminalProtocolComServer::_dispatchResumeInNewAgentTabToPage(const winrt::hstring& eventJson)
+{
+    if (!s_emperor)
+    {
+        return;
+    }
+    // Same fan-out shape as the other dispatchers. The shared agent pane
+    // lives in exactly one window; pages with no agent pane no-op the call
+    // (see OnResumeInNewAgentTabRequested).
+    for (const auto& host : s_emperor->GetWindows())
+    {
+        auto page = _getPage(host.get());
+        if (!page)
+        {
+            continue;
+        }
+        const auto dispatcher = page.Dispatcher();
+        if (!dispatcher)
+        {
+            continue;
+        }
+        dispatcher.RunAsync(
+            winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
+            [page, eventJson]() {
+                try
+                {
+                    page.OnResumeInNewAgentTabRequested(eventJson);
                 }
                 catch (...)
                 {

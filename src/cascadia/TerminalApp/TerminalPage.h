@@ -211,6 +211,7 @@ namespace winrt::TerminalApp::implementation
         void OnAgentStatusChanged(hstring eventJson);
         void OnCloseAgentPaneRequested(hstring eventJson);
         void OnAgentViewChanged(hstring eventJson);
+        void OnResumeInNewAgentTabRequested(hstring eventJson);
 
         til::property_changed_event PropertyChanged;
 
@@ -365,10 +366,16 @@ namespace winrt::TerminalApp::implementation
         AgentSettingsSnapshot _lastAgentSettings{};
         bool _agentSettingsSnapshotInitialized{ false };
         bool _agentRebuilding{ false };
+        // Set when a settings change wants a rebuild but the active
+        // tab can't host an agent pane (e.g. the Settings tab itself).
+        // _FlushPendingAgentRebuild runs the deferred rebuild from
+        // _OnTabSelectionChanged once a terminal tab is active.
+        bool _pendingAgentRebuild{ false };
         AgentSettingsSnapshot _CaptureAgentSettingsSnapshot() const;
         static bool _AgentSettingsChanged(const AgentSettingsSnapshot& a, const AgentSettingsSnapshot& b);
         void _TeardownAgentPane();
         void _RebuildAgentStack();
+        void _FlushPendingAgentRebuild();
         void _AutoCreateHiddenAgentPane(winrt::com_ptr<Tab> tab);
         // Wraps the raw terminal pane's TerminalPaneContent in an
         // AgentPaneContent so the leaf renders the 36px XAML agent bar

@@ -53,14 +53,14 @@ stages:
           displayName: Install Rust nightly + cargo-fuzz
         - bash: |
             set -ex
-            cd wta
+            cd tools/wta
             cargo +ms-nightly fuzz build cmdline_builder \
               --config .cargo/intelligent_terminal_feed.toml
           displayName: Build WTA fuzz targets
         - bash: |
             set -ex
-            # cargo-fuzz outputs to wta/fuzz/target/<triple>/release/
-            cp wta/fuzz/target/x86_64-pc-windows-msvc/release/cmdline_builder.exe \
+            # cargo-fuzz outputs to tools/wta/fuzz/target/<triple>/release/
+            cp tools/wta/fuzz/target/x86_64-pc-windows-msvc/release/cmdline_builder.exe \
                $(Build.ArtifactStagingDirectory)/WtaCmdlineFuzzer.exe
           displayName: Stage fuzzer artifact
         - task: PublishPipelineArtifact@1

@@ -64,7 +64,7 @@
              BottomBar color so the gap — if any — visually merges into
              the bar. Declared before TabContent so it sits behind. -->
         <Border Grid.Row="2"
-                Background="#161616"
+                Background="#000000"
                 IsHitTestVisible="False" />
 
         <Grid x:Name="TabContent"
@@ -76,17 +76,34 @@
             </Grid.Background>
         </Grid>
 
-        <!-- Bottom Bar: AI agent toolbar. VerticalAlignment="Top" is required
-             — without it, the Grid's default stretch-with-explicit-height
-             behavior leaves a transparent strip at the top of Row 3. -->
+        <!-- Bottom Bar: AI agent toolbar. Wrapped in a Border so we can draw
+             a 1-pixel divider between the terminal pane and the bar.
+             The divider is a child Border (not BorderThickness) because
+             XAML's BorderBrush paints the thickness strip OUTSIDE the
+             Background fill — so a semi-transparent BorderBrush would
+             alpha-blend against the transparent window underneath instead
+             of the bar's black. Stacking a 1px Border on top of the
+             solid-black outer Border makes the alpha blend correctly. -->
+        <Border Grid.Row="3"
+                Background="#000000"
+                VerticalAlignment="Top">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="1" />
+                <RowDefinition Height="40" />
+            </Grid.RowDefinitions>
+
+            <!-- Divider: design spec #FFFFFF26 (= XAML #26FFFFFF, white 15% alpha).
+                 Sits on the outer Border's #000000, so it renders as a subtle
+                 dark-gray hairline. -->
+            <Border Grid.Row="0" Background="#26FFFFFF" />
+
         <Grid x:Name="BottomBar"
-              Grid.Row="3"
-              Height="31"
+              Grid.Row="1"
               Padding="12,0,12,0"
-              HorizontalAlignment="Stretch"
-              VerticalAlignment="Top">
+              HorizontalAlignment="Stretch">
             <Grid.Background>
-                <SolidColorBrush Color="#161616" />
+                <SolidColorBrush Color="#000000" />
             </Grid.Background>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
@@ -98,8 +115,8 @@
             <!-- Button 1: AI toggle (dock/collapse bottom pane) -->
             <Button x:Name="AgentToggleButton"
                     Grid.Column="0"
-                    Width="30"
-                    Height="30"
+                    Width="32"
+                    Height="32"
                     Padding="0"
                     Background="Transparent"
                     BorderBrush="Transparent"
@@ -141,8 +158,8 @@
                         VerticalAlignment="Center"
                         Spacing="6">
                 <Button x:Name="DiagnosticsButton"
-                        Width="30"
-                        Height="30"
+                        Width="32"
+                        Height="32"
                         Padding="0"
                         Background="Transparent"
                         BorderBrush="Transparent"
@@ -175,8 +192,8 @@
                  BottomBar via the spacer column (Column 2, Width="*"). -->
             <Button x:Name="SessionToggleButton"
                     Grid.Column="3"
-                    Width="30"
-                    Height="30"
+                    Width="32"
+                    Height="32"
                     Padding="0"
                     Background="Transparent"
                     BorderBrush="Transparent"
@@ -211,6 +228,8 @@
             </Button>
 
         </Grid>
+        </Grid>
+        </Border>
 
         <!--
             GH#12775 et. al: After switching to ControlsV2, it seems that
@@ -320,7 +339,8 @@
         <!--  First-run experience overlay. Covers the terminal content area
               until the user clicks Next. Lazy-loaded to avoid startup cost.  -->
         <local:FreOverlay x:Name="FreOverlayElement"
-                          Grid.Row="2"
+                          Grid.Row="0"
+                          Grid.RowSpan="4"
                           HorizontalAlignment="Stretch"
                           VerticalAlignment="Stretch"
                           x:Load="False"

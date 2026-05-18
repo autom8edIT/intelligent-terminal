@@ -142,5 +142,13 @@ namespace TerminalApp
         // `/sessions` slash command). Mirrors the new view onto C++ state so
         // the agent bar title + bottom bar highlight stay in sync.
         void OnAgentViewChanged(String eventJson);
+
+        // Inbound event from WTA carrying
+        // {method:"resume_in_new_agent_tab",params:{session_id,cwd}}.
+        // Emitted by the session view's Shift+Enter handler. The page
+        // creates a new tab, reconciles the shared agent pane onto it, then
+        // publishes a `load_session` event back to wta carrying the new
+        // tab's StableId so wta calls ACP `session/load` for that tab.
+        void OnResumeInNewAgentTabRequested(String eventJson);
     }
 }

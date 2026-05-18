@@ -232,7 +232,8 @@ namespace winrt::TerminalApp::implementation
         // and _AutoCreateHiddenAgentPane only does local work (filesystem
         // path detection + creating + hiding a child pane), so it is safe
         // to call synchronously here.
-        if (!_agentPane.lock())
+        // Skip agent pane creation during FRE — _OnFreCompleted handles it.
+        if (!_agentPane.lock() && !_IsFreRequired())
         {
             _AutoCreateHiddenAgentPane(newTabImpl);
         }
@@ -1235,9 +1236,9 @@ namespace winrt::TerminalApp::implementation
                 const auto tab{ _tabs.GetAt(selectedIndex) };
                 _UpdatedSelectedTab(tab);
             }
-            // Reconcile the shared agent pane against the newly active tab's
-            // AgentPaneOpen() flag — makes per-tab open/closed state independent.
-            // Also refreshes the bottom bar internally.
+            // Flush any deferred agent-stack rebuild before reconciling
+            // so the freshly-created pane participates in the reconcile.
+            _FlushPendingAgentRebuild();
             _ReconcileAgentPaneForActiveTab();
         }
     }

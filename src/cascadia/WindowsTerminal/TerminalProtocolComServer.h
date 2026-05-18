@@ -139,5 +139,11 @@ private:
     // TerminalPage mirrors the new view onto its agent bar + bottom bar state.
     static void _dispatchViewChangedToPage(const winrt::hstring& eventJson);
 
+    // Same shape, for {method:"resume_in_new_agent_tab"} emitted by the wta
+    // TUI on Shift+Enter in the session view. TerminalPage creates a new
+    // tab, reconciles the shared agent pane onto it, then publishes a
+    // `load_session` event back to the wta TUI for the new tab's StableId.
+    static void _dispatchResumeInNewAgentTabToPage(const winrt::hstring& eventJson);
+
     static WindowEmperor* s_emperor;
 };

@@ -92,7 +92,10 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
         bool ShowAcpModel();
         winrt::Windows::Foundation::Collections::IObservableVector<Editor::AcpModelEntry> AcpModelList() const { return _acpModelList; }
-        bool HasAcpModelList() const { return _acpModelList && _acpModelList.Size() > 0; }
+        // Probe in flight counts as "present" so the ComboBox stays
+        // visible (PlaceholderText="Auto") instead of flashing the
+        // free-form textbox during the probe window.
+        bool HasAcpModelList() const { return _acpModelList && (_acpModelList.Size() > 0 || _acpProbing); }
         bool ShowAcpModelTextBox() const { return !HasAcpModelList(); }
         Editor::AcpModelEntry CurrentAcpModelEntry();
         void CurrentAcpModelEntry(const Editor::AcpModelEntry& value);
@@ -143,6 +146,25 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         winrt::event_token _acpRuntimeChangedToken{};
         void _RebuildAcpModelListFromCache();
 
+        // ── ACP model probe ──
+        // A background `wta probe-models --agent <cmd>` invocation that
+        // populates the dropdown after the user picks a new agent in
+        // Settings, without waiting for the agent pane to be rebuilt.
+        // See `_TriggerAcpModelProbe` in the .cpp for the full flow.
+        bool _acpProbing{ false };
+        // Generation counter: bumped each time _TriggerAcpModelProbe
+        // fires. An in-flight probe checks this before publishing its
+        // result and bails if a newer trigger has superseded it (user
+        // picked a different agent while we were still talking to the
+        // previous one).
+        uint64_t _acpProbeGeneration{ 0 };
+        void _TriggerAcpModelProbe();
+        winrt::fire_and_forget _RunAcpModelProbeAsync(std::wstring agentCmdline, uint64_t generation);
+        // Mirror of TerminalPage::_ResolveEffectiveAgentCliPath. Kept
+        // here (rather than in inc/) because the Settings UI sits in
+        // a separate project and can't include TerminalApp headers.
+        std::wstring _ResolveEffectiveAcpAgentCmdline() const;
+
         static bool _IsAgentInstalled(const wchar_t* name);
         static bool _IsKnownAgent(const winrt::hstring& id);
         static winrt::hstring _DeriveId(const winrt::hstring& command);
@@ -167,10 +189,6 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         bool _refreshingAgentHooks{ false };
         winrt::hstring _agentHooksInstallSummary;
 
-        static std::wstring _ResolveWtaExePath();
-        static std::string _RunWtaCaptureStdout(const std::wstring& wtaPath,
-                                                const std::wstring& argsAfterExe,
-                                                DWORD timeoutMs);
         void _ApplyStatusReport(const std::optional<::Microsoft::Terminal::AgentHooks::StatusReport>& report);
         winrt::fire_and_forget _RefreshAgentHooksStatusAsync();
         winrt::fire_and_forget _RunHooksInstallerAsync();

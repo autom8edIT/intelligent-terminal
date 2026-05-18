@@ -9,6 +9,9 @@
 #include "EnumEntry.h"
 #include "../inc/AgentRegistry.h"
 #include "../inc/AgentHooksStatus.h"
+#include "../inc/WtaProcess.h"
+
+#include <json/json.h>
 
 using namespace winrt::Windows::Foundation;
 using namespace winrt::Windows::Foundation::Collections;
@@ -216,7 +219,10 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         const auto cached = Model::AcpRuntimeState::Current().AvailableModels();
         const uint32_t newSize = cached ? cached.Size() : 0;
 
-        // Replace contents in-place so x:Bind observers stay attached.
+        // Mirror the agent's advertised list 1:1 — each ACP agent
+        // already publishes its own "use the default" entry (claude
+        // calls it `default`, copilot `auto`), so synthesizing one
+        // here would just duplicate it.
         _acpModelList.Clear();
         for (uint32_t i = 0; i < newSize; ++i)
         {
@@ -293,11 +299,11 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
     Editor::AcpModelEntry AIAgentsViewModel::CurrentAcpModelEntry()
     {
-        const auto current = _GlobalSettings.AcpModel();
         if (!_acpModelList)
         {
             return nullptr;
         }
+        const auto current = _GlobalSettings.AcpModel();
         for (uint32_t i = 0; i < _acpModelList.Size(); ++i)
         {
             const auto entry = _acpModelList.GetAt(i);
@@ -306,6 +312,9 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
                 return entry;
             }
         }
+        // No match: stale id from a different agent. ComboBox's
+        // PlaceholderText surfaces "Auto" until the probe re-runs
+        // and lands a list this id matches.
         return nullptr;
     }
 
@@ -378,15 +387,14 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         {
             _isAddingCustomAcpAgent = false;
             _GlobalSettings.AcpAgent(value.Id());
-            // Stale model list belongs to the previous agent. Clear the
-            // process-wide cache so the dropdown empties immediately; wta
-            // will repopulate it after the new agent's NewSessionResponse.
-            // Also clear the bound model id so the next agent starts on its
-            // default rather than carrying the previous agent's selection.
+            // Drop the previous agent's model id and cached list — they
+            // don't apply to the new agent. The probe below repopulates
+            // the cache.
             _GlobalSettings.AcpModel(L"");
             Model::AcpRuntimeState::Current().SetAvailableModels(
                 winrt::single_threaded_vector<Model::AcpModelInfo>().GetView(),
                 L"");
+            _TriggerAcpModelProbe();
             _NotifyChanges(L"CurrentAcpAgent",
                            L"IsAddingCustomAcpAgent",
                            L"IsCustomAcpAgentSelected",
@@ -480,7 +488,13 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
         _isAddingCustomAcpAgent = false;
         _GlobalSettings.AcpAgent(settingsId);
-        _NotifyChanges(L"CurrentAcpAgent", L"IsAddingCustomAcpAgent", L"IsCustomAcpAgentSelected", L"ShowAcpModel", L"CustomAcpCommandPreview");
+        // Same cache reset as the built-in dropdown path above.
+        _GlobalSettings.AcpModel(L"");
+        Model::AcpRuntimeState::Current().SetAvailableModels(
+            winrt::single_threaded_vector<Model::AcpModelInfo>().GetView(),
+            L"");
+        _TriggerAcpModelProbe();
+        _NotifyChanges(L"CurrentAcpAgent", L"IsAddingCustomAcpAgent", L"IsCustomAcpAgentSelected", L"ShowAcpModel", L"CustomAcpCommandPreview", L"AcpModel");
     }
 
     void AIAgentsViewModel::SaveCustomDelegateAgent()
@@ -635,143 +649,8 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
     // `wta install-hooks`; afterwards we re-invoke the status query to
     // refresh the rows.
 
-    std::wstring AIAgentsViewModel::_ResolveWtaExePath()
-    {
-        // Mirrors TerminalPage::_DetectWtaPath: prefer co-located wta.exe
-        // (MSIX-installed scenario), fall back to walking up the running
-        // module path looking for a dev build, then PATH.
-        const auto modulePath = std::filesystem::path{ wil::GetModuleFileNameW<std::wstring>(nullptr) };
-        const auto moduleDir = modulePath.parent_path();
-        std::error_code ec;
-        {
-            const auto sibling = moduleDir / L"wta.exe";
-            if (std::filesystem::exists(sibling, ec))
-            {
-                return sibling.lexically_normal().wstring();
-            }
-        }
-        auto cursor = moduleDir;
-        while (!cursor.empty())
-        {
-            for (const auto& relative : {
-                     std::filesystem::path{ L"wta\\target\\debug\\wta.exe" },
-                     std::filesystem::path{ L"wta\\target\\release\\wta.exe" },
-                 })
-            {
-                const auto candidate = cursor / relative;
-                if (std::filesystem::exists(candidate, ec))
-                {
-                    return candidate.lexically_normal().wstring();
-                }
-            }
-            const auto parent = cursor.parent_path();
-            if (parent == cursor) break;
-            cursor = parent;
-        }
-        wchar_t buffer[MAX_PATH];
-        if (SearchPathW(nullptr, L"wta", L".exe", MAX_PATH, buffer, nullptr) > 0)
-        {
-            return std::wstring{ buffer };
-        }
-        return {};
-    }
-
-    // Spawn `wta.exe <args>` and return its stdout on exit-0; empty
-    // string otherwise. Synchronous; intended to be called from a
-    // resume_background coroutine. Captures via an anonymous pipe with
-    // child's stdout/stderr both routed to it (stderr swallowed
-    // intentionally — we only care about the JSON payload, and any
-    // human-readable error text on stderr would just confuse the
-    // parser).
-    std::string AIAgentsViewModel::_RunWtaCaptureStdout(const std::wstring& wtaPath,
-                                                       const std::wstring& argsAfterExe,
-                                                       DWORD timeoutMs)
-    {
-        if (wtaPath.empty())
-        {
-            return {};
-        }
-
-        SECURITY_ATTRIBUTES sa{};
-        sa.nLength = sizeof(sa);
-        sa.bInheritHandle = TRUE;
-
-        wil::unique_handle readHandle;
-        wil::unique_handle writeHandle;
-        if (!CreatePipe(readHandle.addressof(), writeHandle.addressof(), &sa, 0))
-        {
-            return {};
-        }
-        // The read end must NOT be inherited by the child.
-        if (!SetHandleInformation(readHandle.get(), HANDLE_FLAG_INHERIT, 0))
-        {
-            return {};
-        }
-
-        STARTUPINFOW si{};
-        si.cb = sizeof(si);
-        si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
-        si.wShowWindow = SW_HIDE;
-        si.hStdOutput = writeHandle.get();
-        si.hStdError = writeHandle.get();
-        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-
-        std::wstring cmdline = L"\"" + wtaPath + L"\" " + argsAfterExe;
-        std::wstring mutableCmd = cmdline;
-
-        PROCESS_INFORMATION pi{};
-        const BOOL launched = CreateProcessW(
-            wtaPath.c_str(),
-            mutableCmd.data(),
-            nullptr,
-            nullptr,
-            TRUE, // inherit handles (so the child inherits writeHandle)
-            CREATE_NO_WINDOW,
-            nullptr,
-            nullptr,
-            &si,
-            &pi);
-        if (!launched)
-        {
-            return {};
-        }
-        wil::unique_handle proc{ pi.hProcess };
-        wil::unique_handle thread{ pi.hThread };
-
-        // Close our copy of the write end so the read pipe sees EOF
-        // when the child exits.
-        writeHandle.reset();
-
-        std::string captured;
-        captured.reserve(4096);
-        char buf[4096];
-        for (;;)
-        {
-            DWORD bytesRead = 0;
-            const BOOL ok = ReadFile(readHandle.get(), buf, sizeof(buf), &bytesRead, nullptr);
-            if (!ok || bytesRead == 0)
-            {
-                break;
-            }
-            captured.append(buf, bytesRead);
-        }
-
-        if (WaitForSingleObject(proc.get(), timeoutMs) != WAIT_OBJECT_0)
-        {
-            // Best-effort terminate on timeout — we still return what
-            // we captured (empty in practice).
-            TerminateProcess(proc.get(), 1);
-            WaitForSingleObject(proc.get(), 1000);
-            return {};
-        }
-        DWORD exitCode = 1;
-        GetExitCodeProcess(proc.get(), &exitCode);
-        if (exitCode != 0)
-        {
-            return {};
-        }
-        return captured;
-    }
+    // _ResolveWtaExePath and _RunWtaCaptureStdout moved to
+    // src/cascadia/inc/WtaProcess.h for shared use.
 
     void AIAgentsViewModel::_ApplyStatusReport(const std::optional<::Microsoft::Terminal::AgentHooks::StatusReport>& report)
     {
@@ -838,8 +717,8 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
         co_await winrt::resume_background();
 
-        const auto wtaPath = _ResolveWtaExePath();
-        const auto stdoutText = _RunWtaCaptureStdout(wtaPath, L"hooks status --json", 30'000);
+        const auto wtaPath = ::Microsoft::Terminal::WtaProcess::ResolveWtaExePath();
+        const auto stdoutText = ::Microsoft::Terminal::WtaProcess::RunWtaCaptureStdout(wtaPath, L"hooks status --json", 30'000);
         auto report = ::Microsoft::Terminal::AgentHooks::ParseStatusJson(stdoutText);
 
         co_await wil::resume_foreground(dispatcher);
@@ -869,65 +748,21 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
         co_await winrt::resume_background();
 
-        const auto wtaPath = _ResolveWtaExePath();
+        const auto wtaPath = ::Microsoft::Terminal::WtaProcess::ResolveWtaExePath();
         if (wtaPath.empty())
         {
             summary = L"Failed: could not locate wta.exe";
         }
         else
         {
-            std::wstring cmdline = L"\"" + wtaPath + L"\" hooks install";
-
-            STARTUPINFOW si{};
-            si.cb = sizeof(si);
-            si.dwFlags = STARTF_USESHOWWINDOW;
-            si.wShowWindow = SW_HIDE;
-            PROCESS_INFORMATION pi{};
-            std::wstring mutableCmd = cmdline;
-            const BOOL launched = CreateProcessW(
-                wtaPath.c_str(),
-                mutableCmd.data(),
-                nullptr,
-                nullptr,
-                FALSE,
-                CREATE_NO_WINDOW,
-                nullptr,
-                nullptr,
-                &si,
-                &pi);
-            if (!launched)
+            ok = ::Microsoft::Terminal::WtaProcess::RunWtaAndWait(wtaPath, L"hooks install", 60'000);
+            if (ok)
             {
-                const auto err = GetLastError();
-                summary = L"Failed to launch installer (error " + std::to_wstring(err) + L")";
+                summary = L"Hooks installed successfully. Restart any open agent CLIs to pick up the new hooks.";
             }
             else
             {
-                const DWORD waitResult = WaitForSingleObject(pi.hProcess, 60'000);
-                if (waitResult == WAIT_TIMEOUT)
-                {
-                    // Don't leave an orphaned wta.exe blocking on a child CLI
-                    // — terminate it and surface the timeout instead of mis-
-                    // reporting STILL_ACTIVE (259) as an exit code.
-                    TerminateProcess(pi.hProcess, 1);
-                    WaitForSingleObject(pi.hProcess, 1'000);
-                    summary = L"Installer timed out after 60s. Check %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log for the stuck CLI.";
-                }
-                else
-                {
-                    DWORD exitCode = 1;
-                    GetExitCodeProcess(pi.hProcess, &exitCode);
-                    if (exitCode == 0)
-                    {
-                        ok = true;
-                        summary = L"Hooks installed successfully. Restart any open agent CLIs to pick up the new hooks.";
-                    }
-                    else
-                    {
-                        summary = L"Installer exited with code " + std::to_wstring(exitCode);
-                    }
-                }
-                CloseHandle(pi.hThread);
-                CloseHandle(pi.hProcess);
+                summary = L"Hooks installation failed. Check %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log for details.";
             }
         }
 
@@ -940,5 +775,171 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         // status rows reflect what's now on disk.
         RefreshAgentHooksStatus();
         (void)ok;
+    }
+
+    // ACP model probe.
+    //
+    // After the user picks a new ACP agent in Settings, repopulate the
+    // model dropdown without waiting for an agent pane rebuild —
+    // pane-side `connection.Start()` only runs once the pane's
+    // TermControl lays out, which requires the user to navigate to the
+    // owning tab. Instead spawn `wta.exe probe-models --agent <cmdline>`,
+    // which does an ACP handshake, prints `NewSessionResponse.models`
+    // as JSON, and exits. `SetAvailableModels` fires the Changed event
+    // which `_RebuildAcpModelListFromCache` is subscribed to.
+
+    std::wstring AIAgentsViewModel::_ResolveEffectiveAcpAgentCmdline() const
+    {
+        // Mirror of TerminalPage::_ResolveEffectiveAgentCliPath — kept
+        // here because the Settings UI project can't include TerminalApp
+        // headers. Drift between the two is a real bug (probe would
+        // hit a different agent than the pane will eventually launch).
+        const auto acpAgent = _GlobalSettings.AcpAgent();
+
+        if (winrt::to_string(acpAgent).starts_with("custom:"))
+        {
+            const auto customCmd = _GlobalSettings.AcpCustomCommand();
+            if (!customCmd.empty())
+            {
+                return std::wstring{ customCmd };
+            }
+        }
+
+        const auto lower = winrt::to_string(acpAgent);
+
+        if (lower == "claude")
+        {
+            return L"npx -y @zed-industries/claude-code-acp";
+        }
+        if (lower == "codex")
+        {
+            return L"npx -y @zed-industries/codex-acp";
+        }
+
+        std::wstring cmd{ acpAgent };
+        if (lower == "copilot")
+        {
+            cmd += L" --acp --stdio";
+        }
+        else if (lower == "gemini")
+        {
+            cmd += L" --experimental-acp";
+        }
+
+        if (lower == "copilot" || lower == "gemini")
+        {
+            const auto acpModel = _GlobalSettings.AcpModel();
+            if (!acpModel.empty())
+            {
+                cmd += L" --model ";
+                cmd += std::wstring_view{ acpModel };
+            }
+        }
+
+        return cmd;
+    }
+
+    void AIAgentsViewModel::_TriggerAcpModelProbe()
+    {
+        const auto cmdline = _ResolveEffectiveAcpAgentCmdline();
+        if (cmdline.empty())
+        {
+            return;
+        }
+
+        // Bump generation BEFORE flipping the flag so any in-flight
+        // probe (which captured the old value) drops its result on
+        // the generation check.
+        ++_acpProbeGeneration;
+        _acpProbing = true;
+        _RebuildAcpModelListFromCache();
+        _RunAcpModelProbeAsync(cmdline, _acpProbeGeneration);
+    }
+
+    winrt::fire_and_forget AIAgentsViewModel::_RunAcpModelProbeAsync(std::wstring agentCmdline, uint64_t generation)
+    {
+        auto strongThis = get_strong();
+        auto dispatcher = winrt::Windows::UI::Xaml::Window::Current().Dispatcher();
+
+        co_await winrt::resume_background();
+
+        const auto wtaPath = ::Microsoft::Terminal::WtaProcess::ResolveWtaExePath();
+        std::string stdoutText;
+        if (!wtaPath.empty())
+        {
+            // Quote-escape internal `"` per Windows CRT rules.
+            std::wstring escaped = agentCmdline;
+            for (size_t pos = 0; (pos = escaped.find(L'"', pos)) != std::wstring::npos; pos += 2)
+            {
+                escaped.replace(pos, 1, L"\"\"");
+            }
+            const std::wstring args = L"probe-models --agent \"" + escaped + L"\"";
+            // 40s ceiling matches probe.rs's internal limits (npx
+            // initialize 25s + new_session 10s + slack). Cached
+            // adapters return in <2s.
+            stdoutText = ::Microsoft::Terminal::WtaProcess::RunWtaCaptureStdout(wtaPath, args, 40'000);
+        }
+
+        std::vector<Model::AcpModelInfo> parsed;
+        winrt::hstring currentId;
+        bool parseOk = false;
+        if (!stdoutText.empty())
+        {
+            Json::Value root;
+            Json::CharReaderBuilder rb;
+            const std::unique_ptr<Json::CharReader> reader{ rb.newCharReader() };
+            std::string errs;
+            if (reader->parse(stdoutText.data(),
+                              stdoutText.data() + stdoutText.size(),
+                              &root,
+                              &errs) &&
+                root.isObject())
+            {
+                parseOk = true;
+                if (const auto& models = root["available_models"]; models.isArray())
+                {
+                    parsed.reserve(models.size());
+                    for (const auto& m : models)
+                    {
+                        if (!m.isObject()) continue;
+                        const auto id = m.get("id", "").asString();
+                        const auto name = m.get("name", "").asString();
+                        const auto desc = m.isMember("description") && m["description"].isString()
+                            ? m["description"].asString()
+                            : std::string{};
+                        if (id.empty()) continue;
+                        parsed.emplace_back(
+                            winrt::to_hstring(id),
+                            winrt::to_hstring(name),
+                            winrt::to_hstring(desc));
+                    }
+                }
+                if (root.isMember("current_model_id") && root["current_model_id"].isString())
+                {
+                    currentId = winrt::to_hstring(root["current_model_id"].asString());
+                }
+            }
+        }
+
+        co_await wil::resume_foreground(dispatcher);
+
+        // Drop stale results — a newer probe is already in flight
+        // for a different agent and we'd clobber its eventual write.
+        if (generation != _acpProbeGeneration)
+        {
+            co_return;
+        }
+
+        _acpProbing = false;
+
+        if (parseOk)
+        {
+            auto view = winrt::single_threaded_vector(std::move(parsed)).GetView();
+            Model::AcpRuntimeState::Current().SetAvailableModels(view, currentId);
+        }
+        else
+        {
+            _RebuildAcpModelListFromCache();
+        }
     }
 }
