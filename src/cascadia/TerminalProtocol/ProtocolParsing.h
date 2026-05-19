@@ -28,7 +28,7 @@ namespace Microsoft::Terminal::Protocol::Parsing
 
     // ── SendEvent dispatch ──
 
-    // The three dispatch routes for IProtocolServer::SendEvent.
+    // The dispatch routes for IProtocolServer::SendEvent.
     enum class SendEventRoute
     {
         AutofixState,      // Direct to TerminalPage, no broadcast
@@ -179,18 +179,5 @@ namespace Microsoft::Terminal::Protocol::Parsing
             return PaneOutputSource::Screen;
         }
         return PaneOutputSource::Scrollback;
-    }
-
-    // ── SetSettings validation ──
-
-    // Validate that a string is non-empty valid JSON (for SetSettings).
-    inline bool ValidateSettingsJson(const std::string& settingsJson)
-    {
-        if (settingsJson.empty())
-        {
-            return false;
-        }
-        Json::Value parsed;
-        return ParseJson(settingsJson, parsed);
     }
 }

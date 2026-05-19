@@ -2,8 +2,7 @@
 // Licensed under the MIT license.
 //
 // Fuzzing harness for Terminal Protocol server parsing logic.
-// Targets: ClassifySendEvent, ParseSplitDirection, ClassifyPaneOutputSource,
-//          ValidateQuickPickChoices, ValidateSettingsJson.
+// Targets: ClassifySendEvent, ParseSplitDirection, ClassifyPaneOutputSource.
 //
 // Built under the Fuzzing MSBuild configuration with LibFuzzer
 // instrumentation; submittable to OneFuzz via the CI pipeline.
@@ -43,12 +42,6 @@ static int FuzzOneInput(const uint8_t* data, size_t size)
     // Feed fuzzed data as a source parameter.
     {
         ProtocolParsing::ClassifyPaneOutputSource(input);
-    }
-
-    // ── Target 4: ValidateSettingsJson ──
-    // Feed fuzzed data as settings JSON content.
-    {
-        ProtocolParsing::ValidateSettingsJson(input);
     }
 
     return 0;

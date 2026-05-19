@@ -8,6 +8,7 @@
 #include <Windows.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <string>
