@@ -658,12 +658,23 @@ void TerminalProtocolComServer::SendEvent(winrt::hstring const& eventJson)
         _dispatchAgentStatusToPage(eventJson);
         return;
     case ProtocolParsing::SendEventRoute::CloseAgentPane:
+        // User pressed Ctrl+C twice in the wta TUI. Marshal to the UI
+        // thread and tell TerminalPage to tear down the shared agent pane.
         _dispatchCloseAgentPaneToPage(eventJson);
         return;
     case ProtocolParsing::SendEventRoute::ViewChanged:
+        // wta TUI flipped its internal view (Esc out of session view,
+        // `/sessions` slash command). C++ mirrors the new view onto the
+        // agent bar title + the bottom bar's sessions/chat highlight.
         _dispatchViewChangedToPage(eventJson);
         return;
     case ProtocolParsing::SendEventRoute::ResumeInNewAgentTab:
+        // Session view's Shift+Enter handler in the wta TUI. Carries
+        // {session_id, cwd} for a historical session. WT creates a new
+        // tab, reconciles the shared agent pane onto it, then publishes
+        // a `load_session` event back to wta with the new tab's StableId
+        // so the existing ACP connection calls `session/load` for that
+        // tab. See TerminalPage::OnResumeInNewAgentTabRequested.
         _dispatchResumeInNewAgentTabToPage(eventJson);
         return;
     case ProtocolParsing::SendEventRoute::Broadcast:
