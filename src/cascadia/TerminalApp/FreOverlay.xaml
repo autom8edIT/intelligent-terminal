@@ -289,8 +289,13 @@
                     </StackPanel>
                 </ScrollViewer>
 
-                <!--  Bottom: Save Button  -->
+                <!--  Bottom: Error text + Save Button  -->
                 <Grid Grid.Row="2">
+                    <TextBlock x:Name="ErrorText"
+                               HorizontalAlignment="Left" VerticalAlignment="Center"
+                               Foreground="#FFFF6B6B" FontSize="13"
+                               TextWrapping="Wrap" MaxWidth="400"
+                               Visibility="Collapsed" />
                     <Button x:Name="SaveButton"
                             HorizontalAlignment="Right" VerticalAlignment="Center"
                             Width="120" Height="32"
