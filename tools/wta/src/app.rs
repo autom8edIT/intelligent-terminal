@@ -4413,7 +4413,8 @@ impl App {
         // Match the layout reserve used by recommendations: input (3) + a
         // minimal chat area (3) + the nav/hint row (1).
         let ceiling = self.terminal_rows.saturating_sub(7);
-        card_h.min(ceiling)
+        let panel_h = card_h.min(ceiling);
+        if panel_h < 4 { 0 } else { panel_h }
     }
 
     /// Recompute `rec_scroll.max` from the current card heights and the
