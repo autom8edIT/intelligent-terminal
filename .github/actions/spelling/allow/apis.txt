@@ -39,6 +39,7 @@ environstrings
 EXACTSIZEONLY
 EXPCMDFLAGS
 EXPCMDSTATE
+ffi
 filetime
 FILTERSPEC
 fina
@@ -185,6 +186,7 @@ UOI
 UPDATEINIFILE
 urlmon
 USEROBJECTFLAGS
+usize
 Vcpp
 Viewbox
 virtualalloc
