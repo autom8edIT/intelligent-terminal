@@ -81,7 +81,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else {
         0
     };
-    let perm_panel_h = app.permission_panel_height();
+    let perm_panel_h = app.permission_panel_height(main_area.width);
     let input_height = {
         let tab = app.current_tab();
         input::input_height(&tab.input, tab.cursor_pos, main_area.width)
@@ -213,7 +213,7 @@ pub fn input_cursor_position(app: &App, area: Rect) -> Option<Position> {
     } else {
         Constraint::Length(0)
     };
-    let perm_height = Constraint::Length(app.permission_panel_height());
+    let perm_height = Constraint::Length(app.permission_panel_height(main_area.width));
     let input_height = {
         let tab = app.current_tab();
         input::input_height(&tab.input, tab.cursor_pos, main_area.width)

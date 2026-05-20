@@ -4409,9 +4409,14 @@ impl App {
     /// terminal is so short that even the minimum drawable shell (4) won't
     /// fit, return 0 so layout doesn't reserve unrenderable rows (the card
     /// shell bails out below 4 in card.rs).
-    pub fn permission_panel_height(&self) -> u16 {
+    ///
+    /// `panel_width` must be the actual render width the card will see (i.e.
+    /// `main_area.width` after debug-panel split), not `terminal_cols`.
+    /// Passing the full terminal width would under-count wrap rows when the
+    /// debug panel is visible and clip the description.
+    pub fn permission_panel_height(&self, panel_width: u16) -> u16 {
         let Some(perm) = self.current_tab().permission.as_ref() else { return 0 };
-        let card_h = permission_card_height(perm, self.terminal_cols) as u16;
+        let card_h = permission_card_height(perm, panel_width) as u16;
         let ceiling = self.terminal_rows.saturating_sub(3);
         let h = card_h.min(ceiling);
         if h < 4 { 0 } else { h }
