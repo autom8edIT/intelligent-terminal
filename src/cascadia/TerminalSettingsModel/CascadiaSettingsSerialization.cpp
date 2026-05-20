@@ -1949,4 +1949,71 @@ void CascadiaSettings::LogSettingChanges(bool isJsonLoad) const
                               TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
         }
     }
+
+    // ── Dedicated Intelligent Terminal telemetry ──
+    // Census-style events that report the *value* of AI-related settings.
+    // The generic JsonSettingsChanged / UISettingsChanged events above only
+    // record setting keys; these additional events let the pipeline know
+    // which agent provider / feature value each device has configured.
+    {
+        // Sanitize agent IDs: known product names are logged as-is;
+        // custom agent IDs may contain user file paths or commands,
+        // so we bucket those as "custom".
+        static const auto sanitizeProviderId = [](const winrt::hstring& id) -> std::string {
+            if (id == L"copilot" || id == L"claude" || id == L"codex" || id == L"gemini")
+            {
+                return winrt::to_string(id);
+            }
+            return "custom";
+        };
+
+        if (changes.contains("global.acpAgent"))
+        {
+            const auto sanitized = sanitizeProviderId(_globals->AcpAgent());
+            TraceLoggingWrite(g_hSettingsModelProvider,
+                              "AgentProviderConfigured",
+                              TraceLoggingDescription("Event emitted when the user has an agent provider configured"),
+                              TraceLoggingValue("AcpAgent", "ProviderType", "Which provider setting (AcpAgent or DelegateAgent)"),
+                              TraceLoggingValue(sanitized.c_str(), "ProviderId", "The agent provider ID"),
+                              TraceLoggingValue(branding, "Branding"),
+                              TraceLoggingValue(distribution, "Distribution"),
+                              TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
+                              TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
+        }
+        if (changes.contains("global.delegateAgent"))
+        {
+            const auto sanitized = sanitizeProviderId(_globals->DelegateAgent());
+            TraceLoggingWrite(g_hSettingsModelProvider,
+                              "AgentProviderConfigured",
+                              TraceLoggingDescription("Event emitted when the user has an agent provider configured"),
+                              TraceLoggingValue("DelegateAgent", "ProviderType", "Which provider setting (AcpAgent or DelegateAgent)"),
+                              TraceLoggingValue(sanitized.c_str(), "ProviderId", "The agent provider ID"),
+                              TraceLoggingValue(branding, "Branding"),
+                              TraceLoggingValue(distribution, "Distribution"),
+                              TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
+                              TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
+        }
+        if (changes.contains("global.autoFixEnabled"))
+        {
+            TraceLoggingWrite(g_hSettingsModelProvider,
+                              "IntelligentFeatureConfigured",
+                              TraceLoggingDescription("Event emitted when the user has an intelligent terminal feature configured"),
+                              TraceLoggingValue("AutoFix", "FeatureName", "The name of the feature"),
+                              TraceLoggingValue(branding, "Branding"),
+                              TraceLoggingValue(distribution, "Distribution"),
+                              TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
+                              TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
+        }
+        if (changes.contains("global.agentPanePosition"))
+        {
+            TraceLoggingWrite(g_hSettingsModelProvider,
+                              "IntelligentFeatureConfigured",
+                              TraceLoggingDescription("Event emitted when the user has an intelligent terminal feature configured"),
+                              TraceLoggingValue("AgentPanePosition", "FeatureName", "The name of the feature"),
+                              TraceLoggingValue(branding, "Branding"),
+                              TraceLoggingValue(distribution, "Distribution"),
+                              TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
+                              TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
+        }
+    }
 }

@@ -1683,7 +1683,7 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        _OpenOrReuseAgentPane(L"");
+        _OpenOrReuseAgentPane(L"", false, L"Action");
         _UpdateBottomBarState();
         args.Handled(true);
     }
@@ -1732,7 +1732,7 @@ namespace winrt::TerminalApp::implementation
         // view and we want to switch it. Both go through the existing
         // intoSessionsView=true code path, which sets _agentSessionsViewActive
         // = true on success.
-        _OpenOrReuseAgentPane(L"", /*intoSessionsView*/ true);
+        _OpenOrReuseAgentPane(L"", /*intoSessionsView*/ true, L"SessionsAction");
         _UpdateBottomBarState();
         args.Handled(true);
     }
@@ -1744,7 +1744,7 @@ namespace winrt::TerminalApp::implementation
         // does nothing, so the chord can fall through to other consumers.
         if (_diagnostics.autofixState == AutofixState::Armed)
         {
-            _TriggerAutofix();
+            _TriggerAutofix(L"Hotkey");
             args.Handled(true);
         }
     }

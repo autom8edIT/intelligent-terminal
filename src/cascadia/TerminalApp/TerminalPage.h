@@ -349,7 +349,7 @@ namespace winrt::TerminalApp::implementation
         void _DiagnosticsButtonOnClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
         void _SessionToggleButtonOnClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
         void _UpdateBottomBarState();
-        void _TriggerAutofix();
+        void _TriggerAutofix(const wchar_t* triggerSource);
 
         // Hot-reload of agent/model settings. Snapshot is captured on first
         // SetSettings and after every rebuild; a diff drives teardown/rebuild
@@ -661,7 +661,7 @@ namespace winrt::TerminalApp::implementation
         // received the handles).
         void _AttachAgentPanePipeServer(wil::unique_handle wtRead,
                                         wil::unique_handle wtWrite);
-        void _OpenOrReuseAgentPane(const winrt::hstring& prompt, bool intoSessionsView = false);
+        void _OpenOrReuseAgentPane(const winrt::hstring& prompt, bool intoSessionsView, const wchar_t* triggerSource);
         void _FocusAgentPane();
         void _BroadcastAgentSetView(std::string_view view);
         void _RepositionAgentPanes();
