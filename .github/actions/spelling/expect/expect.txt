@@ -1907,6 +1907,7 @@ WNDCLASSW
 Wndproc
 wordiswrapped
 workarea
+worktree
 WOWARM
 WOWx
 wparam
@@ -1928,6 +1929,7 @@ WSLENV
 wstr
 wstrings
 wsz
+wta
 wtd
 WTEXT
 WTo
