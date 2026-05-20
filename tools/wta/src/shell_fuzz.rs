@@ -56,12 +56,18 @@ fn append_wt_commandline_arg(cmdline: &mut String, value: &str) {
 }
 
 /// Build a commandline string from a command and its arguments for WT pane
-/// creation. This is the string passed to `create_tab`'s `commandline` param.
+/// creation. This is the string passed to `create_tab`'s `commandline` param,
+/// which WT parses with `CommandLineToArgvW` before handing off to
+/// `CreateProcess` — there is no shell in this pipeline, so metacharacters
+/// like `&` / `|` / `$` are not special.
 ///
 /// # Security note
 ///
-/// This function is a fuzz target — the quoting must be robust against
-/// agent-supplied strings containing shell metacharacters.
+/// The threat model here is **argument injection**: an agent-supplied
+/// substring must not be able to escape its argument boundary and inject
+/// additional argv entries. Robustness against the `CommandLineToArgvW`
+/// quoting rules (whitespace, `"`, runs of `\`) is what this function —
+/// and its fuzz target — has to get right.
 pub fn build_wt_commandline(command: &str, args: &[String]) -> String {
     let mut cmdline = String::new();
     append_wt_commandline_program(&mut cmdline, command);
