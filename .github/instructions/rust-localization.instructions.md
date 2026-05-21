@@ -41,14 +41,30 @@ When adding new strings:
 
 ## Non-Translatable Token Rules
 
-Since YAML has no structured comment system like `.resw`, we use `#` comments with `{Locked}` syntax borrowed from .resw:
+Since YAML has no structured comment system like `.resw`, we use `#` comments with `{Locked}` syntax borrowed from .resw. There are three scope levels:
+
+### File-level (top of file, applies to everything)
+
+Place at the very top of the file, before any section headers. These define constraints that apply to **every string** in the file.
+
+```yaml
+# ── File-level locks ─────────────────────────────────────────────────────────
+# {Locked=qps-ploc,qps-ploca,qps-plocm} "Intelligent Terminal" is the product name
+# "Agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human representative or proxy
+
+# ── Setup screen titles ─────────────────────────────────────────────────────
+setup.title.first_run: "Welcome to Intelligent Terminal!"
+```
 
 ### Section-level (applies to all strings in a group)
 
+Place immediately before a group of related strings. Applies until the next section comment.
+
 ```yaml
-# {Locked="Copilot","CLI"} - these tokens must stay in English
-agent.status.connected: "Connected to Copilot CLI"
-agent.status.disconnected: "Disconnected from agent"
+# ── Hooks status output ─────────────────────────────────────────────────────
+# {Locked="CLI","PATH","wt-agent-hooks","wta"} - tool/CLI names, env vars
+hooks.cli_not_on_path: "✗ CLI not on PATH"
+hooks.installed: "✓ installed"
 ```
 
 ### Line-level (applies to one specific string)
@@ -59,6 +75,7 @@ hint.confirm: "Press Enter to confirm"  # {Locked="Enter"} keyboard key name
 
 ### Rules
 
+- **File-level** `{Locked}` comment → applies to all strings in the entire file
 - **Section-level** `{Locked}` comment → applies to all strings below until the next section comment
 - **Line-level** `{Locked}` comment → applies only to that line
 - Multiple locked tokens: `# {Locked="Copilot","CLI"}`
@@ -66,6 +83,53 @@ hint.confirm: "Press Enter to confirm"  # {Locked="Enter"} keyboard key name
 - Pseudo-locale-only lock (real locales translate, pseudo-locales keep English): `# {Locked=qps-ploc,qps-ploca,qps-plocm}`
   - Use this for product names like "Intelligent Terminal" that real locales should translate but pseudo-locales should not mangle. This mirrors the `.resw` `{Locked=qps-ploc,qps-ploca,qps-plocm}` convention.
 - **Translation rule:** Locked tokens must appear **verbatim** (in English) in all locale files. This matches the `.resw` `{Locked}` convention — see `.github/instructions/localization.instructions.md` for the full list of non-translatable terms.
+
+## Context Comments for Ambiguous Strings (REQUIRED)
+
+Short strings (1–2 words) and strings with unclear context **must** have a comment explaining when and where the label is shown to the user. Without context, translators will guess — and guesses lead to mistranslations that can be politically embarrassing or internationally offensive.
+
+### When is a context comment required?
+
+A context comment is **mandatory** when ANY of these are true:
+
+- The value is **1–2 words** and is not `{Locked}` (e.g., `"installed"`, `"Switch agent"`)
+- The value is **ambiguous out of context** — the same word means different things in different domains (e.g., "Agent" = AI agent vs. spy vs. broker vs. proxy)
+- The value contains **domain-specific jargon** that a general translator may not recognize (e.g., `"bundle source"`, `"marketplace path stale"`)
+- The value contains **UI actions** that need spatial/interaction context (e.g., is "Switch" a noun label or a verb command?)
+
+### Format
+
+```yaml
+hooks.installed: "✓ installed"  # Shown when a shell hook is successfully installed
+action.retry: "Retry"  # Button label — retry a failed AI agent connection
+status.stale: "stale"  # Badge in hooks-status table when the install path is outdated
+```
+
+### ⚠️ Mistranslation Risk Table
+
+When writing or reviewing strings, assess the **mistranslation risk** if context is missing. Use this table to prioritize adding comments:
+
+| Risk level | Confidence the translation will go wrong | When to worry | Examples |
+|------------|------------------------------------------|---------------|----------|
+| 🔴 **Critical** | >90% — the word has a dominant meaning in most languages that is **wrong** for this context | The word is a false friend, or its primary meaning is political, military, or socially sensitive | "Agent" (= spy in many languages), "Execute" (= kill), "Abort" (= politically charged in some cultures), "Master/Slave" (= offensive) |
+| 🟠 **High** | 70–90% — the word is ambiguous and translators will likely pick the **more common but wrong** sense | The word has 2+ common meanings and no surrounding sentence to disambiguate | "Terminal" (= airport terminal vs. CLI), "Host" (= party host vs. server), "Shell" (= seashell vs. command shell), "Port" (= harbor vs. network port) |
+| 🟡 **Medium** | 40–70% — the word is technical jargon that a **general translator** may not know | Domain-specific terms that don't appear in everyday language | "Hook" (= fishing hook vs. shell hook), "Bundle" (= package vs. software bundle), "Pane" (= window pane vs. UI pane) |
+| 🟢 **Low** | <40% — the word is clear enough or already a global loanword | Common tech terms that most translators handle correctly | "Error", "OK", "Settings", "Profile" |
+
+**Rule of thumb:** If a string scores 🔴 or 🟠, a missing context comment is a **bug** — treat it the same as a missing `{Locked}` directive. Fix it before shipping.
+
+### Real-world examples of what goes wrong
+
+| String | Missing context | What happens |
+|--------|----------------|--------------|
+| `"Agent not found"` | No comment explaining AI agent | zh-TW translated as "proxy not found" (代理), el-GR as "spy not found" (πράκτορας) |
+| `"Switch agent"` | No comment explaining it's a UI action | Could be translated as a noun phrase ("agent switch/toggle device") instead of a verb command |
+| `"installed"` | No comment explaining it's a hook status | Could be translated as past tense ("was installed") vs. adjective state ("currently installed") |
+| `"stale"` | No comment explaining marketplace path | Could be translated as "old bread" or "not fresh" instead of "outdated" in tech sense |
+
+### Applying to existing strings
+
+When adding new strings or reviewing existing ones, scan for any that lack comments and score 🟡 or above. Add context comments proactively — it is far cheaper to write a 10-word comment now than to debug a politically embarrassing mistranslation across 85+ locales later.
 
 ## Terminology Alignment
 
