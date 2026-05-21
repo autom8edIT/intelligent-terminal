@@ -1,5 +1,5 @@
 # Setup screen titles
 setup.title.first_run: "[¡¡ Ŵẽĺçømẽ ŧø Intelligent Terminal! ¡¡]"
-setup.title.agent_missing: "[¡¡ Åğẽñŧ ñøŧ ƒøůñđ ¡¡]"
-setup.title.agent_error: "[¡¡ Åğẽñŧ çøññẽçŧįøñ ƒåįĺẽđ ¡¡]"
-setup.title.switch_agent: "[¡¡ Ŝŵįŧçĥ åğẽñŧ ¡¡]"
+setup.title.agent_missing: "[¡¡ Agent ñøŧ ƒøůñđ ¡¡]"
+setup.title.agent_error: "[¡¡ Agent çøññẽçŧįøñ ƒåįĺẽđ ¡¡]"
+setup.title.switch_agent: "[¡¡ Ŝŵįŧçĥ agent ¡¡]"
