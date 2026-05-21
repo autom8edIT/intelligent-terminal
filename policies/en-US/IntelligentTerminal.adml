@@ -52,7 +52,7 @@ If you enable this policy or do not configure it, users can add custom agent com
 
 If you enable this policy or do not configure it, users can toggle auto-fix in settings. If you disable this policy, auto-fix is forced off regardless of the user setting.</string>
       <string id="AllowAgentSessionHooks">Allow Agent Session Hooks</string>
-      <string id="AllowAgentSessionHooksText">Controls whether agent session tracking hooks can be installed in Intelligent Terminal. Hooks integrate with agent CLIs (GitHub Copilot, Claude, Gemini) to track sessions across tools.
+      <string id="AllowAgentSessionHooksText">Controls whether agent session tracking hooks can be installed in Intelligent Terminal. Hooks integrate with agents (GitHub Copilot, Claude, Gemini) to track sessions across tools.
 
 If you enable this policy or do not configure it, users can install and manage agent hooks from the Settings UI. If you disable this policy, the Install hooks button is disabled and users cannot install or modify hooks.</string>
     </stringTable>

@@ -18,7 +18,8 @@
 // Keep the two lists here so all consumers stay in sync. Custom agents
 // configured by the user are appended separately by each consumer.
 //
-// Display names are loaded from .resw resources for localization.
+// Display names are English fallbacks; UI consumers should prefer
+// localized names from .resw resources (e.g. "AgentName_Copilot").
 // GPO-filtered variants are available via FilteredAcpAgents() /
 // FilteredDelegateAgents() — always prefer these over the raw arrays.
 namespace Microsoft::Terminal::Settings::Model::AgentRegistry
@@ -61,12 +62,6 @@ namespace Microsoft::Terminal::Settings::Model::AgentRegistry
     template<typename ArrayT>
     inline std::vector<BuiltinAgent> _FilterAgents(const ArrayT& agents)
     {
-        // Each DLL has its own inline-static policy cache. Re-read the
-        // registry every time so that the calling DLL's cache is always
-        // fresh — the registry read is sub-millisecond and avoids the
-        // "Editor DLL never called Reload()" class of bugs.
-        AgentPolicy::Reload();
-
         std::vector<BuiltinAgent> result;
         for (const auto& a : agents)
         {

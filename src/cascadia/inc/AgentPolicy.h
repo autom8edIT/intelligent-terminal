@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <memory>
 #include <set>
 #include <optional>
 #include <string>
@@ -66,10 +68,11 @@ namespace Microsoft::Terminal::Settings::Model::AgentPolicy
 
     inline constexpr wchar_t PolicyRegKey[] = LR"(Software\Policies\Microsoft\IntelligentTerminal)";
 
-    // Per-DLL cached snapshot, protected by a mutex.
+    // Per-DLL cached snapshot. The shared_ptr is swapped atomically so
+    // readers never need to take the mutex — only Reload() locks.
     inline std::mutex s_policyMutex;
-    inline PolicySnapshot s_snapshot;
-    inline bool s_loaded{ false }; // true once Reload() has run in this DLL
+    inline std::shared_ptr<const PolicySnapshot> s_snapshot;
+    inline std::atomic_bool s_loaded{ false }; // true once Reload() has run in this DLL
 
     inline std::optional<DWORD> _ReadDwordPolicy(const wchar_t* valueName)
     {
@@ -130,22 +133,24 @@ namespace Microsoft::Terminal::Settings::Model::AgentPolicy
     // Called once at startup and again on settings reload.
     inline void Reload()
     {
-        PolicySnapshot snap;
-        snap.allowedAgents = _ReadMultiSzPolicy(L"AllowedAgents");
-        snap.customAgents = _DwordToPolicyState(_ReadDwordPolicy(L"AllowCustomAgents"));
-        snap.autoFix = _DwordToPolicyState(_ReadDwordPolicy(L"AllowAutoFix"));
-        snap.agentSessionHooks = _DwordToPolicyState(_ReadDwordPolicy(L"AllowAgentSessionHooks"));
+        auto snap = std::make_shared<PolicySnapshot>();
+        snap->allowedAgents = _ReadMultiSzPolicy(L"AllowedAgents");
+        snap->customAgents = _DwordToPolicyState(_ReadDwordPolicy(L"AllowCustomAgents"));
+        snap->autoFix = _DwordToPolicyState(_ReadDwordPolicy(L"AllowAutoFix"));
+        snap->agentSessionHooks = _DwordToPolicyState(_ReadDwordPolicy(L"AllowAgentSessionHooks"));
 
         {
             std::lock_guard lock{ s_policyMutex };
             s_snapshot = std::move(snap);
-            s_loaded = true;
         }
+        s_loaded.store(true, std::memory_order_release);
     }
 
-    inline PolicySnapshot _GetSnapshot()
+    // Return a thread-safe, immutable view of the cached policy.
+    // No deep copy — callers share the same const snapshot.
+    inline std::shared_ptr<const PolicySnapshot> _GetSnapshot()
     {
-        if (!s_loaded)
+        if (!s_loaded.load(std::memory_order_acquire))
         {
             // Lazy-init: this DLL's cache was never populated. Read the
             // registry now so callers always get real policy data even if
@@ -160,52 +165,52 @@ namespace Microsoft::Terminal::Settings::Model::AgentPolicy
     inline bool IsAgentAllowed(std::wstring_view agentId)
     {
         const auto snap = _GetSnapshot();
-        if (!snap.allowedAgents.has_value())
+        if (!snap->allowedAgents.has_value())
         {
             return true; // Not configured — all allowed
         }
-        return snap.allowedAgents->find(agentId) != snap.allowedAgents->end();
+        return snap->allowedAgents->find(agentId) != snap->allowedAgents->end();
     }
 
     inline bool IsCustomAgentAllowed()
     {
-        return _GetSnapshot().customAgents != PolicyState::Blocked;
+        return _GetSnapshot()->customAgents != PolicyState::Blocked;
     }
 
     inline bool IsAutoFixAllowed()
     {
-        return _GetSnapshot().autoFix != PolicyState::Blocked;
+        return _GetSnapshot()->autoFix != PolicyState::Blocked;
     }
 
     inline bool IsAgentSessionHooksAllowed()
     {
-        return _GetSnapshot().agentSessionHooks != PolicyState::Blocked;
+        return _GetSnapshot()->agentSessionHooks != PolicyState::Blocked;
     }
 
     // Expose raw policy state for UI to distinguish "not configured" from "allowed".
     inline PolicyState GetCustomAgentPolicy()
     {
-        return _GetSnapshot().customAgents;
+        return _GetSnapshot()->customAgents;
     }
 
     inline PolicyState GetAutoFixPolicy()
     {
-        return _GetSnapshot().autoFix;
+        return _GetSnapshot()->autoFix;
     }
 
     inline PolicyState GetAgentSessionHooksPolicy()
     {
-        return _GetSnapshot().agentSessionHooks;
+        return _GetSnapshot()->agentSessionHooks;
     }
 
     // Whether AllowedAgents policy is configured at all (for UI lock indicators).
     inline bool IsAllowedAgentsPolicyConfigured()
     {
-        return _GetSnapshot().allowedAgents.has_value();
+        return _GetSnapshot()->allowedAgents.has_value();
     }
 
-    // Return the current snapshot (for testing / advanced consumers).
-    inline PolicySnapshot GetSnapshot()
+    // Return the current snapshot (for advanced consumers).
+    inline std::shared_ptr<const PolicySnapshot> GetSnapshot()
     {
         return _GetSnapshot();
     }
