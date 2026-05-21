@@ -167,7 +167,8 @@
   </data>
   <data name="AppDescription" xml:space="preserve">
     <value>AI-native terminal — agents can understand, fix, and automate terminal workflows</value>
-  <comment>"agents" here means AI agents (Copilot, Claude, Gemini), not human representatives. "terminal" means a command-line terminal application, not an airport terminal. This is the app store description shown to users.</comment></data>
+    <comment>"agents" here means AI agents (Copilot, Claude, Gemini), not human representatives. "terminal" means a command-line terminal application, not an airport terminal. This is the app store description shown to users.</comment>
+  </data>
   <data name="AppDescriptionDev" xml:space="preserve">
     <value>AI-native terminal — agents can understand, fix, and automate terminal workflows</value>
     <comment>{Locked} The dev build will never be seen in multiple languages</comment>
@@ -178,7 +179,8 @@
   </data>
   <data name="AppDescriptionPre" xml:space="preserve">
     <value>Windows Terminal with a preview of upcoming features</value>
-  <comment>"Terminal" means a command-line terminal application. "Preview" means a pre-release version with upcoming features. This is the app store description for the Preview build.</comment></data>
+    <comment>"Terminal" means a command-line terminal application. "Preview" means a pre-release version with upcoming features. This is the app store description for the Preview build.</comment>
+  </data>
   <data name="ShellExtension_OpenInTerminalMenuItem_Dev" xml:space="preserve">
     <value>Open in Intelligent Terminal</value>
     <comment>{Locked} The dev build will never be seen in multiple languages</comment>
