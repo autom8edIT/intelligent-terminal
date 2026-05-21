@@ -86,7 +86,7 @@ hint.confirm: "Press Enter to confirm"  # {Locked="Enter"} keyboard key name
 
 ## Context Comments for Ambiguous Strings (REQUIRED)
 
-Short strings (1–2 words) and strings with unclear context **must** have a comment explaining when and where the label is shown to the user. Without context, translators will guess — and guesses lead to mistranslations that can be politically embarrassing or internationally offensive.
+Short strings (1–2 words) and strings with unclear context **must** have a comment explaining when and where the label is shown to the user. Without context, translators will guess — and guesses lead to translation errors that can be politically embarrassing or internationally offensive.
 
 ### When is a context comment required?
 
@@ -129,7 +129,7 @@ When writing or reviewing strings, assess the **mistranslation risk** if context
 
 ### Applying to existing strings
 
-When adding new strings or reviewing existing ones, scan for any that lack comments and score 🟡 or above. Add context comments proactively — it is far cheaper to write a 10-word comment now than to debug a politically embarrassing mistranslation across 85+ locales later.
+When adding new strings or reviewing existing ones, scan for any that lack comments and score 🟡 or above. Add context comments early — it is far cheaper to write a 10-word comment now than to debug a politically embarrassing translation error across 85+ locales later.
 
 ## Terminology Alignment
 
