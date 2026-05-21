@@ -1011,6 +1011,18 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
     <comment>{Locked="CLI","PATH","copilot","gemini"} 
 In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
+  <!-- ═══ GPO Policy Notices ═══ -->
+  <data name="AgentBlockedByPolicyTitle" xml:space="preserve">
+    <value>AI agents are restricted</value>
+  <comment>Title shown when Group Policy blocks the user from opening the agent pane. "agent" refers to an AI agent.</comment></data>
+  <data name="AgentBlockedByPolicySubtitle" xml:space="preserve">
+    <value>Your organization's policy does not allow any AI agents. Contact your IT administrator for assistance.</value>
+    <comment>Subtitle shown when Group Policy blocks all AI agents from running.</comment>
+  </data>
+  <data name="FreOverlay_PolicyLocked" xml:space="preserve">
+    <value>This setting is managed by your organization.</value>
+    <comment>Shown under FRE controls when a Group Policy restricts the option.</comment>
+  </data>
   <!-- ═══ FRE Welcome Page ═══ -->
   <data name="FreOverlay_WelcomeTitle.Text" xml:space="preserve">
     <value>Welcome to Intelligent Terminal</value>

@@ -17,6 +17,7 @@
 #include "../../types/inc/ColorFix.hpp"
 #include "../../types/inc/utils.hpp"
 #include "../inc/AgentRegistry.h"
+#include "../inc/AgentPolicy.h"
 #include "../TerminalSettingsAppAdapterLib/TerminalSettings.h"
 #include "App.h"
 #include "DebugTapConnection.h"
@@ -50,6 +51,7 @@ using namespace winrt::Windows::UI::Text;
 using namespace winrt::Windows::UI::Xaml::Controls;
 using namespace winrt::Windows::UI::Xaml;
 using namespace winrt::Windows::UI::Xaml::Media;
+namespace AgentPolicy = ::Microsoft::Terminal::Settings::Model::AgentPolicy;
 using namespace ::TerminalApp;
 using namespace ::Microsoft::Console;
 using namespace ::Microsoft::Terminal::Core;
@@ -721,21 +723,23 @@ namespace winrt::TerminalApp::implementation
     {
         wchar_t buffer[MAX_PATH];
 
-        // Prefer GitHub Copilot CLI in ACP mode (JSON-RPC over stdio).
-        // The --acp flag starts the agent as an ACP server; stdio is the
-        // default transport.
-        if (SearchPathW(nullptr, L"copilot", L".exe", MAX_PATH, buffer, nullptr) > 0)
+        // Walk the policy-filtered agent list so we never auto-detect an
+        // agent that is blocked by GPO.  FilteredAcpAgents() returns only
+        // agents whose id passes AgentPolicy::IsAgentAllowed(); when no
+        // AllowedAgents policy is configured it returns all built-in agents.
+        namespace Reg = ::Microsoft::Terminal::Settings::Model::AgentRegistry;
+        for (const auto& agent : Reg::FilteredAcpAgents())
         {
-            return winrt::hstring{ L"copilot --acp --stdio" };
-        }
-
-        // Fall back to other known agent CLIs
-        static constexpr std::wstring_view fallbackClis[] = { L"claude" };
-        for (const auto& cli : fallbackClis)
-        {
-            if (SearchPathW(nullptr, cli.data(), L".exe", MAX_PATH, buffer, nullptr) > 0)
+            if (SearchPathW(nullptr, agent.id.data(), L".exe", MAX_PATH, buffer, nullptr) > 0)
             {
-                return winrt::hstring{ cli };
+                // Return the full command line for this agent (same logic
+                // as _ResolveEffectiveAgentCliPath for known built-in ids).
+                const auto id = agent.id;
+                if (id == L"copilot")
+                {
+                    return winrt::hstring{ L"copilot --acp --stdio" };
+                }
+                return winrt::hstring{ id };
             }
         }
         return winrt::hstring{};
@@ -966,7 +970,19 @@ namespace winrt::TerminalApp::implementation
         const winrt::Microsoft::Terminal::Settings::Model::GlobalAppSettings& globals,
         const std::function<winrt::hstring()>& detectFallback)
     {
-        const auto acpAgent = globals.AcpAgent();
+        // Use the policy-aware getter — returns empty if the selected agent
+        // is blocked by GPO, ensuring we never launch a disallowed agent.
+        const auto acpAgent = globals.EffectiveAcpAgent();
+        if (acpAgent.empty())
+        {
+            // The user's selection is blocked or absent. Try auto-detection
+            // which will itself only pick a policy-allowed agent.
+            if (detectFallback)
+            {
+                return detectFallback();
+            }
+            return winrt::hstring{};
+        }
 
         // Custom agents: use the stored custom command directly.
         if (_IsCustomAgentId(acpAgent))
@@ -1024,7 +1040,13 @@ namespace winrt::TerminalApp::implementation
     static winrt::hstring _ResolveEffectiveDelegateAgent(
         const winrt::Microsoft::Terminal::Settings::Model::GlobalAppSettings& globals)
     {
-        const auto delegateAgent = globals.DelegateAgent();
+        // Use the policy-aware getter — returns empty if the selected agent
+        // is blocked by GPO.
+        const auto delegateAgent = globals.EffectiveDelegateAgent();
+        if (delegateAgent.empty())
+        {
+            return winrt::hstring{};
+        }
         // For custom agents, pass the full command so WTA can launch it.
         if (_IsCustomAgentId(delegateAgent))
         {
@@ -1049,6 +1071,20 @@ namespace winrt::TerminalApp::implementation
         // Resolve agent CLI from structured settings (acpAgent/acpModel).
         const auto& globals = _settings.GlobalSettings();
         const auto agentCliPath = _ResolveEffectiveAgentCliPath(globals, [this]() { return _DetectAgentCli(); });
+
+        // If no agent resolved and policy is the reason, show a policy message and bail.
+        if (agentCliPath.empty() && AgentPolicy::IsAllowedAgentsPolicyConfigured())
+        {
+            _agentPaneLog("ABORT: delegation blocked by GPO — no agents allowed");
+            if (auto tip{ FindName(L"WindowIdToast").try_as<MUX::Controls::TeachingTip>() })
+            {
+                _UpdateTeachingTipTheme(tip.try_as<winrt::Windows::UI::Xaml::FrameworkElement>());
+                tip.Title(RS_(L"AgentBlockedByPolicyTitle"));
+                tip.Subtitle(RS_(L"AgentBlockedByPolicySubtitle"));
+                tip.IsOpen(true);
+            }
+            return;
+        }
 
         // Helper: escape and quote an argument for the command line.
         auto quoteArg = [](std::wstring_view arg) -> std::wstring {
@@ -1777,6 +1813,11 @@ namespace winrt::TerminalApp::implementation
         }
 
         const auto agentCliPath = _ResolveEffectiveAgentCliPath(globals, [this]() { return _DetectAgentCli(); });
+        if (agentCliPath.empty() && AgentPolicy::IsAllowedAgentsPolicyConfigured())
+        {
+            _agentPaneLog("_AutoCreateHiddenAgentPane: ABORT — all agents blocked by GPO policy");
+            return;
+        }
         if (!agentCliPath.empty())
         {
             std::wstring s{ agentCliPath };
@@ -1788,7 +1829,9 @@ namespace winrt::TerminalApp::implementation
         // See `_OpenOrReuseAgentPane` for the rationale: wta needs the
         // canonical `acpAgent` setting value (not the expanded command
         // line) to drive the session-management view's CLI filter.
-        if (const auto acpAgent = globals.AcpAgent(); !acpAgent.empty())
+        // Use EffectiveAcpAgent so the id matches the actual agent launched
+        // (a fallback agent when the configured one is policy-blocked).
+        if (const auto acpAgent = globals.EffectiveAcpAgent(); !acpAgent.empty())
         {
             std::wstring s{ acpAgent };
             for (size_t pos = 0; (pos = s.find(L'"', pos)) != std::wstring::npos; pos += 2)
@@ -1828,11 +1871,10 @@ namespace winrt::TerminalApp::implementation
             cmdline += fmt::format(FMT_COMPILE(L" --acp-model \"{}\""), s);
         }
 
-        if (!globals.AutoFixEnabled())
+        if (!globals.EffectiveAutoFixEnabled())
         {
             cmdline += L" --no-autofix";
         }
-
         if (const auto lang = globals.Language(); !lang.empty())
         {
             std::wstring langStr{ lang };
@@ -2175,7 +2217,23 @@ namespace winrt::TerminalApp::implementation
             cmdline = std::wstring{ wtaPath };
 
             const auto agentCliPath = _ResolveEffectiveAgentCliPath(globals, [this]() { return _DetectAgentCli(); });
-            if (!agentCliPath.empty())
+            if (agentCliPath.empty())
+            {
+                // No agent resolved. If GPO is the reason, show a policy-specific message.
+                if (AgentPolicy::IsAllowedAgentsPolicyConfigured())
+                {
+                    _agentPaneLog("EARLY RETURN: all agents blocked by GPO policy");
+                    if (auto tip{ FindName(L"WindowIdToast").try_as<MUX::Controls::TeachingTip>() })
+                    {
+                        _UpdateTeachingTipTheme(tip.try_as<winrt::Windows::UI::Xaml::FrameworkElement>());
+                        tip.Title(RS_(L"AgentBlockedByPolicyTitle"));
+                        tip.Subtitle(RS_(L"AgentBlockedByPolicySubtitle"));
+                        tip.IsOpen(true);
+                    }
+                    return;
+                }
+            }
+            else
             {
                 std::wstring agentStr{ agentCliPath };
                 for (size_t pos = 0; (pos = agentStr.find(L'"', pos)) != std::wstring::npos; pos += 2)
@@ -2190,7 +2248,8 @@ namespace winrt::TerminalApp::implementation
             // `--agent` command line is fragile (adapter launches expand
             // to "npx -y …" and lose the agent's name). Passing it through
             // here keeps a single source of truth.
-            if (const auto acpAgent = globals.AcpAgent(); !acpAgent.empty())
+            // Use EffectiveAcpAgent so the id matches the actual agent launched.
+            if (const auto acpAgent = globals.EffectiveAcpAgent(); !acpAgent.empty())
             {
                 std::wstring idStr{ acpAgent };
                 for (size_t pos = 0; (pos = idStr.find(L'"', pos)) != std::wstring::npos; pos += 2)
@@ -2216,7 +2275,7 @@ namespace winrt::TerminalApp::implementation
                 cmdline += fmt::format(FMT_COMPILE(L" --delegate-model \"{}\""), modelStr);
             }
 
-            if (!globals.AutoFixEnabled())
+            if (!globals.EffectiveAutoFixEnabled())
             {
                 cmdline += L" --no-autofix";
             }
@@ -2247,6 +2306,7 @@ namespace winrt::TerminalApp::implementation
             _agentPaneLog("EARLY RETURN: cmdline is empty — no AI assistant configured");
             if (auto tip{ FindName(L"WindowIdToast").try_as<MUX::Controls::TeachingTip>() })
             {
+                _UpdateTeachingTipTheme(tip.try_as<winrt::Windows::UI::Xaml::FrameworkElement>());
                 tip.Title(RS_(L"AgentNotConfiguredTitle"));
                 tip.Subtitle(RS_(L"AgentNotConfiguredSubtitle"));
                 tip.IsOpen(true);
@@ -4811,7 +4871,7 @@ namespace winrt::TerminalApp::implementation
                                 return;
 
                             // Autofix pipeline: skip forwarding if disabled at runtime.
-                            if (!page->_settings.GlobalSettings().AutoFixEnabled())
+                            if (!page->_settings.GlobalSettings().EffectiveAutoFixEnabled())
                                 return;
 
                             const auto sessionIdStr = page->_FindSessionIdForControl(term2);

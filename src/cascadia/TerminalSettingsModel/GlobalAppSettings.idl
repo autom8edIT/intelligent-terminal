@@ -131,6 +131,20 @@ namespace Microsoft.Terminal.Settings.Model
         INHERITABLE_SETTING(String, AiConfirmationCreateOps);
         INHERITABLE_SETTING(String, AiConfirmationInputOps);
 
+        // Policy-aware effective getters — return the setting value after
+        // applying GPO overrides. Consumers should prefer these over the
+        // raw INHERITABLE_SETTING properties for runtime decisions.
+        String EffectiveAcpAgent { get; };
+        String EffectiveDelegateAgent { get; };
+        Boolean EffectiveAutoFixEnabled { get; };
+
+        // Whether GPO policy is actively restricting these settings.
+        // Used by the Settings UI to grey out / lock controls.
+        Boolean IsAgentPolicyLocked { get; };
+        Boolean IsCustomAgentPolicyLocked { get; };
+        Boolean IsAutoFixPolicyLocked { get; };
+        Boolean IsAgentSessionHooksPolicyLocked { get; };
+
         Windows.Foundation.Collections.IMapView<String, ColorScheme> ColorSchemes();
         void AddColorScheme(ColorScheme scheme);
         void RemoveColorScheme(String schemeName);
