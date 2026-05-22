@@ -1,5 +1,4 @@
 # 設定畫面標題
-# {Locked="Intelligent Terminal"} - 產品名稱，請勿翻譯
 setup.title.first_run: "歡迎使用智慧型終端機！"
 setup.title.agent_missing: "找不到智慧代理"
 setup.title.agent_error: "智慧代理連線失敗"
@@ -12,8 +11,6 @@ setup.subtitle.copilot_missing: "您的智慧代理 \"%{agent}\" 尚未安裝。
 setup.subtitle.agent_missing: "您的智慧代理 \"%{agent}\" 尚未安裝。請手動重新安裝，然後重試。若要切換智慧代理，請前往設定。"
 setup.subtitle.copilot_auth: "您的智慧代理 \"%{agent}\" 需要驗證。請依照下列步驟登入。若要切換智慧代理，請前往設定。"
 setup.subtitle.agent_auth: "您的智慧代理 \"%{agent}\" 需要驗證。請透過智慧代理登入，然後重試。若要切換智慧代理，請前往設定。"
-
-# {Locked="Intelligent Terminal"}
 setup.description.fre_line1: "選擇您要在智慧型終端機中使用的預設智慧代理。您可以"
 setup.description.fre_line2: "前往設定來配置及設定您的工作區。"
 
@@ -43,7 +40,6 @@ auth.hint_footer: "  按 Enter 登入，按 Esc 返回"  # {Locked="Enter","Esc"
 
 # ── 聊天檢視 (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "思考中…"
-# {Locked="Intelligent Terminal"} - 產品名稱，請勿翻譯
 chat.welcome_title: "歡迎使用智慧型終端機！"
 chat.plan_header: "計畫："
 chat.plan_marker_completed: "[x]"  # {Locked}

@@ -159,14 +159,13 @@ hooks.not_installed: "[!! ✗ n_ot installed !!]"
 hooks.uninstall_skipped: "[!! ski_pped (CLI not on PATH) !!]"
 hooks.install_attempted: "[!! wt-_agent-hooks install attempted (idempotent). Run `wta hooks status` to inspect the result. Trace log: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log !!]"
 # ── Relative time + date formatting (src/ui/agents_view.rs) ─────────────────
-time.just_now: "just now"
-time.minute_singular: "%{count} minute ago"
-time.minutes_other: "%{count} minutes ago"
-time.hour_singular: "%{count} hour ago"
-time.hours_other: "%{count} hours ago"
-time.day_singular: "%{count} day ago"
-time.days_other: "%{count} days ago"
-
+time.just_now: "[!! just now !!]"
+time.minute_singular: "[!! %{count} minute ago !!]"
+time.minutes_other: "[!! %{count} minutes ago !!]"
+time.hour_singular: "[!! %{count} hour ago !!]"
+time.hours_other: "[!! %{count} hours ago !!]"
+time.day_singular: "[!! %{count} day ago !!]"
+time.days_other: "[!! %{count} days ago !!]"
 # ── Slash-command summaries (src/commands.rs) ─────────────────────────────
 # Command names (/help, /clear, etc.) stay English; descriptions translate.
 commands.help.summary: "[!! Show this command list !!]"

@@ -33,8 +33,13 @@ pub struct CommandSpec {
 
 impl CommandSpec {
     /// Look up the localized summary at render time.
-    pub fn summary(&self) -> String {
-        rust_i18n::t!(self.summary_key).into_owned()
+    ///
+    /// Returns `Cow<'static, str>` so the common case where rust-i18n's
+    /// store contains the key as a `&'static str` (the typical compile-
+    /// time-embedded yml) avoids an allocation on every render — the
+    /// command popup re-fetches summaries per frame and per row.
+    pub fn summary(&self) -> std::borrow::Cow<'static, str> {
+        rust_i18n::t!(self.summary_key)
     }
 }
 
