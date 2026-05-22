@@ -1020,23 +1020,23 @@
     <value>智能体不可用</value>
   </data>
   <data name="AgentNotConfiguredSubtitle" xml:space="preserve">
-    <value>找不到任何智能体。请安装智能体 CLI（例如 copilot、gemini），并确保其位于你的 PATH 中，或在“设置”>“智能体”中配置。</value>
-    <comment>{Locked="CLI","PATH","copilot","gemini"}</comment>
+    <value>找不到任何智能体。请安装智能体（例如 copilot、gemini），并确保其位于你的 PATH 中，或在"设置"&gt;"智能体"中配置。</value>
+    <comment>{Locked="PATH","copilot","gemini"}</comment>
   </data>
   <!-- ═══ FRE Welcome Page ═══ -->
   <data name="FreOverlay_WelcomeTitle.Text" xml:space="preserve">
-    <value>欢迎使用 Intelligent Terminal</value>
+    <value>欢迎使用智能终端</value>
     <comment>{Locked=qps-ploc,qps-ploca,qps-plocm} "Intelligent Terminal" is the product name.</comment>
   </data>
   <data name="FreOverlay_WelcomeSubtitlePrefix" xml:space="preserve">
     <value>设置内置助手，帮助你在工作中直接解释错误、起草命令并扫清任务阻碍。</value>
   </data>
   <data name="FreOverlay_WelcomeSubtitleLink" xml:space="preserve">
-    <value>详细了解 Intelligent Terminal</value>
+    <value>详细了解智能终端</value>
     <comment>{Locked=qps-ploc,qps-ploca,qps-plocm} "Intelligent Terminal" is the product name.</comment>
   </data>
   <data name="FreOverlay_Card1Title.Text" xml:space="preserve">
-    <value>借助内置 AI 智能体保持工作节奏</value>
+    <value>借助内置智能体保持工作节奏</value>
     <comment>In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_Card1Description.Text" xml:space="preserve">
@@ -1055,7 +1055,7 @@
   </data>
   <!-- ═══ FRE Settings Page ═══ -->
   <data name="FreOverlay_SettingsTitle.Text" xml:space="preserve">
-    <value>欢迎使用 Intelligent Terminal</value>
+    <value>欢迎使用智能终端</value>
     <comment>{Locked=qps-ploc,qps-ploca,qps-plocm} "Intelligent Terminal" is the product name.</comment>
   </data>
   <data name="FreOverlay_SettingsSubtitlePrefix" xml:space="preserve">
@@ -1069,8 +1069,8 @@
     <comment>In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_AgentDescription.Text" xml:space="preserve">
-    <value>选择在智能体窗格中使用的智能体 CLI。任何兼容的 ACP CLI 都会被自动检测。</value>
-    <comment>{Locked="CLI","ACP"}
+    <value>选择在智能体窗格中使用的智能体。任何兼容的 ACP 智能体都会被自动检测。</value>
+    <comment>{Locked="ACP"}
 In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
@@ -1082,21 +1082,20 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
     <value>自动错误检测</value>
   </data>
   <data name="FreOverlay_AutoErrorDescription.Text" xml:space="preserve">
-    <value>授予 Intelligent Terminal 访问 Shell 并自动检测错误的权限。</value>
+    <value>授予智能终端访问 Shell 并自动检测错误的权限。</value>
     <comment>{Locked=qps-ploc,qps-ploca,qps-plocm} "Intelligent Terminal" is the product name.</comment>
   </data>
   <data name="FreOverlay_SessionLabel.Text" xml:space="preserve">
     <value>会话管理</value>
   </data>
   <data name="FreOverlay_SessionDescription.Text" xml:space="preserve">
-    <value>授予 Intelligent Terminal 跟踪正在运行或活动中的智能体状态的权限。</value>
+    <value>授予智能终端跟踪正在运行或活动中的智能体状态的权限。</value>
     <comment>{Locked=qps-ploc,qps-ploca,qps-plocm} "Intelligent Terminal" is the product name.
 In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_SessionHint.Text" xml:space="preserve">
-    <value>ℹ 启用此功能将安装集成钩子，以跟踪跨智能体 CLI 的会话。</value>
-    <comment>{Locked="CLI"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <value>ℹ 启用此功能将安装集成 hooks，以跟踪跨智能体的会话。</value>
+    <comment>{Locked="hooks"}</comment>
   </data>
   <data name="FreOverlay_PanePositionLabel.Text" xml:space="preserve">
     <value>窗格位置</value>

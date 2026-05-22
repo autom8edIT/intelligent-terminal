@@ -1007,8 +1007,8 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
     <value>AI Assistant is not available</value>
   <comment>In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment></data>
   <data name="AgentNotConfiguredSubtitle" xml:space="preserve">
-    <value>No AI agent could be found. Install an agent CLI (e.g. copilot, gemini) and make sure it is on your PATH, or configure one in Settings &gt; AI Agents.</value>
-    <comment>{Locked="CLI","PATH","copilot","gemini"} 
+    <value>No AI agent could be found. Install an agent (e.g. copilot, gemini) and make sure it is on your PATH, or configure one in Settings &gt; AI Agents.</value>
+    <comment>{Locked="PATH","copilot","gemini"}
 In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <!-- ═══ GPO Policy Notices ═══ -->
@@ -1069,8 +1069,8 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
     <comment>In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_AgentDescription.Text" xml:space="preserve">
-    <value>Choose the agent CLI used in the agent pane. Any compatible ACP CLI will be detected.</value>
-    <comment>{Locked="CLI","ACP"}
+    <value>Choose the agent used in the agent pane. Any compatible ACP agent will be detected.</value>
+    <comment>{Locked="ACP"}
 In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
@@ -1094,9 +1094,8 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
 In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_SessionHint.Text" xml:space="preserve">
-    <value>ℹ Enabling this will install integration hooks to track sessions across your agent CLIs.</value>
-    <comment>{Locked="CLI"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <value>ℹ Enabling this will install integration hooks to track sessions across your agents.</value>
+    <comment>{Locked="hooks"}</comment>
   </data>
   <data name="FreOverlay_PanePositionLabel.Text" xml:space="preserve">
     <value>Pane position</value>

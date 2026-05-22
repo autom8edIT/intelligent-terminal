@@ -2773,8 +2773,8 @@
     <comment>Header for the setting that specifies which AI agent CLI powers the agent pane.</comment>
   </data>
   <data name="AIAgents_AcpAgent.HelpText" xml:space="preserve">
-    <value>选择在智能体窗格中使用的智能体 CLI。系统会检测所有兼容的 ACP CLI。</value>
-    <comment>Supplementary description for the agent pane CLI setting. {Locked="ACP","CLI"}</comment>
+    <value>选择在智能体窗格中使用的智能体。系统会检测所有兼容的 ACP 智能体。</value>
+    <comment>Supplementary description for the agent pane setting. {Locked="ACP"}</comment>
   </data>
   <data name="AIAgents_AcpModel.Header" xml:space="preserve">
     <value>模型</value>
@@ -2817,8 +2817,8 @@
     <comment>Header for the Agent Hooks install section.</comment>
   </data>
   <data name="AIAgents_HooksInstall.HelpText" xml:space="preserve">
-    <value>智能体会话管理需要此功能。系统会将 Hooks 安装到检测到的每个 CLI（Copilot、Claude、Gemini）中，以便它们将会话和状态报告给智能体窗格。安装后，请重启所有已打开的智能体 CLIs。</value>
-    <comment>Description for the Agent Hooks install section. {Locked="CLI","CLIs","Copilot","Claude","Gemini"}</comment>
+    <value>智能体会话管理需要此功能。系统会将 Hooks 安装到检测到的每个智能体（Copilot、Claude、Gemini）中，以便它们将会话和状态报告给智能体窗格。安装后，请重启所有已打开的智能体。</value>
+    <comment>Description for the Agent Hooks install section. {Locked="Hooks","Copilot","Claude","Gemini"}</comment>
   </data>
   <data name="AIAgents_HooksInstallButton.Content" xml:space="preserve">
     <value>安装 Hooks</value>
