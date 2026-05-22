@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <root>
   <!-- 
     Microsoft ResX Schema 
@@ -1071,5 +1071,13 @@
   </data>
   <data name="FreOverlay_ToggleOff" xml:space="preserve">
     <value>Disattivato</value>
+  </data>
+  <data name="AgentBlockedByPolicyTitle" xml:space="preserve">
+    <value>Gli agenti AI sono soggetti a restrizioni</value>
+    <comment>Title shown when Group Policy blocks the user from opening the agent pane. "agent" refers to an AI intelligent agent (e.g., Copilot, Claude), not a proxy or human agent.</comment>
+  </data>
+  <data name="AgentBlockedByPolicySubtitle" xml:space="preserve">
+    <value>I criteri della tua organizzazione non consentono alcun agente AI. Contatta l'amministratore IT per assistenza.</value>
+    <comment>Subtitle shown when Group Policy blocks all AI agents from running.</comment>
   </data>
 </root>

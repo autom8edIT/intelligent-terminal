@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <root>
   <!-- 
     Microsoft ResX Schema 
@@ -1080,5 +1080,13 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   </data>
   <data name="FreOverlay_ToggleOff" xml:space="preserve">
     <value>關</value>
+  </data>
+  <data name="AgentBlockedByPolicyTitle" xml:space="preserve">
+    <value>AI Σ╗úτÉåσÅùΘÖÉσê╢</value>
+    <comment>Title shown when Group Policy blocks the user from opening the agent pane. "agent" refers to an AI intelligent agent (e.g., Copilot, Claude), not a proxy or human agent.</comment>
+  </data>
+  <data name="AgentBlockedByPolicySubtitle" xml:space="preserve">
+    <value>µé¿τÜäτ╡äτ╣öσÄƒσëçΣ╕ìσàüΦ¿▒Σ╗╗Σ╜ò AI Σ╗úτÉåπÇéΦ½ïΦü»τ╡íµé¿τÜä IT τ│╗τ╡▒τ«íτÉåσôíΣ╗ÑσÅûσ╛ùσìöσè⌐πÇé</value>
+    <comment>Subtitle shown when Group Policy blocks all AI agents from running.</comment>
   </data>
 </root>

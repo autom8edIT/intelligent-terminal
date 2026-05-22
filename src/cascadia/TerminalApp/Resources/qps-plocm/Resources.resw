@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <root>
   <!-- 
     Microsoft ResX Schema 
@@ -1050,5 +1050,17 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   </data>
   <data name="FreOverlay_ToggleOff" xml:space="preserve">
     <value>Off</value>
+  </data>
+  <data name="AgentBlockedByPolicyTitle" xml:space="preserve">
+    <value>AI agents are restricted</value>
+    <comment>{Locked=qps-ploc,qps-ploca,qps-plocm} Title shown when Group Policy blocks the user from opening the agent pane.</comment>
+  </data>
+  <data name="AgentBlockedByPolicySubtitle" xml:space="preserve">
+    <value>Your organization's policy does not allow any AI agents. Contact your IT administrator for assistance.</value>
+    <comment>{Locked=qps-ploc,qps-ploca,qps-plocm} Subtitle shown when Group Policy blocks all AI agents from running.</comment>
+  </data>
+  <data name="FreOverlay_PolicyLocked" xml:space="preserve">
+    <value>This setting is managed by your organization.</value>
+    <comment>Text shown when Group Policy controls this feature. Standard Windows policy notice wording. {Locked=qps-ploc,qps-ploca,qps-plocm}</comment>
   </data>
 </root>

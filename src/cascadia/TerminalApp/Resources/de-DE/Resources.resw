@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <root>
   <!-- 
     Microsoft ResX Schema 
@@ -1074,5 +1074,13 @@
   </data>
   <data name="FreOverlay_ToggleOff" xml:space="preserve">
     <value>Aus</value>
+  </data>
+  <data name="AgentBlockedByPolicyTitle" xml:space="preserve">
+    <value>KI-Agenten sind eingeschr├ñnkt</value>
+    <comment>Title shown when Group Policy blocks the user from opening the agent pane. "agent" refers to an AI intelligent agent (e.g., Copilot, Claude), not a proxy or human agent.</comment>
+  </data>
+  <data name="AgentBlockedByPolicySubtitle" xml:space="preserve">
+    <value>Die Richtlinie Ihrer Organisation erlaubt keine KI-Agenten. Wenden Sie sich an Ihren IT-Administrator, wenn Sie Hilfe ben├╢tigen.</value>
+    <comment>Subtitle shown when Group Policy blocks all AI agents from running.</comment>
   </data>
 </root>

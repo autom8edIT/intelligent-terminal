@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <root>
   <!-- 
     Microsoft ResX Schema 
@@ -1129,5 +1129,17 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   </data>
   <data name="FreOverlay_ToggleOff" xml:space="preserve">
     <value>Вимк</value>
+  </data>
+  <data name="AgentBlockedByPolicyTitle" xml:space="preserve">
+    <value>╨É╨│╨╡╨╜╤é╨╕ ╨¿╨å ╨╛╨▒╨╝╨╡╨╢╨╡╨╜╤û</value>
+    <comment>Title shown when Group Policy blocks the user from opening the agent pane. "agent" refers to an AI intelligent agent (e.g., Copilot, Claude), not a proxy or human agent.</comment>
+  </data>
+  <data name="AgentBlockedByPolicySubtitle" xml:space="preserve">
+    <value>╨ƒ╨╛╨╗╤û╤é╨╕╨║╨░ ╨▓╨░╤ê╨╛╤ù ╨╛╤Ç╨│╨░╨╜╤û╨╖╨░╤å╤û╤ù ╨╜╨╡ ╨┤╨╛╨╖╨▓╨╛╨╗╤Å╤ö ╨▓╨╕╨║╨╛╤Ç╨╕╤ü╤é╨╛╨▓╤â╨▓╨░╤é╨╕ ╨▒╤â╨┤╤î-╤Å╨║╨╕╤à ╨░╨│╨╡╨╜╤é╤û╨▓ ╨¿╨å. ╨ù╨▓╨╡╤Ç╨╜╤û╤é╤î╤ü╤Å ╨┐╨╛ ╨┤╨╛╨┐╨╛╨╝╨╛╨│╤â ╨┤╨╛ ╤ü╨▓╨╛╨│╨╛ ╨å╨ó-╨░╨┤╨╝╤û╨╜╤û╤ü╤é╤Ç╨░╤é╨╛╤Ç╨░.</value>
+    <comment>Subtitle shown when Group Policy blocks all AI agents from running.</comment>
+  </data>
+  <data name="FreOverlay_PolicyLocked" xml:space="preserve">
+    <value>╨ª╨╡╨╣ ╨┐╨░╤Ç╨░╨╝╨╡╤é╤Ç ╨║╨╡╤Ç╤â╤ö╤é╤î╤ü╤Å ╨▓╨░╤ê╨╛╤Ä ╨╛╤Ç╨│╨░╨╜╤û╨╖╨░╤å╤û╤ö╤Ä.</value>
+    <comment>Text shown when Group Policy controls this feature. Standard Windows policy notice wording.</comment>
   </data>
 </root>
