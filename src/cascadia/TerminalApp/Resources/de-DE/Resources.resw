@@ -1083,4 +1083,52 @@
     <value>Die Richtlinie Ihrer Organisation erlaubt keine KI-Agenten. Wenden Sie sich an Ihren IT-Administrator, wenn Sie Hilfe ben├╢tigen.</value>
     <comment>Subtitle shown when Group Policy blocks all AI agents from running.</comment>
   </data>
+  <data name="Diagnostics_AnalyzingTooltip" xml:space="preserve">
+    <value>Fehler wird analysiert…</value>
+    <comment>Tooltip für die Diagnoseschaltfläche, während eine automatische Fehleranalyse läuft.</comment>
+  </data>
+  <data name="Diagnostics_ErrorPendingLabel" xml:space="preserve">
+    <value>Fehler erkannt: wird analysiert…</value>
+    <comment>Kurze Statusbeschriftung neben der Diagnoseschaltfläche, während eine Fehleranalyse läuft.</comment>
+  </data>
+  <data name="Diagnostics_ErrorArmedLabelFormat" xml:space="preserve">
+    <value>Fehler erkannt: {0} zum Beheben</value>
+    <comment>Kurze Statusbeschriftung, wenn eine Korrektur bereit ist. {0} ist das Tastenkürzel.</comment>
+  </data>
+  <data name="Diagnostics_FixReadyTooltipFormat" xml:space="preserve">
+    <value>Korrektur bereit — {0} zum Anwenden</value>
+    <comment>Tooltip, wenn eine Korrektur bereit ist. {0} ist das Tastenkürzel.</comment>
+  </data>
+  <data name="Diagnostics_FixReadyTooltipWithPreviewFormat" xml:space="preserve">
+    <value>Korrektur bereit — {0} zum Anwenden: {1}</value>
+    <comment>Tooltip, wenn eine Korrektur bereit ist. {0} ist das Tastenkürzel; {1} ist eine Vorschau.</comment>
+  </data>
+  <data name="Diagnostics_SuggestionReadyLabel" xml:space="preserve">
+    <value>Vorschlag bereit — Agentbereich öffnen</value>
+    <comment>Statusbeschriftung, wenn ein Vorschlag im Agentbereich verfügbar ist.</comment>
+  </data>
+  <data name="Diagnostics_SuggestionTooltipIntro" xml:space="preserve">
+    <value>Auto-Fix konnte dies nicht direkt beheben. </value>
+    <comment>Erster Satz des Diagnose-Tooltips, wenn die automatische Korrektur abgelehnt wurde. Bewahrt das nachgestellte Leerzeichen.</comment>
+  </data>
+  <data name="Diagnostics_SuggestionTooltipInstruction" xml:space="preserve">
+    <value>Hier klicken oder Strg+Umschalt+. drücken, um den Agentbereich zu öffnen und den vollständigen Vorschlag zu lesen.</value>
+    <comment>{Locked="Ctrl+Shift+."}</comment>
+  </data>
+  <data name="Diagnostics_Tooltip" xml:space="preserve">
+    <value>Diagnose</value>
+    <comment>Tooltip für die Diagnoseschaltfläche im Ruhezustand.</comment>
+  </data>
+  <data name="AgentPane_SessionsTitle" xml:space="preserve">
+    <value>Agentsitzungen</value>
+    <comment>Titel im Agentbereich, wenn die Sitzungsverwaltung aktiv ist.</comment>
+  </data>
+  <data name="AgentPane_SessionsTitleFormat" xml:space="preserve">
+    <value>Agentsitzungen: {0}</value>
+    <comment>Titel im Agentbereich. {0} wird durch den Agentnamen ersetzt.</comment>
+  </data>
+  <data name="TerminalProtocolTeachingTipTitle" xml:space="preserve">
+    <value>Terminal Protocol</value>
+    <comment>{Locked="Terminal Protocol"}</comment>
+  </data>
 </root>

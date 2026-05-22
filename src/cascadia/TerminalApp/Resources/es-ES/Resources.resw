@@ -1080,4 +1080,52 @@
     <value>La pol├¡tica de su organizaci├│n no permite ning├║n agente de IA. P├│ngase en contacto con su administrador de TI para obtener ayuda.</value>
     <comment>Subtitle shown when Group Policy blocks all AI agents from running.</comment>
   </data>
+  <data name="Diagnostics_AnalyzingTooltip" xml:space="preserve">
+    <value>Analizando error…</value>
+    <comment>Información sobre la herramienta del botón de diagnóstico mientras se ejecuta el análisis.</comment>
+  </data>
+  <data name="Diagnostics_ErrorPendingLabel" xml:space="preserve">
+    <value>Error detectado: analizando…</value>
+    <comment>Etiqueta de estado mientras se analiza el error.</comment>
+  </data>
+  <data name="Diagnostics_ErrorArmedLabelFormat" xml:space="preserve">
+    <value>Error detectado: {0} para corregir</value>
+    <comment>{0} = atajo de teclado.</comment>
+  </data>
+  <data name="Diagnostics_FixReadyTooltipFormat" xml:space="preserve">
+    <value>Corrección lista — {0} para aplicar</value>
+    <comment>{0} = atajo de teclado.</comment>
+  </data>
+  <data name="Diagnostics_FixReadyTooltipWithPreviewFormat" xml:space="preserve">
+    <value>Corrección lista — {0} para aplicar: {1}</value>
+    <comment>{0} = atajo de teclado; {1} = vista previa.</comment>
+  </data>
+  <data name="Diagnostics_SuggestionReadyLabel" xml:space="preserve">
+    <value>Sugerencia lista — abrir el panel del agente</value>
+    <comment>Etiqueta de estado cuando hay una sugerencia disponible.</comment>
+  </data>
+  <data name="Diagnostics_SuggestionTooltipIntro" xml:space="preserve">
+    <value>La corrección automática se negó a corregir directamente. </value>
+    <comment>Primera oración. Conservar el espacio final.</comment>
+  </data>
+  <data name="Diagnostics_SuggestionTooltipInstruction" xml:space="preserve">
+    <value>Haga clic aquí o presione Ctrl+Mayús+. para abrir el panel del agente y leer la sugerencia completa.</value>
+    <comment>{Locked="Ctrl+Shift+."}</comment>
+  </data>
+  <data name="Diagnostics_Tooltip" xml:space="preserve">
+    <value>Diagnóstico</value>
+    <comment>Información sobre la herramienta en reposo.</comment>
+  </data>
+  <data name="AgentPane_SessionsTitle" xml:space="preserve">
+    <value>Sesiones del agente</value>
+    <comment>Título del panel cuando la administración de sesiones está activa.</comment>
+  </data>
+  <data name="AgentPane_SessionsTitleFormat" xml:space="preserve">
+    <value>Sesiones del agente: {0}</value>
+    <comment>{0} = nombre del agente.</comment>
+  </data>
+  <data name="TerminalProtocolTeachingTipTitle" xml:space="preserve">
+    <value>Terminal Protocol</value>
+    <comment>{Locked="Terminal Protocol"}</comment>
+  </data>
 </root>
