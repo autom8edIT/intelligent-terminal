@@ -4030,27 +4030,7 @@ impl App {
                 return;
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // In-flight: state is Submitted/Streaming or Surfaced{end_pending}.
-                let in_flight = !self.current_tab().turn.is_idle()
-                    && !matches!(
-                        self.current_tab().turn,
-                        TurnState::Surfaced { end_pending: false, .. }
-                    );
-                if in_flight {
-                    // Send a session/cancel to the ACP client. The client
-                    // will fire the protocol notification and signal the
-                    // per-prompt oneshot so the spawned task drops out of
-                    // conn.prompt() immediately.
-                    let session_id = self.current_tab().session_id.clone();
-                    if let Some(sid) = session_id.clone() {
-                        let _ = self.cancel_tx.send(CancelRequest { session_id: sid });
-                    }
-                    if let Some(sid) = session_id {
-                        self.turn_cancel(&sid);
-                    }
-                    let tab = self.current_tab_mut();
-                    tab.messages.push(ChatMessage::System(t!("system.cancelled").into_owned()));
-                    tab.scroll_to_bottom();
+                if self.cancel_in_flight_turn() {
                     self.close_pane_armed_at = None;
                 } else if !self.current_tab().input.is_empty() {
                     // Mirror bash readline: Ctrl+C clears the buffer.
@@ -4120,10 +4100,28 @@ impl App {
                 let pane = self.suggested_pane_id.take().unwrap();
                 self.emit_autofix_state_cleared(&pane);
             }
+            // Esc on an in-flight turn acts like `/stop`: cancel the
+            // current "Thinking..." (the head of the dispatch queue). Any
+            // queued prompts behind it stay put and the auto-drain hook
+            // promotes the next one to in-flight on the following tick, so
+            // pressing Esc repeatedly peels prompts off the head one by
+            // one. Only fires when the input box is empty so users
+            // editing a draft don't lose their work.
+            KeyCode::Esc
+                if self.current_tab().input.is_empty()
+                    && !self.current_tab().turn.is_idle()
+                    && !matches!(
+                        self.current_tab().turn,
+                        TurnState::Surfaced { end_pending: false, .. }
+                    ) =>
+            {
+                self.cancel_in_flight_turn();
+            }
             // Pop the most-recently queued prompt (LIFO undo) before falling
-            // through to "clear input". Only when the input box is empty —
-            // otherwise the user is most likely trying to clear the draft
-            // they're editing right now.
+            // through to "clear input". Only when the input box is empty
+            // and no turn is in flight — otherwise the user is most likely
+            // trying to cancel the current Thinking… (handled above) or
+            // clear the draft they're editing right now.
             KeyCode::Esc
                 if self.current_tab().input.is_empty()
                     && !self.current_tab().pending_prompts.is_empty() =>
@@ -5656,6 +5654,46 @@ impl App {
     /// User pressed Esc — cancel the in-flight turn. Bumps
     /// `autofix_generation` so any chunks that arrive after this point are
     /// dropped by the stale-check in `turn_observe_chunk`.
+    /// Shared in-flight-turn cancel used by Esc and Ctrl+C. Mirrors `/stop`:
+    /// sends `session/cancel` to the ACP client, transitions the state
+    /// machine back to Idle, and pushes a "Cancelled." system bubble.
+    /// Returns `true` iff a turn was actually in flight and was cancelled.
+    ///
+    /// Note: when the queue is non-empty, the per-tick `drain_pending_prompts`
+    /// hook will promote the next queued prompt on the following tick. That's
+    /// the intended "Esc peels prompts off the head one by one" UX — each
+    /// Esc cancels the current head; the queue keeps rotating.
+    fn cancel_in_flight_turn(&mut self) -> bool {
+        // Surfaced{end_pending:false} is the "accepts new prompt" state —
+        // not in flight even though the turn isn't Idle. Mirror the matcher
+        // used in `Char('c') CONTROL` and `accepts_new_prompt` so both
+        // entry points stay consistent.
+        let in_flight = !self.current_tab().turn.is_idle()
+            && !matches!(
+                self.current_tab().turn,
+                TurnState::Surfaced { end_pending: false, .. }
+            );
+        if !in_flight {
+            return false;
+        }
+        // Mirror the Enter-dispatch path: when the focused tab has no real
+        // ACP session id yet, fall back to DEFAULT_TAB_ID. `session_tab_mut`
+        // resolves that via `tab_for_session` → `self.tab_id` so the local
+        // state machine still resets on the right tab. The ACP-side cancel
+        // is best-effort and only sent when a real session exists.
+        let real_session = self.current_tab().session_id.clone();
+        if let Some(sid) = real_session.clone() {
+            let _ = self.cancel_tx.send(CancelRequest { session_id: sid });
+        }
+        let sid = real_session.unwrap_or_else(|| DEFAULT_TAB_ID.to_string());
+        self.turn_cancel(&sid);
+        let tab = self.current_tab_mut();
+        tab.messages
+            .push(ChatMessage::System(t!("system.cancelled").into_owned()));
+        tab.scroll_to_bottom();
+        true
+    }
+
     pub fn turn_cancel(&mut self, session_id: &str) {
         self.autofix_generation = self.autofix_generation.wrapping_add(1);
         let pane_id = self
@@ -7837,14 +7875,57 @@ mod tests {
     }
 
     #[test]
-    fn esc_pops_back_of_queue_when_input_empty() {
+    fn esc_cancels_in_flight_turn_when_input_empty() {
+        // Esc on a busy state acts like `/stop` — cancel the current
+        // Thinking… (head of dispatch queue). With queued items behind it
+        // the auto-drain hook promotes the next one on the following tick,
+        // so repeated Esc presses peel work off the head one-by-one.
+        let mut app = connected_app_with_text("first");
+        press_enter(&mut app);
+        type_text(&mut app, "queued");
+        press_enter(&mut app);
+        assert!(matches!(app.current_tab().turn, TurnState::Submitted(_)));
+        assert_eq!(app.current_tab().pending_prompts.len(), 1);
+
+        press_esc(&mut app);
+
+        // In-flight was cancelled → state Idle. Queue is preserved (next
+        // tick's drain will promote it).
+        assert!(app.current_tab().turn.is_idle(),
+            "Esc on in-flight must reset turn to Idle (got {:?})",
+            app.current_tab().turn);
+        assert_eq!(app.current_tab().pending_prompts.len(), 1,
+            "Esc cancels the head only — queued items survive for drain");
+        // System "Cancelled." bubble appended.
+        let last = app.current_tab().messages.last().expect("messages non-empty");
+        assert!(matches!(last, ChatMessage::System(s) if s.contains("Cancel")),
+            "expected Cancelled system message, got {last:?}");
+    }
+
+    #[test]
+    fn esc_pops_back_of_queue_when_idle_and_input_empty() {
+        // With no turn in flight (e.g. after the in-flight one was
+        // cancelled or finished and drain hasn't yet run), Esc pops the
+        // back of the queue (LIFO undo) so the user can rescind prompts
+        // they queued by mistake.
         let mut app = connected_app_with_text("first");
         press_enter(&mut app);
         for q in ["a", "b", "c"] {
             type_text(&mut app, q);
             press_enter(&mut app);
         }
-        // Input is empty, queue has 3.
+        // Cancel the in-flight so subsequent Esc presses target the queue,
+        // not the head. (Mirrors what happens after `/stop` if the user
+        // doesn't want any further drains either — they Esc through the
+        // backlog.)
+        let sid = app
+            .current_tab()
+            .session_id
+            .clone()
+            .unwrap_or_else(|| DEFAULT_TAB_ID.to_string());
+        app.turn_cancel(&sid);
+        assert_eq!(app.current_tab().pending_prompts.len(), 3);
+
         press_esc(&mut app);
         assert_eq!(app.current_tab().pending_prompts.len(), 2);
         assert_eq!(app.current_tab().pending_prompts.back().unwrap().text, "b",
@@ -7864,10 +7945,15 @@ mod tests {
         type_text(&mut app, "editing");
         press_esc(&mut app);
         // Esc should clear the input draft (existing behavior) and leave the
-        // queue intact — otherwise users who Esc while editing lose work.
+        // queue intact AND the in-flight turn alone — otherwise users who
+        // Esc while editing would either lose work or accidentally cancel
+        // the agent. Both the in-flight-cancel and queue-pop branches gate
+        // on `input.is_empty()`.
         assert!(app.current_tab().input.is_empty());
         assert_eq!(app.current_tab().pending_prompts.len(), 1,
             "queue must be preserved; Esc on non-empty input clears draft only");
+        assert!(matches!(app.current_tab().turn, TurnState::Submitted(_)),
+            "in-flight turn must be preserved when draft is non-empty");
     }
 
     #[test]
