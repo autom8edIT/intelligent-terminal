@@ -15,9 +15,11 @@
 // We treat value `1` as RTL and everything else (including failures)
 // as LTR. The Rust TUI library has no native bidi engine; Windows
 // Terminal — the host emulator — performs the actual character
-// shaping. So the only useful WTA-side action is right-aligning
-// `Paragraph` widgets that render translated copy. The terminal
-// handles the rest.
+// shaping. So the only useful WTA-side action is choosing a default
+// UI text alignment for RTL locales — right-aligning the relevant
+// `Paragraph` widgets, regardless of whether their content is purely
+// translated copy or mixed (user / agent messages, code, etc.). The
+// terminal handles the rest.
 
 use ratatui::layout::Alignment;
 use std::sync::OnceLock;
