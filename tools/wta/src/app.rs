@@ -1412,10 +1412,13 @@ pub struct QueuedPrompt {
     collapsed: String,
 }
 
-/// Upper bound on `QueuedPrompt::collapsed`. Generous over the ~60-cell
-/// visible indicator (`PREVIEW_MAX_CHARS` in `ui/queued_hint`), but caps
-/// per-frame `t!()` interpolation + width scanning to a constant when the
-/// user pastes a multi-megabyte prompt.
+/// Upper bound on `QueuedPrompt::collapsed`. Generously over-provisioned
+/// versus the actual visible width — even at very wide terminals the queue
+/// hint row only renders a few dozen cells — but caps per-frame `t!()`
+/// interpolation + width scanning in `ui/queued_hint::render` to a
+/// constant when the user pastes a multi-megabyte prompt. The renderer
+/// performs the final width-based truncation against `area.width` via
+/// `truncate_to_width`, so this cap is an O(n) defense, not a display cap.
 const COLLAPSED_PREVIEW_CAP: usize = 256;
 
 impl QueuedPrompt {
