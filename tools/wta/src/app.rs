@@ -1403,16 +1403,24 @@ pub const QUEUE_HINT_DURATION: std::time::Duration = std::time::Duration::from_m
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedPrompt {
     pub text: String,
-    /// Whitespace-collapsed cache of `text`, computed once at construction
-    /// and read each frame by `ui/queued_hint::render`. Avoids the per-frame
-    /// `split_whitespace().collect::<Vec<_>>().join(" ")` allocation pointed
-    /// out by Copilot review round 7.
+    /// Whitespace-collapsed cache of `text`, capped at
+    /// `COLLAPSED_PREVIEW_CAP` chars and read each frame by
+    /// `ui/queued_hint::render`. Avoids both the per-frame
+    /// `split_whitespace().collect::<Vec<_>>().join(" ")` allocation and
+    /// unbounded scanning/copying when the user pastes a huge prompt —
+    /// the visible indicator can only show ~60 cells anyway.
     collapsed: String,
 }
 
+/// Upper bound on `QueuedPrompt::collapsed`. Generous over the ~60-cell
+/// visible indicator (`PREVIEW_MAX_CHARS` in `ui/queued_hint`), but caps
+/// per-frame `t!()` interpolation + width scanning to a constant when the
+/// user pastes a multi-megabyte prompt.
+const COLLAPSED_PREVIEW_CAP: usize = 256;
+
 impl QueuedPrompt {
     pub fn new(text: String) -> Self {
-        let collapsed = collapse_whitespace(&text);
+        let collapsed = collapse_whitespace_capped(&text, COLLAPSED_PREVIEW_CAP);
         Self { text, collapsed }
     }
 
@@ -1451,22 +1459,32 @@ impl QueuedPrompt {
     }
 }
 
-/// Stream-collapse contiguous whitespace runs into single spaces without an
-/// intermediate `Vec`. Mirrors `split_whitespace().collect::<Vec<_>>().join(" ")`
-/// but allocates only the result string.
-fn collapse_whitespace(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
+/// Stream-collapse contiguous whitespace runs into single spaces and cap the
+/// result at `max_chars` characters. Allocates only the result string (no
+/// intermediate `Vec`). Stops early as soon as `max_chars` have been emitted
+/// — capping the work for very large inputs that the UI would clip anyway.
+fn collapse_whitespace_capped(text: &str, max_chars: usize) -> String {
+    let mut out = String::with_capacity(text.len().min(max_chars));
     let mut pending_space = false;
     let mut wrote_any = false;
+    let mut chars_out = 0usize;
     for ch in text.chars() {
         if ch.is_whitespace() {
             pending_space = wrote_any;
         } else {
             if pending_space {
+                if chars_out + 1 > max_chars {
+                    break;
+                }
                 out.push(' ');
+                chars_out += 1;
                 pending_space = false;
             }
+            if chars_out + 1 > max_chars {
+                break;
+            }
             out.push(ch);
+            chars_out += 1;
             wrote_any = true;
         }
     }
@@ -8655,5 +8673,71 @@ mod tests {
         // "…" (1 char), violating the "at most max_chars" contract.
         let q = QueuedPrompt::new("anything".into());
         assert_eq!(q.preview(0), "", "zero budget must yield an empty string");
+    }
+
+    #[test]
+    fn queued_prompt_caps_collapsed_storage() {
+        // The cached collapsed preview is bounded so a paste-large prompt
+        // doesn't make the per-frame UI render scan/copy unbounded text
+        // through `t!(...)` interpolation. The full text remains intact
+        // for downstream ACP dispatch.
+        let big = "x".repeat(10_000);
+        let q = QueuedPrompt::new(big.clone());
+        assert_eq!(q.text.len(), 10_000, "full text preserved for dispatch");
+        assert!(
+            q.collapsed_text().chars().count() <= COLLAPSED_PREVIEW_CAP,
+            "collapsed cache must be capped at COLLAPSED_PREVIEW_CAP (got {})",
+            q.collapsed_text().chars().count()
+        );
+    }
+
+    #[test]
+    fn esc_only_pops_focused_tabs_queue_not_background_tabs() {
+        // Pinning the per-tab isolation contract: pressing Esc on the
+        // focused tab must NOT touch a background tab's queue or
+        // in-flight state. Every queue mutation (pop_back from Esc,
+        // push_back from Enter, clear from clear_chat_history) targets
+        // `current_tab_mut()` exclusively.
+        let mut app = test_app();
+        app.state = ConnectionState::Connected;
+        app.tab_id = Some("focused".into());
+        // Background tab with a queue and an in-flight turn.
+        {
+            let bg = app.tab_sessions.entry("background".into()).or_default();
+            bg.session_id = Some("bg-session".into());
+            bg.pending_prompts.push_back(QueuedPrompt::new("bg-only".into()));
+            bg.turn = TurnState::Submitted(SubmittedPrompt {
+                id: 99,
+                text: "bg head".into(),
+                submitted_at_unix_s: 0.0,
+                autofix: None,
+            });
+        }
+        app.session_to_tab.insert("bg-session".into(), "background".into());
+        // Focused tab with its own queue + in-flight head.
+        type_text(&mut app, "focused first");
+        press_enter(&mut app);
+        type_text(&mut app, "focused queued");
+        press_enter(&mut app);
+        assert_eq!(app.tab_sessions["focused"].pending_prompts.len(), 1);
+        assert_eq!(app.tab_sessions["background"].pending_prompts.len(), 1);
+
+        // Esc on focused tab — should pop only "focused queued".
+        press_esc(&mut app);
+        assert_eq!(app.tab_sessions["focused"].pending_prompts.len(), 0,
+            "focused tab's queued item popped");
+        assert_eq!(app.tab_sessions["background"].pending_prompts.len(), 1,
+            "background tab's queue untouched");
+        assert!(matches!(app.tab_sessions["background"].turn, TurnState::Submitted(_)),
+            "background tab's in-flight head untouched");
+
+        // Esc again (focused queue now empty) — cancels focused head only.
+        press_esc(&mut app);
+        assert!(app.tab_sessions["focused"].turn.is_idle(),
+            "focused tab's head cancelled");
+        assert!(matches!(app.tab_sessions["background"].turn, TurnState::Submitted(_)),
+            "background tab's head still untouched");
+        assert_eq!(app.tab_sessions["background"].pending_prompts.len(), 1,
+            "background tab's queue still intact");
     }
 }
