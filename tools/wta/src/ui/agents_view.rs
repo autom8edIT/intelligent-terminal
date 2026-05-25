@@ -544,7 +544,7 @@ mod tests {
     /// every re-translation):
     ///
     ///   1. No raw rust-i18n key leaks ("time.minutes_other" etc.) — that
-    ///      would indicate a key-resolution bug or a yml schema drift.
+    ///      would indicate a key-resolution bug or yml schema drift.
     ///   2. Output is non-empty for every (locale, duration) pair.
     ///   3. Switching locales actually changes the output — guards against
     ///      a regression where `rust_i18n::set_locale()` is a no-op or the

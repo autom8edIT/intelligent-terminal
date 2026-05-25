@@ -204,8 +204,8 @@ mod tests {
 
     #[test]
     fn unknown_command_falls_through() {
-        assert!(parse("/notacommand").is_none());
-        assert!(parse("/notacommand foo").is_none());
+        assert!(parse("/no-such-command").is_none());
+        assert!(parse("/no-such-command foo").is_none());
     }
 
     #[test]

@@ -3,10 +3,11 @@
 //! Both [`super::client::run_inner`] and [`super::probe::probe_models`]
 //! need to spawn an ACP agent the same way: parse the user-facing
 //! cmdline, resolve bare names via [`crate::agent_registry`], optionally
-//! wrap in `cmd /c`, scrub `CLAUDECODE`, and pipe stdio with
-//! `kill_on_drop`. They diverge only after `spawn()` — the full client
-//! wraps stdio with instrumentation and drives a prompt loop; the probe
-//! attaches raw stdio, runs `initialize` + `new_session`, and exits.
+//! wrap in `cmd /c`, scrub the claude-code-acp guard env var, and pipe
+//! stdio with `kill_on_drop`. They diverge only after `spawn()` — the
+//! full client wraps stdio with instrumentation and drives a prompt
+//! loop; the probe attaches raw stdio, runs `initialize` + `new_session`,
+//! and exits.
 
 use std::path::Path;
 
@@ -70,10 +71,10 @@ pub(crate) fn spawn_agent_process(agent_cmd: &str, cwd: Option<&Path>) -> Result
     if needs_cmd {
         cmd.arg("/c").arg(&resolved_program);
     }
-    // claude-code-acp refuses to start when CLAUDECODE=1 is set — that
-    // guard exists to block recursive `claude` shells from sharing
-    // runtime, but doesn't apply to an ACP host. Scrub unconditionally;
-    // other agents don't care.
+    // The claude-code-acp adapter refuses to start when its recursion-
+    // guard env var is set — that guard exists to block recursive
+    // `claude` shells from sharing runtime, but doesn't apply to an
+    // ACP host. Scrub unconditionally; other agents don't care.
     cmd.env_remove("CLAUDECODE");
 
     // Forward the user's locale to the agent process via standard POSIX
@@ -141,7 +142,7 @@ pub(crate) fn spawn_agent_process(agent_cmd: &str, cwd: Option<&Path>) -> Result
 /// Rules:
 /// - Split on `-`. First segment is always the language, lowercased.
 /// - Two-letter segments after the first are treated as ISO 3166-1
-///   region codes and uppercased.
+///   region codes and forced to upper case.
 /// - Four-letter segments are treated as ISO 15924 script codes and
 ///   title-cased (e.g. `Latn`, `Cyrl`).
 /// - Anything else (numeric region, variant) is left as-is.
@@ -180,8 +181,8 @@ mod tests {
     }
 
     #[test]
-    fn canonicalizes_script_subtag() {
-        // 4-letter script (ISO 15924) → title case, region preserved.
+    fn canonicalizes_script_code() {
+        // 4-letter script code (ISO 15924) → title case, region preserved.
         assert_eq!(canonicalize_posix_locale("sr-Cyrl-RS"), "sr_Cyrl_RS.UTF-8");
         assert_eq!(canonicalize_posix_locale("zh-Hans-CN"), "zh_Hans_CN.UTF-8");
         assert_eq!(canonicalize_posix_locale("az-Latn-AZ"), "az_Latn_AZ.UTF-8");
