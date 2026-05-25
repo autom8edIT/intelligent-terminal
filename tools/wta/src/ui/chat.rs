@@ -454,16 +454,14 @@ fn push_dot_prefixed_lines<'a>(
 
     for paragraph in text.split('\n') {
         if paragraph.is_empty() {
-            // Preserve blank lines between paragraphs.
+            // Skip leading blanks so the dot lands on the first content row
+            // — many models prefix prose with `\n` / `\n\n`, which would
+            // otherwise burn the dot on an empty line. Blank lines between
+            // paragraphs are still preserved.
             if first_row {
-                lines.push(Line::from(vec![
-                    Span::styled("● ", dot_style),
-                    Span::styled(String::new(), text_style),
-                ]));
-                first_row = false;
-            } else {
-                lines.push(Line::default());
+                continue;
             }
+            lines.push(Line::default());
             continue;
         }
 
