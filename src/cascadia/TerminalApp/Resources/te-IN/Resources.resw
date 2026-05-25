@@ -164,13 +164,11 @@
   </data>
   <data name="FreOverlay_AgentDescription.Text" xml:space="preserve">
     <value>ఏజెంట్ పేన్‌లో ఉపయోగించే ఏజెంట్‌ను ఎంచుకోండి. ఏదైనా అనుకూల ACP ఏజెంట్ స్వయంచాలకంగా గుర్తించబడుతుంది.</value>
-    <comment>{Locked="ACP"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="ACP"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
     <value>ℹ ఈ ఏజెంట్‌కు Node.js మరియు NPX అవసరం, ఇవి ఇప్పటికే ఉన్నవి కాకపోతే స్వయంచాలకంగా ఇన్‌స్టాల్ చేయబడతాయి.</value>
-    <comment>{Locked="Node.js","NPX"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="Node.js","NPX"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_AutoErrorLabel.Text" xml:space="preserve">
     <value>విఫలమైన ఆదేశాల కోసం స్వయంచాలకంగా పరిష్కారాలను సూచించండి</value>
@@ -189,8 +187,7 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   </data>
   <data name="FreOverlay_SessionHint.Text" xml:space="preserve">
     <value>ℹ దీన్ని ఎనేబుల్ చేయడం వలన మీ ఏజెంట్‌లలో సెషన్‌లను ట్రాక్ చేయడానికి ఇంటిగ్రేషన్ hooks ఇన్‌స్టాల్ చేయబడతాయి.</value>
-    <comment>{Locked="hooks"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="hooks"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_PanePositionLabel.Text" xml:space="preserve">
     <value>పేన్ స్థానం</value>

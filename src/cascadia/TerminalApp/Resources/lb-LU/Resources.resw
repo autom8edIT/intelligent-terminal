@@ -51,13 +51,11 @@
   </data>
   <data name="FreOverlay_AgentDescription.Text" xml:space="preserve">
     <value>Wielt den Agent, deen am Agent-Panell benotzt gëtt. All kompatibel ACP-Agenten ginn automatesch erkannt.</value>
-    <comment>{Locked="ACP"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="ACP"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
     <value>ℹ Dësen Agent brauch Node.js an NPX, déi automatesch installéiert ginn wa se nach net do sinn.</value>
-    <comment>{Locked="Node.js","NPX"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="Node.js","NPX"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_AutoErrorLabel.Text" xml:space="preserve">
     <value>Automatesch Fixe fir feelgeschloen Befehler proposéieren</value>
@@ -76,8 +74,7 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   </data>
   <data name="FreOverlay_SessionHint.Text" xml:space="preserve">
     <value>ℹ Dëst z'aktivéieren installéiert Integratiouns-hooks fir Sëtzungen iwwer Är Agenten ze verfollegen.</value>
-    <comment>{Locked="hooks"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="hooks"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_PanePositionLabel.Text" xml:space="preserve">
     <value>Panell-Positioun</value>

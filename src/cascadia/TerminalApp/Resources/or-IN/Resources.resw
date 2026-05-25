@@ -165,13 +165,11 @@
   </data>
   <data name="FreOverlay_AgentDescription.Text" xml:space="preserve">
     <value>ଏଜେଣ୍ଟ ପେନ୍‌ରେ ବ୍ୟବହୃତ ଏଜେଣ୍ଟ ବାଛନ୍ତୁ। ଯେ କୌଣସି ସୁସଙ୍ଗତ ACP ଏଜେଣ୍ଟ ସ୍ୱୟଂଚାଳିତ ଭାବରେ ଚିହ୍ନଟ ହେବ।</value>
-    <comment>{Locked="ACP"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="ACP"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
     <value>ℹ ଏହି ଏଜେଣ୍ଟ ପାଇଁ Node.js ଏବଂ NPX ଆବଶ୍ୟକ, ଯଦି ପୂର୍ବରୁ ନଥାଏ ତେବେ ସ୍ୱୟଂଚାଳିତ ଭାବରେ ଇନ୍‌ଷ୍ଟଲ୍ ହେବ।</value>
-    <comment>{Locked="Node.js","NPX"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="Node.js","NPX"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_AutoErrorLabel.Text" xml:space="preserve">
     <value>ବିଫଳ କମାଣ୍ଡଗୁଡ଼ିକ ପାଇଁ ସ୍ୱୟଂଚାଳିତ ଭାବରେ ସମାଧାନ ପ୍ରସ୍ତାବ ଦିଅନ୍ତୁ</value>
@@ -190,8 +188,7 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   </data>
   <data name="FreOverlay_SessionHint.Text" xml:space="preserve">
     <value>ℹ ଏହା ସକ୍ଷମ କଲେ ଆପଣଙ୍କ ଏଜେଣ୍ଟମାନଙ୍କ ମଧ୍ୟରେ ସେସନ୍ ଟ୍ରାକ୍ କରିବା ପାଇଁ ଇଣ୍ଟିଗ୍ରେସନ୍ hooks ଇନ୍‌ଷ୍ଟଲ୍ ହେବ।</value>
-    <comment>{Locked="hooks"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="hooks"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_PanePositionLabel.Text" xml:space="preserve">
     <value>ପେନ୍ ସ୍ଥାନ</value>

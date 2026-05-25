@@ -995,8 +995,7 @@
     <value>ВИ агент није доступан</value>
   </data><data name="AgentNotConfiguredSubtitle" xml:space="preserve">
     <value>Ниједан ВИ агент није пронађен. Инсталирајте агента (нпр. copilot, gemini) и уверите се да је на вашем PATH-у или га конфигуришите у одељку Подешавања &gt; ВИ агенти.</value>
-    <comment>{Locked="PATH","copilot","gemini"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="PATH","copilot","gemini"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <!-- ═══ FRE Welcome Page ═══ -->
   <data name="FreOverlay_WelcomeTitle.Text" xml:space="preserve">
@@ -1045,8 +1044,7 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   </data>
   <data name="FreOverlay_AgentDescription.Text" xml:space="preserve">
     <value>Изаберите агента који се користи у панелу агента. Сваки компатибилан ACP агент биће аутоматски откривен.</value>
-    <comment>{Locked="ACP"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="ACP"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
     <value>ℹ Овај агент захтева Node.js и NPX, који ће бити аутоматски инсталирани ако нису већ присутни.</value>
@@ -1069,8 +1067,7 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   </data>
   <data name="FreOverlay_SessionHint.Text" xml:space="preserve">
     <value>ℹ Омогућавање овога ће инсталирати интеграционе hooks за праћење сесија у свим вашим агентима.</value>
-    <comment>{Locked="hooks"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="hooks"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_PanePositionLabel.Text" xml:space="preserve">
     <value>Позиција панела</value>

@@ -1008,8 +1008,7 @@
   <data name="InitShellIntegrationErrorTitle" xml:space="preserve"><value>Помилка інтеграції оболонки</value></data>
   <data name="InitShellIntegrationErrorMessage" xml:space="preserve"><value>Не вдалося ініціалізувати інтеграцію оболонки. Не вдалося визначити шлях до вашого профілю PowerShell. Переконайтеся, що цільову оболонку встановлено.</value><comment>{Locked="PowerShell"}</comment></data>
   <data name="AgentNotConfiguredTitle" xml:space="preserve"><value>Агент ШІ недоступний</value></data>
-  <data name="AgentNotConfiguredSubtitle" xml:space="preserve"><value>Не вдалося знайти жодного агента ШІ. Установіть агента (наприклад, copilot або gemini) і переконайтеся, що його додано до PATH, або налаштуйте його в Налаштування &gt; Агенти.</value><comment>{Locked="PATH","copilot","gemini"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment></data>
+  <data name="AgentNotConfiguredSubtitle" xml:space="preserve"><value>Не вдалося знайти жодного агента ШІ. Установіть агента (наприклад, copilot або gemini) і переконайтеся, що його додано до PATH, або налаштуйте його в Налаштування &gt; Агенти.</value><comment>{Locked="PATH","copilot","gemini"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment></data>
   <!-- ═══ FRE Welcome Page ═══ -->
   <data name="FreOverlay_WelcomeTitle.Text" xml:space="preserve">
     <value>Ласкаво просимо до Intelligent Terminal</value>
@@ -1057,13 +1056,11 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   </data>
   <data name="FreOverlay_AgentDescription.Text" xml:space="preserve">
     <value>Оберіть агента, який використовується в панелі агента. Будь-який сумісний агент ACP буде виявлено автоматично.</value>
-    <comment>{Locked="ACP"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="ACP"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
     <value>ℹ Цей агент потребує Node.js та NPX, які будуть встановлені автоматично, якщо ще не встановлені.</value>
-    <comment>{Locked="Node.js","NPX"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="Node.js","NPX"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_AutoErrorLabel.Text" xml:space="preserve">
     <value>Автоматично пропонувати виправлення для невдалих команд</value>
@@ -1081,8 +1078,7 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   </data>
   <data name="FreOverlay_SessionHint.Text" xml:space="preserve">
     <value>ℹ Увімкнення цієї функції встановить інтеграційні hooks для відстеження сеансів у всіх ваших агентах.</value>
-    <comment>{Locked="hooks"}
-In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
+    <comment>{Locked="hooks"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
   <data name="FreOverlay_PanePositionLabel.Text" xml:space="preserve">
     <value>Положення панелі</value>
