@@ -759,6 +759,11 @@ pub enum DispatchedCommandKind {
     /// session in the agent pane of a new tab via WT-side coordination +
     /// ACP session/load.
     ResumeInAgentPane,
+    /// `decide_enter_action` returned `NotResumable` — a system message
+    /// was pushed in the current tab and no wtcli/ACP side effect was
+    /// triggered. The argv carries the [`NotResumableReason`] for
+    /// observability.
+    NotResumable,
 }
 
 #[cfg(test)]
@@ -1839,6 +1844,216 @@ impl App {
     /// see and resume their history.
     pub fn current_cli_filter(&self) -> Option<crate::agent_sessions::CliSource> {
         crate::agent_sessions::CliSource::from_agent_id(&self.current_agent_id)
+    }
+
+    /// Extracted focus-pane dispatch for Live rows. Shared between the
+    /// legacy [`Self::activate_agent_session`] and the new
+    /// [`Self::activate_agent_session_with_shift`] dispatcher.
+    ///
+    /// Behavior:
+    ///   * No-op if the row's pane GUID matches our own
+    ///     (`self.pane_id`) — focusing yourself races WT teardown.
+    ///   * Otherwise spawns `wtcli focus-pane -t <pane>` on a background
+    ///     thread, wiring `FocusPaneFailureReason::NotFound` failures
+    ///     back through `AgentSessionEvent::PaneClosed` so a row whose
+    ///     pane died silently transitions to Ended instead of staying
+    ///     stuck.
+    fn dispatch_focus_pane(&mut self, pane: &str, log_key: &str) {
+        let is_self = self
+            .pane_id
+            .as_deref()
+            .map(|own| own.eq_ignore_ascii_case(pane))
+            .unwrap_or(false);
+        if is_self {
+            tracing::info!(
+                target: "agents_view",
+                key = %log_key,
+                pane = %pane,
+                "skipping focus_pane: row points at our own pane",
+            );
+        } else {
+            let pane_for_cb = pane.to_string();
+            let event_tx = self.agent_event_tx.clone();
+            let on_failure: Option<Box<dyn FnOnce(
+                crate::shell::wt_channel::FocusPaneFailureReason,
+            ) + Send + 'static>> = match event_tx {
+                Some(tx) => Some(Box::new(move |reason| {
+                    use crate::shell::wt_channel::FocusPaneFailureReason::*;
+                    if matches!(reason, NotFound) {
+                        let _ = tx.send(AppEvent::AgentSessionEvent(
+                            crate::agent_sessions::SessionEvent::PaneClosed {
+                                pane_session_id: pane_for_cb,
+                            },
+                        ));
+                    }
+                })),
+                None => None,
+            };
+            crate::shell::wt_channel::spawn_wtcli_focus_pane_with_callback(pane, on_failure);
+        }
+        #[cfg(test)]
+        {
+            self.last_dispatched_command = Some(DispatchedCommand {
+                kind: DispatchedCommandKind::FocusPane,
+                session_id: Some(pane.to_string()),
+                argv: vec![
+                    "focus-pane".to_string(),
+                    "-t".to_string(),
+                    pane.to_string(),
+                ],
+            });
+        }
+    }
+
+    /// B-10: state-machine-driven Enter / Shift+Enter dispatcher.
+    ///
+    /// Routes through [`crate::session_mgmt::decide_enter_action`] —
+    /// the pure-function core that closed-form maps
+    /// `(origin, liveness, cli, capabilities, shift)` to one of
+    /// `Focus | ResumeInAgentPane | ResumeCliFlag | NotResumable`.
+    /// All side effects (system messages, wtcli spawn, optimistic
+    /// state flips, phantom guards) live on the dispatch side here
+    /// or in the existing [`Self::dispatch_resume`] /
+    /// [`Self::dispatch_resume_in_agent_pane`] helpers we call into.
+    ///
+    /// Why this matters: today the Enter / Shift+Enter branches in the
+    /// key handler bake the routing rules inline (Shift on
+    /// Ended/Historical → resume_in_agent_pane; else → legacy
+    /// activate). That branch was correct for Class B (Unknown
+    /// origin) but flipped for Class A (AgentPane origin) — for a
+    /// session WE started in an agent pane, the natural Enter target
+    /// is the *same* agent pane (via ACP `session/load`), and the
+    /// escape hatch is the CLI `--resume` flag. This dispatcher
+    /// honors the per-origin default and treats Shift as "flip the
+    /// default".
+    ///
+    /// Live rows are unaffected: Shift on a Live row is the same as
+    /// Enter (agents forbid two clients on one session, so any
+    /// "force second copy" attempt would just error).
+    fn activate_agent_session_with_shift(
+        &mut self,
+        s: &crate::agent_sessions::AgentSession,
+        shift: bool,
+    ) {
+        use crate::session_mgmt::{
+            decide_enter_action, liveness_from_status, EnterAction, NotResumableReason, RowSnapshot,
+        };
+        // Ambient: load_session capability is set during ACP init;
+        // resume-flag support is a per-CLI profile constant (false for
+        // Codex today; true for Claude/Copilot/Gemini).
+        let cli_supports_resume_flag = match s.cli_source {
+            crate::agent_sessions::CliSource::Unknown(_) => false,
+            ref known => {
+                let id = match known {
+                    crate::agent_sessions::CliSource::Claude  => "claude",
+                    crate::agent_sessions::CliSource::Copilot => "copilot",
+                    crate::agent_sessions::CliSource::Gemini  => "gemini",
+                    crate::agent_sessions::CliSource::Unknown(_) => unreachable!(),
+                };
+                !crate::agent_registry::lookup_profile_by_id(id).resume_flag.is_empty()
+            }
+        };
+        let row = RowSnapshot {
+            origin: s.origin.clone(),
+            liveness: liveness_from_status(&s.status, s.pane_session_id.clone()),
+            key: s.key.clone(),
+            cli_source: s.cli_source.clone(),
+            load_session_supported: self.agent_supports_load_session,
+            cli_supports_resume_flag,
+        };
+        let action = decide_enter_action(&row, shift);
+
+        tracing::info!(
+            target: "agents_view",
+            key = %s.key,
+            status = ?s.status,
+            origin = ?s.origin,
+            pane_session_id = ?s.pane_session_id,
+            cli = ?s.cli_source,
+            shift = shift,
+            action = ?action,
+            "activate_agent_session_with_shift: decided action",
+        );
+
+        match action {
+            EnterAction::Focus { pane_session_id } => {
+                self.dispatch_focus_pane(&pane_session_id, &s.key);
+            }
+            EnterAction::ResumeInAgentPane { .. } => {
+                // dispatch_resume_in_agent_pane owns the loadSession
+                // capability gate (also re-checked) + phantom guard +
+                // optimistic ResumeDispatched + emit
+                // resume_in_new_agent_tab to WT.
+                self.dispatch_resume_in_agent_pane(s);
+            }
+            EnterAction::ResumeCliFlag { .. } => {
+                // dispatch_resume owns the resume-flag check + phantom
+                // guard + optimistic ResumeDispatched + new-tab spawn.
+                self.dispatch_resume(s);
+            }
+            EnterAction::NotResumable { reason } => {
+                // Surface a user-visible system message scoped to the
+                // current tab so the user can read it from the
+                // Agents view (which is rendered in-tab).
+                let cli_id = match s.cli_source {
+                    crate::agent_sessions::CliSource::Claude  => "claude",
+                    crate::agent_sessions::CliSource::Copilot => "copilot",
+                    crate::agent_sessions::CliSource::Gemini  => "gemini",
+                    crate::agent_sessions::CliSource::Unknown(_) => "this CLI",
+                };
+                let msg = match reason {
+                    NotResumableReason::LiveWithoutPane => format!(
+                        "Cannot focus session {}: it appears live but no \
+                         pane GUID is bound yet. Try again in a moment.",
+                        s.key
+                    ),
+                    NotResumableReason::LoadSessionNotSupported => {
+                        let agent = if self.agent_name.is_empty() {
+                            "the connected agent"
+                        } else {
+                            self.agent_name.as_str()
+                        };
+                        format!(
+                            "Cannot resume in agent pane: {} did not advertise \
+                             the ACP `loadSession` capability. Press Enter \
+                             (without Shift) to resume in a new terminal pane instead.",
+                            agent
+                        )
+                    }
+                    NotResumableReason::CliHasNoResumeFlag => format!(
+                        "Cannot resume {} session: this CLI has no \
+                         `--resume`-style flag. Press Shift+Enter to try \
+                         resuming inside the agent pane via ACP instead.",
+                        cli_id
+                    ),
+                    NotResumableReason::UnknownCli => format!(
+                        "Cannot resume session {}: its source CLI is unknown \
+                         to this WTA build.",
+                        s.key
+                    ),
+                };
+                tracing::warn!(
+                    target: "agents_view",
+                    key = %s.key,
+                    reason = ?reason,
+                    "activate_agent_session_with_shift: not resumable",
+                );
+                let tab = self.current_tab_mut();
+                tab.messages.push(ChatMessage::System(msg));
+                tab.scroll_to_bottom();
+                #[cfg(test)]
+                {
+                    self.last_dispatched_command = Some(DispatchedCommand {
+                        kind: DispatchedCommandKind::NotResumable,
+                        session_id: Some(s.key.clone()),
+                        argv: vec![
+                            "not-resumable".to_string(),
+                            format!("{:?}", reason),
+                        ],
+                    });
+                }
+            }
+        }
     }
 
     /// Enter handler for the F2 Agents view. For live rows (Idle / Working
@@ -4565,21 +4780,15 @@ impl App {
                             .get(idx)
                             .map(|s| (*s).clone());
                         if let Some(s) = selected {
-                            use crate::agent_sessions::AgentStatus::*;
-                            // Shift+Enter on a terminal-state row resumes
-                            // the session in the agent pane of a new WT
-                            // tab via ACP session/load. Plain Enter keeps
-                            // the legacy behaviour (split a normal pane
-                            // running `<cli> --resume <key>` for terminal
-                            // rows, or focus the existing pane for live
-                            // rows).
-                            if key.modifiers.contains(KeyModifiers::SHIFT)
-                                && matches!(s.status, Ended | Historical)
-                            {
-                                self.dispatch_resume_in_agent_pane(&s);
-                            } else {
-                                self.activate_agent_session(&s);
-                            }
+                            // B-10: route through the unified
+                            // state-machine dispatcher. Shift flips
+                            // the default per-origin (see
+                            // session_mgmt::decide_enter_action) —
+                            // Live rows ignore Shift; dead rows use
+                            // it as an escape hatch to the *other*
+                            // resume style.
+                            let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+                            self.activate_agent_session_with_shift(&s, shift);
                         }
                     }
                 }
@@ -8260,9 +8469,20 @@ mod tests {
         let cmd = app
             .last_dispatched_command_for_test()
             .expect("a command was dispatched");
-        assert_eq!(cmd.kind, DispatchedCommandKind::ResumeInAgentPane);
+        // B-10: `decide_enter_action` short-circuits to NotResumable
+        // before any side-effect dispatch when the agent doesn't
+        // advertise loadSession. Previously this routed all the way
+        // through `dispatch_resume_in_agent_pane`'s internal gate;
+        // now the gate is hoisted into the pure state machine so
+        // there's one canonical path. The system hint message is
+        // unchanged.
+        assert_eq!(cmd.kind, DispatchedCommandKind::NotResumable);
         let argv = cmd.argv.join(" ");
-        assert!(argv.contains("--unsupported"), "argv: {}", argv);
+        assert!(
+            argv.contains("LoadSessionNotSupported"),
+            "argv: {}",
+            argv
+        );
         // The current tab gets a System hint message.
         let has_hint = app.current_tab().messages.iter().any(|m| {
             matches!(m, ChatMessage::System(text)
@@ -8292,6 +8512,156 @@ mod tests {
         app.current_tab_mut().agents_list_state.select(Some(0));
 
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        let cmd = app
+            .last_dispatched_command_for_test()
+            .expect("a command was dispatched");
+        assert_eq!(cmd.kind, DispatchedCommandKind::FocusPane);
+    }
+
+    // -------- B-10: state-machine-driven Enter / Shift+Enter dispatch --------
+    //
+    // Pure routing rules are exhaustively tested in
+    // `session_mgmt::tests`. Here we verify the *integration* — that the
+    // key-handler path actually constructs a RowSnapshot from the
+    // selected AgentSession, hands it to `decide_enter_action`, and
+    // dispatches each EnterAction variant through the correct side
+    // effect (or NotResumable hint). One or two representative cases
+    // per variant is enough; B-1 holds the truth table.
+
+    /// Class A (AgentPane origin) dead row + plain Enter:
+    /// new state machine routes to ResumeInAgentPane (ACP load).
+    /// This is the headline behavior change from B-10 — previously
+    /// Class A dead + Enter ran the CLI --resume flag path.
+    #[test]
+    fn enter_on_class_a_dead_row_dispatches_resume_in_agent_pane() {
+        use crate::agent_sessions::{CliSource, SessionEvent, SessionOrigin};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use std::path::PathBuf;
+        let mut app = test_app();
+        app.agent_supports_load_session = true;
+        app.agent_sessions.apply(SessionEvent::SessionStarted {
+            key: "abc-class-a".into(),
+            cli_source: CliSource::Claude,
+            pane_session_id: "p".into(),
+            cwd: PathBuf::from("/work/cls-a"),
+            title: "t".into(),
+        });
+        app.agent_sessions.apply(SessionEvent::SessionStopped {
+            key: "abc-class-a".into(),
+            reason: "user_exit".into(),
+        });
+        app.agent_sessions
+            .set_origin("abc-class-a", SessionOrigin::AgentPane);
+
+        app.current_tab_mut().current_view = View::Agents;
+        app.current_tab_mut().agents_list_state.select(Some(0));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let cmd = app
+            .last_dispatched_command_for_test()
+            .expect("a command was dispatched");
+        assert_eq!(cmd.kind, DispatchedCommandKind::ResumeInAgentPane);
+        let argv = cmd.argv.join(" ");
+        assert!(argv.contains("resume_in_new_agent_tab"), "argv: {}", argv);
+        assert!(argv.contains("--session-id abc-class-a"), "argv: {}", argv);
+    }
+
+    /// Class A (AgentPane origin) dead row + Shift+Enter:
+    /// Shift flips the default → ResumeCliFlag (new tab CLI --resume).
+    #[test]
+    fn shift_enter_on_class_a_dead_row_dispatches_cli_resume() {
+        use crate::agent_sessions::{CliSource, SessionEvent, SessionOrigin};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use std::path::PathBuf;
+        let mut app = test_app();
+        app.agent_supports_load_session = true;
+        app.agent_sessions.apply(SessionEvent::SessionStarted {
+            key: "abc-class-a-shift".into(),
+            cli_source: CliSource::Claude,
+            pane_session_id: "p".into(),
+            cwd: PathBuf::from("/work/cls-a"),
+            title: "t".into(),
+        });
+        app.agent_sessions.apply(SessionEvent::SessionStopped {
+            key: "abc-class-a-shift".into(),
+            reason: "user_exit".into(),
+        });
+        app.agent_sessions
+            .set_origin("abc-class-a-shift", SessionOrigin::AgentPane);
+
+        app.current_tab_mut().current_view = View::Agents;
+        app.current_tab_mut().agents_list_state.select(Some(0));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+
+        // dispatch_resume internally guards on phantom-on-disk content
+        // (the artefact for "abc-class-a-shift" does not exist), so we
+        // observe the NewTabResume dispatch with the phantom-skipped
+        // sentinel argv. What matters here is that Shift+Enter on
+        // Class A dead routed through dispatch_resume (the CLI flag
+        // path), NOT dispatch_resume_in_agent_pane.
+        let cmd = app
+            .last_dispatched_command_for_test()
+            .expect("a command was dispatched");
+        assert_eq!(cmd.kind, DispatchedCommandKind::NewTabResume);
+    }
+
+    /// Live row + Shift+Enter: identical to Enter (Shift is a no-op on
+    /// live rows because agents forbid two clients on one session).
+    /// This is implicitly the case for `shift_enter_on_live_row_falls_
+    /// back_to_focus` above; here we additionally assert with a Class
+    /// A origin to confirm origin doesn't matter for Live rows.
+    #[test]
+    fn shift_enter_on_class_a_live_row_focuses() {
+        use crate::agent_sessions::{CliSource, SessionEvent, SessionOrigin};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use std::path::PathBuf;
+        let mut app = test_app();
+        app.agent_sessions.apply(SessionEvent::SessionStarted {
+            key: "live-class-a".into(),
+            cli_source: CliSource::Claude,
+            pane_session_id: "00000000-0000-0000-0000-0000000000bb".into(),
+            cwd: PathBuf::from("/x"),
+            title: "t".into(),
+        });
+        app.agent_sessions
+            .set_origin("live-class-a", SessionOrigin::AgentPane);
+
+        app.current_tab_mut().current_view = View::Agents;
+        app.current_tab_mut().agents_list_state.select(Some(0));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+
+        let cmd = app
+            .last_dispatched_command_for_test()
+            .expect("a command was dispatched");
+        assert_eq!(cmd.kind, DispatchedCommandKind::FocusPane);
+        assert_eq!(
+            cmd.session_id.as_deref(),
+            Some("00000000-0000-0000-0000-0000000000bb")
+        );
+    }
+
+    /// Class B (Unknown origin) + plain Enter on a Live row preserves
+    /// the legacy focus behavior — this exercises the most common F2
+    /// path (user-started `copilot` in a normal pane via hooks).
+    #[test]
+    fn enter_on_class_b_live_row_focuses() {
+        use crate::agent_sessions::{CliSource, SessionEvent};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use std::path::PathBuf;
+        let mut app = test_app();
+        // SessionStarted defaults origin to Unknown (Class B).
+        app.agent_sessions.apply(SessionEvent::SessionStarted {
+            key: "live-class-b".into(),
+            cli_source: CliSource::Copilot,
+            pane_session_id: "00000000-0000-0000-0000-0000000000cc".into(),
+            cwd: PathBuf::from("/x"),
+            title: "t".into(),
+        });
+
+        app.current_tab_mut().current_view = View::Agents;
+        app.current_tab_mut().agents_list_state.select(Some(0));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
         let cmd = app
             .last_dispatched_command_for_test()
             .expect("a command was dispatched");
