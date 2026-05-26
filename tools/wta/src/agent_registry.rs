@@ -191,6 +191,20 @@ pub fn lookup_profile_by_id(id: &str) -> &'static AgentProfile {
         .unwrap_or(&DEFAULT_PROFILE)
 }
 
+/// Returns true if this agent is served by a third-party ACP adapter
+/// (e.g. `npx @zed-industries/claude-code-acp`) rather than the CLI's
+/// own native ACP support.
+///
+/// Adapter-based agents do NOT load the host CLI's plugin system, so
+/// our `wt-agent-hooks` plugin never fires for them — wta synthesizes
+/// equivalent session lifecycle events from ACP traffic to keep the
+/// session registry populated. See
+/// `protocol::acp::client::run_inner` for the emission site and
+/// GitHub issue #48 for the full design discussion.
+pub fn is_adapter_based(agent_id: &str) -> bool {
+    !lookup_profile_by_id(agent_id).acp_launch_command.is_empty()
+}
+
 /// Resolve a full agent command line (e.g. the value of `--agent`) into the
 /// canonical agent id known to [`KNOWN_AGENTS`] — `"copilot"`, `"claude"`,
 /// `"codex"`, `"gemini"` — or `"unknown"` if nothing matches.

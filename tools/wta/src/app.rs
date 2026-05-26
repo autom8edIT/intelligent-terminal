@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 struct DeferredAcpParams {
     agent_cmd: String,
     acp_model: Option<String>,
+    agent_id: Option<String>,
     prompt_rx: Option<mpsc::UnboundedReceiver<crate::protocol::acp::client::PromptSubmission>>,
     cancel_rx: Option<mpsc::UnboundedReceiver<crate::protocol::acp::client::CancelRequest>>,
     new_session_rx: Option<mpsc::UnboundedReceiver<crate::protocol::acp::client::NewSessionForTab>>,
@@ -921,6 +922,18 @@ pub enum AppEvent {
     /// Posting via the main loop keeps `agent_sessions` access single-threaded
     /// and lets `tracing::*` calls emit on a stable thread.
     AgentSessionEvent(crate::agent_sessions::SessionEvent),
+    /// One-shot title upgrade hint for adapter-based agent-pane sessions
+    /// (Claude/Codex via the Zed adapter). Phase 1's synthetic
+    /// `SessionStarted` populates the row with a cwd-basename placeholder
+    /// title; this event delivers a real title fetched from the CLI's
+    /// on-disk session log so the F2 list shows the user's actual first
+    /// prompt instead of the cwd. Emitted from `dispatch_prompt_body`
+    /// after each prompt completes; idempotent (the handler no-ops once
+    /// the title is already non-synthetic). See issue #48.
+    SyntheticTitleRefresh {
+        key: String,
+        title: String,
+    },
     /// Historical agent sessions scanned off the main thread by a
     /// `spawn_blocking` task wrapping `history_loader::load_all()`. Posted
     /// instead of running the scan inline so a large `~/.copilot/session-state`
@@ -1601,6 +1614,7 @@ impl App {
         &mut self,
         agent_cmd: String,
         acp_model: Option<String>,
+        agent_id: Option<String>,
         prompt_rx: mpsc::UnboundedReceiver<crate::protocol::acp::client::PromptSubmission>,
         cancel_rx: mpsc::UnboundedReceiver<crate::protocol::acp::client::CancelRequest>,
         new_session_rx: mpsc::UnboundedReceiver<crate::protocol::acp::client::NewSessionForTab>,
@@ -1613,6 +1627,7 @@ impl App {
         self.deferred_acp = Some(DeferredAcpParams {
             agent_cmd,
             acp_model,
+            agent_id,
             prompt_rx: Some(prompt_rx),
             cancel_rx: Some(cancel_rx),
             new_session_rx: Some(new_session_rx),
@@ -1671,6 +1686,7 @@ impl App {
                 // be on PATH in packaged apps — use WinGet Links fallback).
                 let agent_cmd = resolve_agent_cmd(&params.agent_cmd);
                 let acp_model = params.acp_model.clone();
+                let agent_id = params.agent_id.clone();
                 let owner_tab_id = self.tab_id.clone();
                 let event_tx = tx.clone();
                 let shell_mgr = Arc::clone(&params.shell_mgr);
@@ -1680,6 +1696,7 @@ impl App {
                     agent_cmd,
                     acp_model,
                     owner_tab_id,
+                    agent_id,
                     event_tx,
                     prompt_rx,
                     cancel_rx,
@@ -2880,6 +2897,7 @@ impl App {
             AppEvent::LoginComplete { .. } => "login_complete",
             AppEvent::PreflightComplete(_) => "preflight_complete",
             AppEvent::AgentSessionEvent(_) => "agent_session_event",
+            AppEvent::SyntheticTitleRefresh { .. } => "synthetic_title_refresh",
             AppEvent::HistoricalSessionsLoaded(_) => "historical_sessions_loaded",
         }
     }
@@ -3362,9 +3380,66 @@ impl App {
                     }
                     _ => None,
                 };
+                // Extract key for origin refresh. Covers all variants that
+                // carry one directly; for pane-only variants we look up
+                // the bound key (may not exist yet for a fresh PaneClosed).
+                let key_for_origin_refresh = match &ev {
+                    crate::agent_sessions::SessionEvent::SessionStarted { key, .. }
+                    | crate::agent_sessions::SessionEvent::ToolStarting { key, .. }
+                    | crate::agent_sessions::SessionEvent::ToolCompleted { key }
+                    | crate::agent_sessions::SessionEvent::Notification { key, .. }
+                    | crate::agent_sessions::SessionEvent::SessionStopped { key, .. }
+                    | crate::agent_sessions::SessionEvent::ResumeDispatched { key }
+                    | crate::agent_sessions::SessionEvent::ResumePaneAssigned { key, .. } => {
+                        Some(key.clone())
+                    }
+                    crate::agent_sessions::SessionEvent::PaneClosed { pane_session_id }
+                    | crate::agent_sessions::SessionEvent::ConnectionFailed {
+                        pane_session_id,
+                        ..
+                    } => self.agent_sessions.key_for_pane(pane_session_id),
+                };
                 self.agent_sessions.apply(ev);
+
+                // Mirror the origin stamping that `route_agent_event_to_registry`
+                // (the hook path) does for events whose key is in the
+                // agent-pane origin index. Required so synthetic
+                // SessionStarted events emitted for adapter-based agent
+                // panes (e.g. Claude via the Zed adapter) get
+                // `SessionOrigin::AgentPane` — otherwise the
+                // keep-Idle-on-`reason=complete` lifecycle at
+                // `agent_sessions.rs::SessionStopped` would demote them
+                // straight to Ended. Safe for existing events on this
+                // pathway: `set_origin` is idempotent.
+                if let Some(k) = key_for_origin_refresh {
+                    if !k.is_empty() {
+                        let agent_pane_keys = crate::agent_pane_origin::load_default_set();
+                        if agent_pane_keys.contains(&k) {
+                            self.agent_sessions.set_origin(
+                                &k,
+                                crate::agent_sessions::SessionOrigin::AgentPane,
+                            );
+                        }
+                    }
+                }
+
                 if let Some(k) = key_to_prune {
                     crate::app::prune_phantom_session_if_ended(&mut self.agent_sessions, &k);
+                }
+            }
+            AppEvent::SyntheticTitleRefresh { key, title } => {
+                // Idempotent: `upgrade_title_if_synthetic` no-ops once the
+                // title is already non-synthetic, so re-firing this on
+                // every prompt for the same adapter-based session costs
+                // only a HashMap lookup + string compare after the first
+                // successful upgrade.
+                if self.agent_sessions.upgrade_title_if_synthetic(&key, &title) {
+                    tracing::info!(
+                        target: "acp_synthetic_hook",
+                        key = %key,
+                        title = %title,
+                        "upgraded synthetic title from on-disk session log",
+                    );
                 }
             }
             AppEvent::HistoricalSessionsLoaded(sessions) => {

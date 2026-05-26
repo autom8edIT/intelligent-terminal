@@ -1680,6 +1680,7 @@ pub async fn run_acp_client(
     mut agent_cmd: String,
     acp_model_override: Option<String>,
     owner_tab_id: Option<String>,
+    agent_id: Option<String>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
     mut prompt_rx: mpsc::UnboundedReceiver<PromptSubmission>,
     mut cancel_rx: mpsc::UnboundedReceiver<CancelRequest>,
@@ -1699,12 +1700,20 @@ pub async fn run_acp_client(
     // Restart loop. `run_inner` returns `ExitReason::Restart` when the
     // user invokes `/restart`; we re-enter to spawn a fresh agent
     // process. Any other return (Done or Err) breaks the loop.
+    //
+    // NOTE on `agent_id`: kept constant across the restart loop. If the
+    // user switches agents via `/restart`, the new agent will spawn with
+    // the original agent_id stamped on synthetic events (see
+    // `is_adapter_based` gate in `run_inner`). This is a Phase 1 limitation;
+    // RestartRequest would need to carry a new agent_id for correctness
+    // mid-process. Tracked in issue #48 follow-ups.
     loop {
         startup_probe.log("run_acp_client entering run_inner");
         match run_inner(
             &agent_cmd,
             acp_model_override.clone(),
             owner_tab_id.clone(),
+            agent_id.clone(),
             event_tx.clone(),
             &mut prompt_rx,
             &mut cancel_rx,
@@ -1775,10 +1784,124 @@ pub async fn run_acp_client(
     }
 }
 
+/// Called once for every successful ACP `new_session` made on behalf of an
+/// agent pane. Wraps two side-effects that must happen together to keep
+/// the session list correct:
+///
+///   1. Append the session id to the on-disk `agent_pane_origin` index so
+///      that history reload later joins it correctly (so the row gets
+///      `SessionOrigin::AgentPane` once it shows up).
+///   2. For adapter-based agents (Claude via the Zed adapter, Codex via
+///      the OpenAI adapter), emit a synthetic `SessionStarted` event so
+///      the registry has a row to display while the session is live —
+///      otherwise the hook path never fires for these CLIs and the
+///      session is invisible in the F2 list until it ends. See GitHub
+///      issue #48.
+///
+/// Native-ACP agents (Copilot, Gemini) take only step 1 — their hooks
+/// already drive a SessionStarted into the registry, so re-emitting one
+/// here would either be redundant (same key) or create a competing row
+/// (different key). For agents with no `CliSource` variant (Codex
+/// today), step 2 is skipped with a debug log — extending `CliSource`
+/// to cover them is a follow-up ticket.
+///
+/// Called from all three `new_session` sites in this module: startup
+/// (`run_inner` body), `/new` (NewSessionForTab handler), and the lazy
+/// create-on-first-prompt path in `dispatch_prompt_body`.
+///
+/// No-op when `is_agent_pane` is false (manual `wta` runs from a shell).
+fn register_agent_pane_session(
+    is_agent_pane: bool,
+    canonical_agent_id: &str,
+    session_id: &acp::SessionId,
+    cwd: &std::path::Path,
+    event_tx: &mpsc::UnboundedSender<AppEvent>,
+) {
+    if !is_agent_pane {
+        return;
+    }
+    crate::agent_pane_origin::append_default(session_id.0.as_ref());
+
+    let is_adapter = crate::agent_registry::is_adapter_based(canonical_agent_id);
+    let cli_source = crate::agent_sessions::CliSource::from_agent_id(canonical_agent_id);
+    let pane_session_id = std::env::var("WT_SESSION").unwrap_or_default();
+
+    match (is_adapter, cli_source, pane_session_id.is_empty()) {
+        (true, Some(cli), false) => {
+            let title = cwd
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            tracing::info!(
+                target: "acp_synthetic_hook",
+                agent_id = %canonical_agent_id,
+                session_id = %session_id,
+                pane = %pane_session_id,
+                "emitting synthetic SessionStarted for adapter-based agent pane",
+            );
+            let _ = event_tx.send(AppEvent::AgentSessionEvent(
+                crate::agent_sessions::SessionEvent::SessionStarted {
+                    key: session_id.0.to_string(),
+                    cli_source: cli.clone(),
+                    pane_session_id,
+                    cwd: cwd.to_path_buf(),
+                    title,
+                },
+            ));
+
+            // Ghost-session safety net: if the user opens an agent pane but
+            // never sends a real prompt, `dispatch_prompt_body` never runs
+            // and the post-prompt title-upgrade task (see end of
+            // `dispatch_prompt_body`) never fires, leaving the row stuck at
+            // the cwd-basename placeholder forever. Kick off a delayed
+            // lookup here so ghost sessions converge to the same title that
+            // `history_loader::lookup_title_for_session` would extract when
+            // the session is later reloaded as historical. 3 s is enough
+            // for the adapter to flush the system prompt (Claude writes its
+            // first jsonl record at session-create time). Idempotent: the
+            // post-prompt task may run later for the same session and
+            // upgrade_title_if_synthetic no-ops once title is non-synthetic.
+            let session_id_for_ghost = session_id.0.to_string();
+            let event_tx_for_ghost = event_tx.clone();
+            tokio::task::spawn_local(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                if let Some(title) =
+                    crate::history_loader::lookup_title_for_session(cli, &session_id_for_ghost)
+                {
+                    let _ = event_tx_for_ghost.send(AppEvent::SyntheticTitleRefresh {
+                        key: session_id_for_ghost,
+                        title,
+                    });
+                }
+            });
+        }
+        (true, None, _) => {
+            tracing::debug!(
+                target: "acp_synthetic_hook",
+                agent_id = %canonical_agent_id,
+                "adapter-based agent but CliSource has no matching variant \
+                 (likely Codex); skipping synthetic SessionStarted",
+            );
+        }
+        (true, _, true) => {
+            tracing::warn!(
+                target: "acp_synthetic_hook",
+                agent_id = %canonical_agent_id,
+                "WT_SESSION env not set; cannot bind synthetic SessionStarted to pane",
+            );
+        }
+        (false, _, _) => {
+            // Native ACP CLI — hook path covers it, no synthetic needed.
+        }
+    }
+}
+
 async fn run_inner(
     agent_cmd: &str,
     acp_model_override: Option<String>,
     owner_tab_id: Option<String>,
+    agent_id: Option<String>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
     prompt_rx: &mut mpsc::UnboundedReceiver<PromptSubmission>,
     cancel_rx: &mut mpsc::UnboundedReceiver<CancelRequest>,
@@ -1811,6 +1934,22 @@ async fn run_inner(
         .as_ref()
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
+
+    // Resolve the canonical agent id once, up front. Used by
+    // `register_agent_pane_session` at each `new_session` site (startup,
+    // `/new`, lazy-create-on-prompt) to decide whether to synthesize a
+    // registry `SessionStarted` event for adapter-based agents whose
+    // hooks never fire. Prefers the `--agent-id` value the host passed
+    // through (most reliable); falls back to reverse-parsing the agent
+    // command for manual / older-host runs.
+    let canonical_agent_id: String = agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| {
+            crate::agent_registry::resolve_agent_id_from_cmd(agent_cmd).to_string()
+        });
 
     // Resolve the user's active pane cwd before spawning the agent. Both the
     // child's working directory and the ACP `new_session` cwd derive from it,
@@ -1989,7 +2128,7 @@ async fn run_inner(
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     startup_probe.log(&format!("Using session cwd={}", cwd.display()));
-    let session_future = conn.new_session(acp::NewSessionRequest::new(cwd));
+    let session_future = conn.new_session(acp::NewSessionRequest::new(cwd.clone()));
     let session = tokio::time::timeout(std::time::Duration::from_secs(15), session_future)
         .await
         .map_err(|_| anyhow::anyhow!("new_session timed out after 15 s"))?
@@ -1997,9 +2136,13 @@ async fn run_inner(
 
     let session_id = session.session_id.clone();
     startup_probe.log(&format!("Session created: {}", session_id));
-    if is_agent_pane {
-        crate::agent_pane_origin::append_default(session_id.0.as_ref());
-    }
+    register_agent_pane_session(
+        is_agent_pane,
+        &canonical_agent_id,
+        &session_id,
+        &cwd,
+        &event_tx,
+    );
 
     // Capture the agent's advertised model list. Settings UI rebuilds its
     // ComboBox from the `agent_status` event payload, where this gets
@@ -2185,6 +2328,7 @@ async fn run_inner(
                 let cancel_signals_for_new = Arc::clone(&cancel_signals);
                 let event_tx_for_new = event_tx.clone();
                 let is_agent_pane_for_new = is_agent_pane;
+                let canonical_agent_id_for_new = canonical_agent_id.clone();
                 tokio::task::spawn_local(async move {
                     let cwd = req
                         .cwd
@@ -2213,7 +2357,7 @@ async fn run_inner(
                     }
 
                     let new_session = match conn_for_new
-                        .new_session(acp::NewSessionRequest::new(cwd))
+                        .new_session(acp::NewSessionRequest::new(cwd.clone()))
                         .await
                     {
                         Ok(s) => s,
@@ -2227,9 +2371,13 @@ async fn run_inner(
                     };
 
                     let new_sid = new_session.session_id.clone();
-                    if is_agent_pane_for_new {
-                        crate::agent_pane_origin::append_default(new_sid.0.as_ref());
-                    }
+                    register_agent_pane_session(
+                        is_agent_pane_for_new,
+                        &canonical_agent_id_for_new,
+                        &new_sid,
+                        &cwd,
+                        &event_tx_for_new,
+                    );
                     let (per_tab_models, per_tab_current) = match &new_session.models {
                         Some(state) => {
                             let models: Vec<crate::app::AcpModelInfo> = state
@@ -2454,6 +2602,7 @@ async fn run_inner(
                     &state.prompt_timing,
                     wt_connected,
                     is_agent_pane,
+                    &canonical_agent_id,
                 );
             }
             else => break ExitReason::Done,
@@ -2480,6 +2629,7 @@ fn dispatch_prompt(
     prompt_timing: &Arc<PromptTimingState>,
     wt_connected: bool,
     is_agent_pane: bool,
+    canonical_agent_id: &str,
 ) {
     let tab_key = prompt
         .pane_context
@@ -2506,6 +2656,7 @@ fn dispatch_prompt(
     let shell_mgr_task = Arc::clone(shell_mgr);
     let prompt_timing_task = Arc::clone(prompt_timing);
     let tab_key_task = tab_key.clone();
+    let canonical_agent_id_task = canonical_agent_id.to_string();
 
     tokio::task::spawn_local(dispatch_prompt_body(
         prompt,
@@ -2520,6 +2671,7 @@ fn dispatch_prompt(
         tab_key_task,
         wt_connected,
         is_agent_pane,
+        canonical_agent_id_task,
     ));
 }
 
@@ -2540,6 +2692,7 @@ async fn dispatch_prompt_body(
     tab_key_task: String,
     wt_connected: bool,
     is_agent_pane: bool,
+    canonical_agent_id: String,
 ) {
             // Resolve (or lazily create) the ACP session for this tab.
             let prompt_session_id = {
@@ -2554,7 +2707,7 @@ async fn dispatch_prompt_body(
                         .map(std::path::PathBuf::from)
                         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                     let new_session = match conn_task
-                        .new_session(acp::NewSessionRequest::new(cwd))
+                        .new_session(acp::NewSessionRequest::new(cwd.clone()))
                         .await
                     {
                         Ok(s) => s,
@@ -2571,9 +2724,13 @@ async fn dispatch_prompt_body(
                         }
                     };
                     let new_sid = new_session.session_id.clone();
-                    if is_agent_pane {
-                        crate::agent_pane_origin::append_default(new_sid.0.as_ref());
-                    }
+                    register_agent_pane_session(
+                        is_agent_pane,
+                        &canonical_agent_id,
+                        &new_sid,
+                        &cwd,
+                        &event_tx_task,
+                    );
                     let (per_tab_models, per_tab_current) = match &new_session.models {
                         Some(state) => {
                             let models: Vec<crate::app::AcpModelInfo> = state
@@ -2695,6 +2852,46 @@ async fn dispatch_prompt_body(
                 .unwrap()
                 .remove(&prompt_session_id_str);
             in_flight_tabs_task.lock().unwrap().remove(&tab_key_task);
+
+            // Synthetic title refresh for adapter-based agent-pane sessions.
+            // Phase 1 only emits a single SessionStarted event with a
+            // cwd-basename placeholder title (see `register_agent_pane_session`).
+            // Hook-driven CLIs upgrade this placeholder on every subsequent
+            // event via `route_agent_event_to_registry`'s title-upgrade pass
+            // (app.rs:492-499), but adapter sessions never get hooks.
+            //
+            // We kick off a one-shot disk lookup AFTER the prompt streaming
+            // completes (so the CLI has had time to flush its session log).
+            // Idempotent: `upgrade_title_if_synthetic` no-ops once the title
+            // is real, so re-firing on every prompt is cheap.
+            //
+            // Runs as a separate spawn_local so the disk read doesn't block
+            // the prompt cleanup. ~10 ms cost on a real machine.
+            if is_agent_pane {
+                if let Some(cli) =
+                    crate::agent_sessions::CliSource::from_agent_id(&canonical_agent_id)
+                {
+                    if crate::agent_registry::is_adapter_based(&canonical_agent_id) {
+                        let session_id_for_title = prompt_session_id_str.clone();
+                        let event_tx_for_title = event_tx_task.clone();
+                        tokio::task::spawn_local(async move {
+                            if let Some(title) =
+                                crate::history_loader::lookup_title_for_session(
+                                    cli,
+                                    &session_id_for_title,
+                                )
+                            {
+                                let _ = event_tx_for_title.send(
+                                    AppEvent::SyntheticTitleRefresh {
+                                        key: session_id_for_title,
+                                        title,
+                                    },
+                                );
+                            }
+                        });
+                    }
+                }
+            }
 }
 
 #[cfg(test)]

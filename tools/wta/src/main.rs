@@ -1654,6 +1654,7 @@ async fn run_acp_app(
                     agent_cmd.clone(),
                     cli.acp_model.clone(),
                     cli.owner_tab_id.clone(),
+                    cli.agent_id.clone(),
                     event_tx.clone(),
                     prompt_rx,
                     cancel_rx,
@@ -1884,6 +1885,7 @@ async fn run_acp_app(
                 app_state.set_acp_params(
                     agent_cmd.clone(),
                     cli.acp_model.clone(),
+                    cli.agent_id.clone(),
                     prompt_rx,
                     cancel_rx,
                     new_session_rx,
