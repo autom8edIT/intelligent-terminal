@@ -17,6 +17,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -59,29 +60,43 @@ namespace Microsoft::Terminal::ShellIntegration
         return profilePath.wstring();
     }
 
-    // Versioned filename for the script we ship. To roll out a new version,
-    // bump the `_vN` suffix here and update the embedded `$Global:__ShellInteg_Version`
-    // literal in ScriptContent below. Install() looks for any prior version of
-    // this file (or the legacy unversioned name) in $PROFILE and rewrites the
-    // line in place; older script files left on disk are inert.
-    inline constexpr std::wstring_view kShellIntegrationScriptFileName = L"shell-integration_v1.ps1";
+    // ───────────────────────────────────────────────────────────────────
+    // SINGLE SOURCE OF TRUTH for shell-integration script versioning.
+    // To roll out a new version, bump this integer — the filename
+    // (`shell-integration_vN.ps1`) and the embedded
+    // `$Global:__ShellInteg_Version = N` literal are derived from it.
+    // Install() looks for any prior version of this script (or the
+    // legacy unversioned name) in $PROFILE and rewrites the line in
+    // place; older script files left on disk are inert.
+    // ───────────────────────────────────────────────────────────────────
+    inline constexpr int kShellIntegrationVersion = 1;
 
-    // The shell integration script content.
-    inline constexpr std::wstring_view ScriptContent{
-        LR"(# Shell Integration — non-invasive prompt wrapper
+    // Versioned filename — derived from kShellIntegrationVersion.
+    inline std::wstring ShellIntegrationScriptFileName()
+    {
+        return L"shell-integration_v" + std::to_wstring(kShellIntegrationVersion) + L".ps1";
+    }
+
+    // The shell integration script content. The literal `__VERSION__` token
+    // is substituted with kShellIntegrationVersion at runtime so the version
+    // appears in exactly one place in source.
+    inline std::wstring ShellIntegrationScriptContent()
+    {
+        constexpr std::wstring_view kTemplate{
+            LR"(# Shell Integration — non-invasive prompt wrapper
 # Emits OSC 133 (command marks / exit code) and OSC 9;9 (CWD) escape
 # sequences WITHOUT altering the visual appearance of the user's prompt.
 #
 # USAGE: dot-source this AFTER the user's profile has loaded:
-#   . "path\to\shell-integration_v1.ps1"
+#   . "path\to\shell-integration_v__VERSION__.ps1"
 #
 # Compatible with Windows PowerShell 5.1+ and PowerShell 7+.
 # Safe to source multiple times (idempotent guard).
 
 if (-not $Global:__ShellInteg_Installed) {
 
-    # Version sentinel — bump in lockstep with kShellIntegrationScriptFileName.
-    $Global:__ShellInteg_Version = 1
+    # Version sentinel — derived from kShellIntegrationVersion in C++ source.
+    $Global:__ShellInteg_Version = __VERSION__
 
     # ── Escape characters (PS 5.1 doesn't support `e / `a literals) ──
     $Global:__ShellInteg_ESC = [char]0x1B   # ESC
@@ -137,54 +152,53 @@ if (-not $Global:__ShellInteg_Installed) {
     }
 }
 )"
-    };
+        };
+        std::wstring result{ kTemplate };
+        const auto versionStr = std::to_wstring(kShellIntegrationVersion);
+        for (size_t pos = 0; (pos = result.find(L"__VERSION__", pos)) != std::wstring::npos;)
+        {
+            result.replace(pos, 11, versionStr);
+            pos += versionStr.size();
+        }
+        return result;
+    }
 
     // Locates an existing `. "...shell-integration*.ps1"` dot-source line in `contents`.
     // Returns the [start, end) byte range of the line (CR/LF excluded), or
     // { npos, npos } when no such line is present. Matches any version of our
-    // script — current (shell-integration_v1.ps1) AND legacy (shell-integration.ps1)
+    // script — current (shell-integration_vN.ps1) AND legacy (shell-integration.ps1)
     // — so upgrades can rewrite the line in place.
+    //
+    // Pattern: leading whitespace, '.', whitespace, then a quoted path whose
+    // contents include "shell-integration" and end with `.ps1"`, then anything
+    // up to end-of-line. Uses std::regex with the multiline flag so `^`/`$`
+    // anchor at line boundaries.
     inline std::pair<size_t, size_t> FindShellIntegrationDotSourceLine(std::string_view contents)
     {
-        size_t pos = 0;
-        while (pos < contents.size())
+        static const std::regex pattern{
+            R"(^[ \t]*\.[ \t]+"[^"]*shell-integration[^"]*\.ps1".*)",
+            std::regex_constants::ECMAScript | std::regex_constants::multiline
+        };
+        std::cmatch m;
+        if (std::regex_search(contents.data(), contents.data() + contents.size(), m, pattern))
         {
-            size_t eol = contents.find('\n', pos);
-            if (eol == std::string_view::npos)
+            const size_t start = static_cast<size_t>(m.position());
+            size_t end = start + static_cast<size_t>(m.length());
+            // Multiline `$` stops before `\n`; trailing `\r` from CRLF may remain — strip it.
+            while (end > start && contents[end - 1] == '\r')
             {
-                eol = contents.size();
+                --end;
             }
-            size_t lineEnd = eol;
-            while (lineEnd > pos && (contents[lineEnd - 1] == '\n' || contents[lineEnd - 1] == '\r'))
-            {
-                --lineEnd;
-            }
-            const std::string_view line(contents.data() + pos, lineEnd - pos);
-
-            // PowerShell dot-source: leading whitespace, '.', whitespace, then a path
-            // containing "shell-integration" and ending with `.ps1"`.
-            size_t i = 0;
-            while (i < line.size() && (line[i] == ' ' || line[i] == '\t'))
-            {
-                ++i;
-            }
-            if (i < line.size() && line[i] == '.' &&
-                i + 1 < line.size() && (line[i + 1] == ' ' || line[i + 1] == '\t') &&
-                line.find("shell-integration") != std::string_view::npos &&
-                line.find(".ps1\"") != std::string_view::npos)
-            {
-                return { pos, lineEnd };
-            }
-            pos = eol < contents.size() ? eol + 1 : eol;
+            return { start, end };
         }
         return { std::string_view::npos, std::string_view::npos };
     }
 
     // Install shell integration for a given PowerShell profile path.
-    // Writes the versioned script (kShellIntegrationScriptFileName) next to the
-    // profile and ensures $PROFILE dot-sources it. Idempotent — returns
-    // alreadyInstalled=true when the existing dot-source line already references
-    // the current script and the script file is on disk.
+    // Writes the versioned script (named via ShellIntegrationScriptFileName())
+    // next to the profile and ensures $PROFILE dot-sources it. Idempotent —
+    // returns alreadyInstalled=true when the existing dot-source line already
+    // references the current script and the script file is on disk.
     //
     // Flow (one pass, file-not-exists case collapses into the existing-file case):
     //   1. Ensure profile dir + file exist (touch an empty file if missing).
@@ -205,7 +219,7 @@ if (-not $Global:__ShellInteg_Installed) {
 
         const std::filesystem::path profilePath{ profilePathW };
         const auto profileDir = profilePath.parent_path();
-        const auto scriptPath = profileDir / std::wstring{ kShellIntegrationScriptFileName };
+        const auto scriptPath = profileDir / ShellIntegrationScriptFileName();
 
         // 1. Ensure profile dir + file exist. A freshly-touched file is just
         //    empty content — the rest of the flow handles it identically.
@@ -267,7 +281,7 @@ if (-not $Global:__ShellInteg_Installed) {
             {
                 return { false, false, L"Failed to write shell-integration script" };
             }
-            const auto scriptUtf8 = til::u16u8(ScriptContent);
+            const auto scriptUtf8 = til::u16u8(ShellIntegrationScriptContent());
             scriptOut.write(scriptUtf8.data(), scriptUtf8.size());
         }
 
