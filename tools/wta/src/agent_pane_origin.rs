@@ -56,12 +56,13 @@ use std::time::SystemTime;
 const INDEX_FILENAME: &str = "agent-pane-sessions.jsonl";
 const SCHEMA_VERSION: u32 = 2;
 
-/// Joined view of one `session_id`'s on-disk index entry. `pane_session_id`
-/// is the WT pane GUID that hosted this session; `None` for legacy v1
-/// entries written before that field existed.
+/// Per-session metadata stored in the index. The owning `session_id` is
+/// always the key in the returned map (e.g. `HashMap<String, OriginRecord>`)
+/// — we deliberately don't duplicate it here. `pane_session_id` is the WT
+/// pane GUID that hosted this session; `None` for legacy v1 entries
+/// written before that field existed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OriginRecord {
-    pub session_id: String,
     pub pane_session_id: Option<String>,
 }
 
@@ -179,13 +180,7 @@ pub fn load_records_from(path: &std::path::Path) -> HashMap<String, OriginRecord
             .map(|s| s.to_string());
         // Last-write wins on duplicate session_ids — preserves the latest
         // pane binding if a session was somehow re-appended.
-        out.insert(
-            id.to_string(),
-            OriginRecord {
-                session_id: id.to_string(),
-                pane_session_id,
-            },
-        );
+        out.insert(id.to_string(), OriginRecord { pane_session_id });
     }
     out
 }
