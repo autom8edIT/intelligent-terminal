@@ -677,6 +677,16 @@ impl acp::Agent for HelperHandler {
         &self,
         args: acp::NewSessionRequest,
     ) -> acp::Result<acp::NewSessionResponse> {
+        // Pull our `_meta.wta` payload off the request before forwarding
+        // to the agent CLI. Two reasons we strip here and not after the
+        // RPC: (1) the spec lets third-party agents reject unknown
+        // top-level meta keys, so anything not under their own
+        // namespace must not leak through master; (2) we record the
+        // helper-supplied `pane_session_id` against the session id in
+        // B-4 — keeping the extract here means the binding is captured
+        // in the same place as the routing entry.
+        let mut args = args;
+        let wta_meta = crate::session_registry::extract_wta_meta(&mut args.meta);
         tracing::info!(
             target: "master",
             step = "helper→agent",
@@ -684,6 +694,7 @@ impl acp::Agent for HelperHandler {
             helper_id = ?self.helper_id,
             cwd = ?args.cwd,
             mcp_servers = args.mcp_servers.len(),
+            pane_session_id = ?wta_meta.pane_session_id,
             "forwarding new_session"
         );
         let resp = self.agent_conn.new_session(args).await?;
@@ -719,7 +730,18 @@ impl acp::Agent for HelperHandler {
         &self,
         args: acp::LoadSessionRequest,
     ) -> acp::Result<acp::LoadSessionResponse> {
+        let mut args = args;
+        let wta_meta = crate::session_registry::extract_wta_meta(&mut args.meta);
         let session_id = args.session_id.clone();
+        tracing::info!(
+            target: "master",
+            step = "helper→agent",
+            op = "load_session",
+            helper_id = ?self.helper_id,
+            session_id = ?session_id,
+            pane_session_id = ?wta_meta.pane_session_id,
+            "forwarding load_session"
+        );
         let resp = self.agent_conn.load_session(args).await?;
         let forwarder = self.forwarder_for_route("load_session")?;
         {

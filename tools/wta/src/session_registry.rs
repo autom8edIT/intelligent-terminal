@@ -21,6 +21,85 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// Top-level key under `_meta` reserved for our extension. ACP lets
+/// vendors pile arbitrary keys into `_meta`; we sit under exactly one
+/// namespace so anyone else's `_meta` payload survives a round-trip
+/// through master untouched.
+pub const WTA_META_NAMESPACE: &str = "wta";
+
+/// The subset of `_meta.wta` we read/write today. A struct (rather than
+/// just shipping `pane_session_id: Option<String>` directly) so that
+/// future fields (titles, owner_tab_id, etc.) can join without
+/// touching every call site.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WtaMeta {
+    pub pane_session_id: Option<String>,
+}
+
+impl WtaMeta {
+    pub fn is_empty(&self) -> bool {
+        self.pane_session_id.is_none()
+    }
+}
+
+/// Strip the `wta` key out of an ACP `_meta` map and parse what was
+/// there into a [`WtaMeta`]. The caller-owned `meta` is mutated in
+/// place: the `wta` key is gone afterwards, and if that was the only
+/// key the whole `_meta` is collapsed back to `None` so we don't ship
+/// `"_meta": {}` to the downstream agent (which a strict implementer
+/// might reject).
+///
+/// This is the master's inbound hook: helpers attach `_meta.wta` on
+/// `session/new` / `session/load` requests; master pulls it off,
+/// records the binding in `SessionRegistry`, and forwards the
+/// request to the agent CLI with `_meta.wta` removed so third-party
+/// agents never see our private namespace.
+pub fn extract_wta_meta(meta: &mut Option<acp::Meta>) -> WtaMeta {
+    let Some(map) = meta.as_mut() else {
+        return WtaMeta::default();
+    };
+    let wta_val = map.remove(WTA_META_NAMESPACE);
+    if map.is_empty() {
+        *meta = None;
+    }
+    let Some(serde_json::Value::Object(obj)) = wta_val else {
+        return WtaMeta::default();
+    };
+    WtaMeta {
+        pane_session_id: obj
+            .get("pane_session_id")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+    }
+}
+
+/// Inverse of [`extract_wta_meta`]: write our namespace into an ACP
+/// `_meta` map, creating the map if it didn't exist. No-op when
+/// `wta.is_empty()` — we don't want to litter the wire with empty
+/// `_meta.wta` objects when there's nothing to communicate.
+///
+/// Used by both helpers (when sending `session/new` / `session/load`
+/// requests carrying `pane_session_id`) and master (when answering
+/// `session/list` with rows whose `pane_session_id` came from the
+/// registry).
+pub fn inject_wta_meta(meta: &mut Option<acp::Meta>, wta: &WtaMeta) {
+    if wta.is_empty() {
+        return;
+    }
+    let map = meta.get_or_insert_with(serde_json::Map::new);
+    let mut wta_obj = serde_json::Map::new();
+    if let Some(pid) = &wta.pane_session_id {
+        wta_obj.insert(
+            "pane_session_id".to_string(),
+            serde_json::Value::String(pid.clone()),
+        );
+    }
+    map.insert(
+        WTA_META_NAMESPACE.to_string(),
+        serde_json::Value::Object(wta_obj),
+    );
+}
+
 /// One row in the registry. Mirrors the fields the F2 view needs:
 ///
 /// * `session_id` — the ACP session GUID (truth-source key).
@@ -328,5 +407,129 @@ mod tests {
         apply_snapshot(&reg, &loaded, items.clone()).await;
         apply_snapshot(&reg, &loaded, items).await;
         assert_eq!(reg.snapshot().await.len(), 2, "second apply matches first");
+    }
+
+    // ── _meta.wta extract / inject ──────────────────────────────────
+
+    fn meta_with(json: serde_json::Value) -> Option<acp::Meta> {
+        match json {
+            serde_json::Value::Object(map) => Some(map),
+            _ => panic!("test bug: meta_with expects a JSON object"),
+        }
+    }
+
+    #[test]
+    fn extract_returns_default_when_meta_is_none() {
+        let mut meta: Option<acp::Meta> = None;
+        let wta = extract_wta_meta(&mut meta);
+        assert_eq!(wta, WtaMeta::default());
+        assert!(meta.is_none(), "meta unchanged");
+    }
+
+    #[test]
+    fn extract_returns_default_when_wta_key_absent() {
+        let mut meta = meta_with(serde_json::json!({ "other": "keep-me" }));
+        let wta = extract_wta_meta(&mut meta);
+        assert_eq!(wta, WtaMeta::default());
+        // Other vendors' meta must survive untouched.
+        assert_eq!(
+            meta.as_ref().and_then(|m| m.get("other")),
+            Some(&serde_json::Value::String("keep-me".to_string()))
+        );
+    }
+
+    #[test]
+    fn extract_pulls_pane_session_id_and_removes_wta_key() {
+        let mut meta = meta_with(serde_json::json!({
+            "wta": { "pane_session_id": "pane-A" },
+            "other": "keep-me",
+        }));
+        let wta = extract_wta_meta(&mut meta);
+        assert_eq!(wta.pane_session_id.as_deref(), Some("pane-A"));
+        let leftover = meta.expect("`other` survives");
+        assert!(!leftover.contains_key("wta"), "wta key stripped");
+        assert!(leftover.contains_key("other"), "other key preserved");
+    }
+
+    #[test]
+    fn extract_collapses_meta_to_none_when_wta_was_only_key() {
+        let mut meta = meta_with(serde_json::json!({
+            "wta": { "pane_session_id": "pane-A" },
+        }));
+        let wta = extract_wta_meta(&mut meta);
+        assert_eq!(wta.pane_session_id.as_deref(), Some("pane-A"));
+        assert!(
+            meta.is_none(),
+            "downstream agents must not see an empty _meta object"
+        );
+    }
+
+    #[test]
+    fn extract_tolerates_non_object_wta_value() {
+        // Malformed wire data: `_meta.wta` is a string instead of an
+        // object. We should not panic; just treat it as "no extension
+        // data" while still stripping the bad key so we don't forward
+        // it to the agent.
+        let mut meta = meta_with(serde_json::json!({
+            "wta": "not-an-object",
+        }));
+        let wta = extract_wta_meta(&mut meta);
+        assert_eq!(wta, WtaMeta::default());
+        assert!(meta.is_none(), "bad wta key still stripped");
+    }
+
+    #[test]
+    fn inject_is_noop_when_wta_is_empty() {
+        let mut meta: Option<acp::Meta> = None;
+        inject_wta_meta(&mut meta, &WtaMeta::default());
+        assert!(meta.is_none(), "no spurious _meta created");
+    }
+
+    #[test]
+    fn inject_creates_meta_when_missing_and_writes_pane_session_id() {
+        let mut meta: Option<acp::Meta> = None;
+        inject_wta_meta(
+            &mut meta,
+            &WtaMeta {
+                pane_session_id: Some("pane-A".to_string()),
+            },
+        );
+        let map = meta.expect("meta created");
+        let wta = map.get("wta").and_then(|v| v.as_object()).unwrap();
+        assert_eq!(
+            wta.get("pane_session_id")
+                .and_then(|v| v.as_str()),
+            Some("pane-A")
+        );
+    }
+
+    #[test]
+    fn inject_preserves_other_vendor_meta_keys() {
+        let mut meta = meta_with(serde_json::json!({ "other": "keep-me" }));
+        inject_wta_meta(
+            &mut meta,
+            &WtaMeta {
+                pane_session_id: Some("pane-A".to_string()),
+            },
+        );
+        let map = meta.unwrap();
+        assert_eq!(
+            map.get("other"),
+            Some(&serde_json::Value::String("keep-me".to_string())),
+            "other vendor's meta survives"
+        );
+        assert!(map.contains_key("wta"), "wta inserted");
+    }
+
+    #[test]
+    fn inject_then_extract_is_identity() {
+        let original = WtaMeta {
+            pane_session_id: Some("pane-X".to_string()),
+        };
+        let mut meta: Option<acp::Meta> = None;
+        inject_wta_meta(&mut meta, &original);
+        let parsed = extract_wta_meta(&mut meta);
+        assert_eq!(parsed, original, "round-trip preserves data");
+        assert!(meta.is_none(), "round-trip ends with empty meta");
     }
 }
