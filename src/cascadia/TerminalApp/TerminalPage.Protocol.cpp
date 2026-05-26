@@ -729,6 +729,31 @@ namespace winrt::TerminalApp::implementation
                 co_return false;
 
             _SetFocusedTab(tab);
+
+            // The pane may be a currently-stashed agent pane (Ctrl+Shift+. /
+            // openAgentPane toggle). `FindPaneBySessionId` happily returns
+            // hidden panes (HidePane only collapses the XAML layout, it
+            // doesn't detach from the parent's _firstChild/_secondChild
+            // tree), but `FocusPane` → `_Focus()` on a hidden TermControl
+            // silently drops because the element isn't in the visual tree.
+            // Detect that case and route through `RestoreStashedAgentPane`,
+            // which re-adds the pane to the XAML tree and schedules a
+            // low-priority Focus() so the freshly re-parented TermControl
+            // actually receives focus.
+            if (foundPane->IsHidden())
+            {
+                const auto splitDir = _AgentPanePositionToSplitDirection(_settings.GlobalSettings().AgentPanePosition());
+                if (tabImpl->RestoreStashedAgentPane(splitDir))
+                {
+                    co_return true;
+                }
+                // Restore precondition failed (e.g. agent pane is the root
+                // pane, so there's no parent to fold into). Fall through to
+                // the legacy focus path — it will no-op visually but won't
+                // crash, and the caller will at least observe a `false`
+                // return and can decide to escalate (e.g. open a new pane).
+            }
+
             if (!tabImpl->FocusPane(paneId.value()))
                 co_return false;
 
