@@ -191,6 +191,16 @@ struct MasterStateInner {
     /// connection happens strictly after that, so the `get()` in
     /// `HelperHandler::initialize` always sees `Some(_)`.
     cached_init_resp: OnceLock<acp::InitializeResponse>,
+    /// The CLI provider master is multiplexing. Resolved once at
+    /// startup from `cli.agent` via `agent_registry::resolve_agent_id_from_cmd`.
+    /// Used to stamp `cli_source` on every SessionInfo upserted from
+    /// `session/new` and `session/load` so agent-pane sessions are not
+    /// reported with cli_source=None (which would make F2 Enter on a
+    /// Live row fall through to the resume path and fail with
+    /// "unknown CLI"). `None` only when running with an agent CLI we
+    /// don't recognize (e.g. `--agent codex` — tracked in CliSource::Unknown
+    /// but not surfaced as a known F2 filter).
+    pub(crate) cli_source: Option<crate::agent_sessions::CliSource>,
 }
 
 /// Master's `acp::Client` impl: handles inbound from the agent CLI.
@@ -761,6 +771,21 @@ impl acp::Agent for HelperHandler {
             cwd_for_registry,
         );
         info.pane_session_id = wta_meta.pane_session_id;
+        // Stamp the row as a Live agent-pane session. Without this, the
+        // row lands in master's registry with status=cli_source=origin=None,
+        // and helper-side F2 routing treats it as Historical (the default
+        // fallback in session_info_to_agent_session). Enter on it then
+        // tries to resume and fails with "unknown CLI" since cli_source
+        // is None. Agent-pane sessions never get a SessionStarted hook
+        // (those fire for shell-pane agents through PowerShell hooks
+        // only), so master is the only one that can fill these fields.
+        info.status = Some(crate::agent_sessions::AgentStatus::Idle);
+        info.cli_source = self.state.cli_source.clone();
+        info.origin = Some(crate::agent_sessions::SessionOrigin::AgentPane);
+        info.last_activity_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_millis() as u64);
         self.state.registry.upsert(info.clone()).await;
         // Fan a `session_added` ExtNotification out to every other
         // helper so their mirrors learn about this new row without
@@ -844,6 +869,15 @@ impl acp::Agent for HelperHandler {
                     cwd_for_registry,
                 );
                 info.pane_session_id = wta_meta.pane_session_id;
+                // See new_session above for rationale — load_session is the
+                // resume path and the resumed row must also be Live + tagged.
+                info.status = Some(crate::agent_sessions::AgentStatus::Idle);
+                info.cli_source = self.state.cli_source.clone();
+                info.origin = Some(crate::agent_sessions::SessionOrigin::AgentPane);
+                info.last_activity_at_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_millis() as u64);
                 self.state.registry.upsert(info.clone()).await;
                 crate::master::broadcast_ext_to_helpers(
                     &self.state,
@@ -1307,12 +1341,23 @@ async fn run_master_loop(cli: Cli, pipe_name: String) -> Result<()> {
                 None
             }
         };
+    let resolved_agent_id = crate::agent_registry::resolve_agent_id_from_cmd(&cli.agent);
+    let cli_source = crate::agent_sessions::CliSource::from_agent_id(resolved_agent_id);
+    tracing::info!(
+        target: "master",
+        agent_cmd = %cli.agent,
+        resolved_agent_id = %resolved_agent_id,
+        cli_source = ?cli_source,
+        "master cli_source resolved for session-row stamping"
+    );
+
     let inner = Arc::new(MasterStateInner {
         session_to_helper: Mutex::new(HashMap::new()),
         registry: crate::session_registry::InMemoryRegistry::shared(),
         helper_ext_subscribers: Mutex::new(HashMap::new()),
         wt,
         cached_init_resp: OnceLock::new(),
+        cli_source,
     });
 
     // Seed the registry with historical sessions scanned from
@@ -2039,6 +2084,7 @@ mod tests {
             helper_ext_subscribers: Mutex::new(HashMap::new()),
             wt: None,
             cached_init_resp: OnceLock::new(),
+            cli_source: Some(crate::agent_sessions::CliSource::Copilot),
         })
     }
 
@@ -2824,6 +2870,7 @@ mod tests {
             helper_ext_subscribers: Mutex::new(HashMap::new()),
             wt: Some(wt),
             cached_init_resp: OnceLock::new(),
+            cli_source: Some(crate::agent_sessions::CliSource::Copilot),
         })
     }
 

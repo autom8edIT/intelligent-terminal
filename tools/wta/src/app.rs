@@ -8272,6 +8272,51 @@ mod tests {
     }
 
     #[test]
+    fn session_info_to_agent_session_preserves_live_agent_pane_session_fields() {
+        // Regression: master's new_session/load_session handlers stamp
+        // status=Idle, cli_source=<resolved>, origin=AgentPane on the
+        // SessionInfo so helper-side F2 routing sees a Live row. Without
+        // this stamping the row would land with all fields None, the
+        // converter would map status=None -> AgentStatus::Historical (its
+        // documented default), and Enter would fall through to the resume
+        // path and fail with "unknown CLI" since cli_source is also None.
+        let mut info = crate::session_registry::SessionInfo::new(
+            agent_client_protocol::SessionId::new("sid-live"),
+            std::path::PathBuf::from("/repo"),
+        );
+        info.pane_session_id = Some("pane-live".to_string());
+        info.status = Some(crate::agent_sessions::AgentStatus::Idle);
+        info.cli_source = Some(crate::agent_sessions::CliSource::Copilot);
+        info.origin = Some(crate::agent_sessions::SessionOrigin::AgentPane);
+        let s = crate::app::session_info_to_agent_session(&info);
+        assert_eq!(s.status, crate::agent_sessions::AgentStatus::Idle);
+        assert_eq!(s.cli_source, crate::agent_sessions::CliSource::Copilot);
+        assert_eq!(s.origin, crate::agent_sessions::SessionOrigin::AgentPane);
+        assert_eq!(s.pane_session_id.as_deref(), Some("pane-live"));
+    }
+
+    #[test]
+    fn session_info_to_agent_session_unstamped_row_falls_to_historical() {
+        // Defensive: SessionInfo with all metadata None (the master-side
+        // bug we're guarding against) deliberately maps status -> Historical
+        // and cli_source -> Unknown(""). This is the WRONG end-state for a
+        // Live row but matches the documented fallback. If we ever change
+        // the fallback (e.g. to Idle/None) update the docstring on
+        // session_info_to_agent_session AND on the master handler
+        // comments — silently flipping defaults will mask future bugs.
+        let info = crate::session_registry::SessionInfo::new(
+            agent_client_protocol::SessionId::new("sid-bare"),
+            std::path::PathBuf::from("/repo"),
+        );
+        let s = crate::app::session_info_to_agent_session(&info);
+        assert_eq!(s.status, crate::agent_sessions::AgentStatus::Historical);
+        assert!(matches!(
+            s.cli_source,
+            crate::agent_sessions::CliSource::Unknown(ref v) if v.is_empty()
+        ));
+    }
+
+    #[test]
     fn helper_agent_event_queues_session_hook_while_updating_local_registry() {
         let mut app = test_app();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
