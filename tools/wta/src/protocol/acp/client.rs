@@ -2270,8 +2270,15 @@ pub async fn run_acp_client_over_pipe(
                             .await;
                     }
 
+                    // Inject WT_SESSION into the request meta so master can
+                    // record pane_session_id on the registry row. Without
+                    // this, focus_session RPCs against the new sid return
+                    // {"focused": false, "reason": "no_pane"} because master
+                    // has the row but no pane GUID to feed wtcli focus-pane.
+                    let mut new_session_req = acp::NewSessionRequest::new(cwd);
+                    inject_wta_pane_meta(&mut new_session_req.meta);
                     let new_session = match conn_for_new
-                        .new_session(acp::NewSessionRequest::new(cwd))
+                        .new_session(new_session_req)
                         .await
                     {
                         Ok(s) => s,
