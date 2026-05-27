@@ -879,14 +879,33 @@ impl AgentSessionRegistry {
     /// Historical, which is the same behaviour as today and degrades
     /// gracefully (Enter will start a new session).
     ///
-    /// Tombstone safety: only `Historical` rows (loaded from disk
-    /// scan) are upgraded. `Ended` rows reflect a local `PaneClosed`
+    /// Tombstone safety: `Ended` rows reflect a local `PaneClosed`
     /// observation in this WTA process; we treat that as authoritative
-    /// because the alternative (a stale `session_added` broadcast
-    /// arriving before master detects the helper disconnect) would
-    /// silently resurrect a pane that's already gone, leaving the F2
-    /// row Live forever with no demotion path. Cross-WTA-process
-    /// resume-after-disconnect is rare; preferring the safe direction.
+    /// and refuse to resurrect them, because the alternative (a stale
+    /// `session_added` broadcast arriving before master detects the
+    /// helper disconnect) would silently resurrect a pane that's
+    /// already gone, leaving the F2 row Live forever with no demotion
+    /// path. Cross-WTA-process resume-after-disconnect is rare;
+    /// preferring the safe direction.
+    ///
+    /// Live-without-pane rebind: `Live` rows that already have a pane
+    /// bound are no-ops (`apply_alive_pane_snapshot` is the canonical
+    /// disappearance path). `Live` rows with `pane_session_id == None`,
+    /// however, are upgraded just enough to bind the pane carried in
+    /// the snapshot — without touching `status` or any tool/attention
+    /// state. This handles the cross-window resume race: in the tab
+    /// that issued the F2 Enter on a Historical row,
+    /// `dispatch_resume_in_agent_pane` fires `ResumeDispatched`, which
+    /// optimistically flips the row to `Idle (Live)` so a rapid double
+    /// press can't dispatch twice — but leaves `pane_session_id =
+    /// None` because the resume runs in a freshly spawned tab whose
+    /// helper hasn't issued a hook yet. When master finally broadcasts
+    /// `session_added` with the new helper-pane's GUID, the gating
+    /// helper (the one that pressed Enter) is no longer `Historical`,
+    /// so without this rebind it would drop the broadcast on the floor
+    /// and leave the row permanently `Live` without a pane — every
+    /// subsequent F2 Enter on the same row would return `NotResumable
+    /// { LiveWithoutPane }`.
     pub fn apply_alive_session_join<'a>(
         &mut self,
         alive: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
@@ -894,39 +913,59 @@ impl AgentSessionRegistry {
         let now = SystemTime::now();
         for (sid, pane_opt) in alive {
             let Some(entry) = self.sessions.get_mut(sid) else { continue };
-            // Only upgrade Historical rows. Live rows are obviously
-            // skipped; Ended rows are skipped because they were
-            // tombstoned by a local PaneClosed event in THIS process
-            // and resurrecting them via a (potentially stale) alive
-            // broadcast would leave no demotion path back to Ended.
-            if !matches!(entry.liveness(), LivenessState::Historical) {
-                continue;
-            }
-
-            entry.status            = AgentStatus::Idle;
-            entry.last_activity_at  = now;
-            entry.current_tool      = None;
-            entry.attention_reason  = None;
-            entry.last_error        = None;
-            if let Some(pane) = pane_opt {
-                let pane_lc = pane.to_ascii_lowercase();
-                // Drop any previous binding pointing elsewhere.
-                if let Some(old_pane) = entry.pane_session_id.take() {
-                    if old_pane != pane_lc {
-                        self.active_by_pane.remove(&old_pane);
-                    }
+            match entry.liveness() {
+                LivenessState::Ended => {
+                    // Tombstone — see method docstring.
+                    continue;
                 }
-                entry.pane_session_id = Some(pane_lc.clone());
-                self.active_by_pane.insert(pane_lc.clone(), sid.to_string());
-                self.known_alive_panes.insert(pane_lc);
+                LivenessState::Live => {
+                    // Already live; only fill in a missing pane binding.
+                    // A non-None binding is the local source of truth
+                    // (set by a SessionStarted hook or ResumePaneAssigned).
+                    if entry.pane_session_id.is_some() {
+                        continue;
+                    }
+                    let Some(pane) = pane_opt else { continue };
+                    let pane_lc = pane.to_ascii_lowercase();
+                    entry.pane_session_id = Some(pane_lc.clone());
+                    self.active_by_pane.insert(pane_lc.clone(), sid.to_string());
+                    self.known_alive_panes.insert(pane_lc);
+                    entry.last_activity_at = now;
+                    self.dirty = true;
+                    tracing::info!(
+                        target: "agent_session_registry",
+                        key = %sid,
+                        pane = ?pane_opt,
+                        "alive snapshot bound pane to Live-without-pane row",
+                    );
+                }
+                LivenessState::Historical => {
+                    entry.status            = AgentStatus::Idle;
+                    entry.last_activity_at  = now;
+                    entry.current_tool      = None;
+                    entry.attention_reason  = None;
+                    entry.last_error        = None;
+                    if let Some(pane) = pane_opt {
+                        let pane_lc = pane.to_ascii_lowercase();
+                        // Drop any previous binding pointing elsewhere.
+                        if let Some(old_pane) = entry.pane_session_id.take() {
+                            if old_pane != pane_lc {
+                                self.active_by_pane.remove(&old_pane);
+                            }
+                        }
+                        entry.pane_session_id = Some(pane_lc.clone());
+                        self.active_by_pane.insert(pane_lc.clone(), sid.to_string());
+                        self.known_alive_panes.insert(pane_lc);
+                    }
+                    self.dirty = true;
+                    tracing::info!(
+                        target: "agent_session_registry",
+                        key = %sid,
+                        pane = ?pane_opt,
+                        "alive snapshot upgraded Historical row → Live",
+                    );
+                }
             }
-            self.dirty = true;
-            tracing::info!(
-                target: "agent_session_registry",
-                key = %sid,
-                pane = ?pane_opt,
-                "alive snapshot upgraded Historical row → Live",
-            );
         }
     }
 
@@ -2294,6 +2333,67 @@ mod tests {
         // Pane bindings should not be re-established for a tombstoned row.
         assert!(reg.active_by_pane.get("pane-new").is_none());
         assert!(reg.active_by_pane.get("pane-old").is_none());
+    }
+
+    #[test]
+    fn apply_alive_session_join_binds_pane_to_live_without_pane_row() {
+        // Regression for the cross-window F2-Enter focus bug:
+        // `dispatch_resume_in_agent_pane` fires `ResumeDispatched`,
+        // which optimistically promotes a Historical row to `Idle (Live)`
+        // *without* binding a pane (the resume runs in a freshly spawned
+        // sibling tab; the gating helper never sees a SessionStarted
+        // hook). When master finally broadcasts `session_added` with
+        // the new helper-pane's GUID, the gating helper's row is no
+        // longer Historical — but it must still adopt the pane binding,
+        // otherwise the row stays Live-without-pane forever and every
+        // subsequent F2 Enter on the same row returns
+        // `NotResumable { LiveWithoutPane }` ("Cannot focus session …:
+        // it appears live but no pane GUID is bound yet").
+        let mut reg = AgentSessionRegistry::new();
+        reg.merge_historical(vec![make_historical("sid")]);
+        // Simulate the optimistic flip done by `dispatch_resume_in_agent_pane`.
+        reg.apply(SessionEvent::ResumeDispatched { key: k("sid") });
+        let s = reg.sessions.get("sid").unwrap();
+        assert_eq!(s.liveness(), LivenessState::Live);
+        assert!(s.pane_session_id.is_none(),
+            "ResumeDispatched leaves pane_session_id None on purpose");
+        let _ = reg.take_dirty();
+
+        // Master's broadcast lands with the new helper-pane's GUID.
+        reg.apply_alive_session_join([("sid", Some("pane-new"))]);
+        let s = reg.sessions.get("sid").unwrap();
+        assert_eq!(s.status, AgentStatus::Idle, "status preserved");
+        assert_eq!(s.pane_session_id.as_deref(), Some("pane-new"),
+            "broadcast binds the new pane so cross-window Focus can resolve");
+        assert_eq!(
+            reg.active_by_pane.get("pane-new").map(String::as_str),
+            Some(k("sid").as_str()),
+            "active_by_pane mirrors the binding",
+        );
+        assert!(reg.known_alive_panes.contains("pane-new"));
+        assert!(reg.take_dirty(), "bind flagged dirty for snapshot");
+    }
+
+    #[test]
+    fn apply_alive_session_join_does_not_overwrite_existing_pane_on_live_row() {
+        // The Live-without-pane rebind must NOT overwrite a Live row
+        // that already has a pane bound (e.g. by a local SessionStarted
+        // hook). Local hooks are the source of truth for live state.
+        let mut reg = AgentSessionRegistry::new();
+        reg.apply(SessionEvent::SessionStarted {
+            key: k("sid"), cli_source: CliSource::Claude,
+            pane_session_id: pane("pane-local"), cwd: PathBuf::from("/x"),
+            title: "t".into(),
+        });
+        let _ = reg.take_dirty();
+
+        reg.apply_alive_session_join([("sid", Some("pane-other"))]);
+        let s = reg.sessions.get("sid").unwrap();
+        assert_eq!(s.pane_session_id.as_deref(), Some("pane-local"),
+            "existing local pane binding wins over broadcast");
+        assert!(!reg.take_dirty(), "no-op must not flag dirty");
+        assert!(reg.active_by_pane.get("pane-other").is_none(),
+            "broadcast's pane must not leak into active_by_pane");
     }
 
     #[test]
