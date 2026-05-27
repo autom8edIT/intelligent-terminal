@@ -4714,7 +4714,36 @@ impl App {
                         .get("sequence")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    if seq == "osc:133;A" && self.agent_sessions.is_agent_pane(&pane_id) {
+                    // Gate OSC 133;A → PaneClosed on the bound
+                    // session's ORIGIN, not just "is_agent_pane".
+                    //
+                    // Background: this handler exists to detect agent
+                    // exit in SHELL panes (user typed `gemini` in pwsh,
+                    // agent ran, user `/exit`'d, shell returns to its
+                    // prompt → OSC 133;A fires → we treat that as the
+                    // agent's teardown signal). For those sessions
+                    // origin is `Unknown`.
+                    //
+                    // For agent panes proper (origin AgentPane) there
+                    // is NO shell underneath the conpty — the helper
+                    // TUI is the direct child. Yet WT itself can
+                    // emit OSC 133;A around focus/window-switch on
+                    // arbitrary panes (observed in `wtcli focus-pane`
+                    // round trips). The previous gate
+                    // `is_agent_pane(pane_id)` matched any pane with
+                    // ANY bound session and demoted the row to Ended
+                    // even though the agent CLI was happily still
+                    // streaming notifications — the user sees this as
+                    // "F2 Enter on a Live row spawned a new pane
+                    // instead of focusing the existing one" because
+                    // the row demoted between snapshot and Enter.
+                    //
+                    // Restrict to origin=Unknown so the heuristic
+                    // keeps working for its original shell-pane use
+                    // case without nuking agent panes.
+                    let origin = self.agent_sessions.origin_for_pane(&pane_id);
+                    let is_shell_agent = matches!(origin, Some(crate::agent_sessions::SessionOrigin::Unknown));
+                    if seq == "osc:133;A" && is_shell_agent {
                         tracing::info!(
                             target: "agent_session_registry",
                             pane_id = %pane_id,
@@ -10617,6 +10646,77 @@ mod tests {
         assert!(
             !app.agent_sessions.is_agent_pane(pane),
             "pane binding should be cleared after close",
+        );
+    }
+
+    /// Regression: OSC 133;A in an AGENT-PANE-origin session must NOT
+    /// trigger PaneClosed. The previous gate (`is_agent_pane(pane_id)`)
+    /// fired on any pane with a bound session, demoting agent panes
+    /// when WT itself emitted a stray OSC 133;A around focus events.
+    /// Fix at app.rs ~4717 restricts the bridge to origin=Unknown
+    /// (shell-pane agents like `gemini` typed in pwsh).
+    #[test]
+    fn osc133_prompt_start_in_agent_pane_origin_is_ignored() {
+        use crate::agent_sessions::{CliSource, SessionEvent, SessionOrigin};
+        use std::path::PathBuf;
+        let mut app = test_app();
+        let pane = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let key = "copilot-agent-pane-key";
+        app.agent_sessions.apply(SessionEvent::SessionStarted {
+            key: key.into(),
+            cli_source: CliSource::Copilot,
+            pane_session_id: pane.into(),
+            cwd: PathBuf::from("/work"),
+            title: "t".into(),
+        });
+        // Stamp this row as agent-pane origin (the wta-managed kind).
+        app.agent_sessions.set_origin(key, SessionOrigin::AgentPane);
+
+        // Sanity: row is Live before the stray OSC arrives.
+        let before = app
+            .agent_sessions
+            .iter_sorted()
+            .into_iter()
+            .find(|s| s.key == key)
+            .expect("row exists");
+        assert!(matches!(
+            before.status,
+            crate::agent_sessions::AgentStatus::Idle
+                | crate::agent_sessions::AgentStatus::Working
+        ));
+        assert_eq!(before.origin, SessionOrigin::AgentPane);
+
+        // Fire OSC 133;A — this is the event WT spuriously emits
+        // around focus_pane on agent panes. The handler must IGNORE
+        // it for agent-pane origin and leave the row Live.
+        app.handle_event(AppEvent::WtEvent {
+            method: "vt_sequence".to_string(),
+            pane_id: pane.to_string(),
+            tab_id: None,
+            params: serde_json::json!({
+                "session_id": pane,
+                "sequence": "osc:133;A",
+            }),
+        });
+
+        let after = app
+            .agent_sessions
+            .iter_sorted()
+            .into_iter()
+            .find(|s| s.key == key)
+            .expect("row must still exist (must NOT be pruned by spurious PaneClosed)");
+        assert!(
+            matches!(
+                after.status,
+                crate::agent_sessions::AgentStatus::Idle
+                    | crate::agent_sessions::AgentStatus::Working
+            ),
+            "agent-pane row must stay Live on OSC 133;A; got {:?}",
+            after.status,
+        );
+        assert!(
+            app.agent_sessions.is_agent_pane(pane),
+            "pane binding must NOT be cleared by a spurious shell-prompt OSC",
         );
     }
 

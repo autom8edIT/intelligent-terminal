@@ -714,6 +714,23 @@ impl AgentSessionRegistry {
             .cloned()
     }
 
+    /// Look up the [`SessionOrigin`] of whatever session is currently
+    /// bound to `pane_session_id`, if any. Returns `None` for panes
+    /// that aren't tracked.
+    ///
+    /// Used by the helper's OSC 133;A handler to distinguish between
+    /// "agent running inside a shell pane (origin Unknown) — shell
+    /// prompt-start really does mean the agent exited" and "agent
+    /// pane (origin AgentPane) — there's no shell underneath, so any
+    /// OSC 133;A is spurious (likely a focus/window-switch artifact
+    /// emitted by WT itself) and must NOT trigger PaneClosed".
+    pub fn origin_for_pane(&self, pane_session_id: &str) -> Option<SessionOrigin> {
+        let key = self
+            .active_by_pane
+            .get(&pane_session_id.to_ascii_lowercase())?;
+        self.sessions.get(key).map(|s| s.origin.clone())
+    }
+
     pub fn remove(&mut self, key: &AgentKey) {
         if let Some(s) = self.sessions.remove(key) {
             if let Some(pane) = s.pane_session_id {
