@@ -943,6 +943,50 @@ fn apply_event_locked(state: &mut RegistryState, ev: SessionEvent) -> bool {
         SessionEvent::SessionStarted { key, cli_source, pane_session_id, cwd, title } => {
             let sid = acp::SessionId::new(key.clone());
             let pane_known = !pane_session_id.is_empty();
+
+            // GUARD: PowerShell shell-integration hooks fire from wherever
+            // an agent ran a tool, NOT from the agent's home pane. For
+            // agent panes (origin=AgentPane, where the wta-helper TUI
+            // owns the pane) master already set the authoritative
+            // pane_session_id at new_session/load_session time from
+            // _meta.wta.pane_session_id. A SessionStarted hook arriving
+            // later with a DIFFERENT pane (e.g. the workspace shell where
+            // a Get-ChildItem ran) must NOT overwrite the helper's pane,
+            // because doing so:
+            //   1. Breaks focus: F2 Enter on the agent-pane row sends the
+            //      shell-pane GUID to wtcli, which focuses the wrong pane.
+            //   2. Cross-contaminates: multiple agents running tools in
+            //      the same shell all claim that shell's pane, so master's
+            //      active_by_pane handoff ends each other in turn.
+            //
+            // For Class B (origin=Unknown, e.g. user typed `gemini` in
+            // pwsh) the shell pane IS the agent pane, so the hook is
+            // authoritative. The guard only triggers when the existing
+            // row is firmly an agent pane AND already has a pane bound.
+            let is_protected_agent_pane = state
+                .sessions
+                .get(&sid)
+                .map(|s| {
+                    s.origin == Some(SessionOrigin::AgentPane)
+                        && s.pane_session_id.is_some()
+                })
+                .unwrap_or(false);
+            if is_protected_agent_pane {
+                // Skip the pane mutation entirely. Update only the
+                // activity heartbeat so master still knows the session
+                // is alive.
+                let entry = state.sessions.get_mut(&sid).expect("just verified by lookup");
+                entry.last_activity_at_ms = Some(now);
+                // Refresh title if the hook brought a non-empty one and
+                // we don't already have a better one (existing title
+                // wins on non-empty — agent-pane sessions normally have
+                // their title set from the chat content, not from cwd).
+                if entry.title.is_none() && !title.is_empty() {
+                    entry.title = Some(title);
+                }
+                return true;
+            }
+
             if pane_known {
                 if let Some(prev_sid) = state.active_by_pane.get(&pane_session_id).cloned() {
                     if prev_sid != sid {
@@ -1739,6 +1783,88 @@ mod tests {
             parse_ext_notification(&ext),
             WtaExtNotification::SessionsChanged
         );
+    }
+
+    #[tokio::test]
+    async fn session_started_hook_does_not_clobber_agent_pane_binding() {
+        // The user-visible "focus goes to wrong pane" bug:
+        // 1. Master creates an agent-pane session at new_session time
+        //    with pane_session_id from _meta.wta (helper's WT_SESSION).
+        // 2. The agent runs a tool in a DIFFERENT workspace shell pane.
+        // 3. PowerShell hooks in that shell pane fire SessionStarted
+        //    with the SHELL pane's GUID, not the helper's.
+        // 4. Before this fix: master's reducer clobbered the row's
+        //    pane_session_id with the shell GUID. F2 Enter on the row
+        //    then focused the shell pane instead of the helper pane.
+        // 5. With multiple agents sharing a shell, EVERY hook claimed
+        //    that shell pane, so sessions thrashed each other off it.
+        use crate::agent_sessions::{AgentStatus, CliSource, SessionEvent, SessionOrigin};
+        let reg = InMemoryRegistry::new();
+        // Seed master's authoritative state: agent-pane session at
+        // HELPER_PANE (where the wta-helper TUI lives).
+        let sid = acp::SessionId::new("agent-sid");
+        let mut info = SessionInfo::new(sid.clone(), PathBuf::from("/repo"));
+        info.pane_session_id = Some("helper-pane".to_string());
+        info.origin = Some(SessionOrigin::AgentPane);
+        info.status = Some(AgentStatus::Idle);
+        info.cli_source = Some(CliSource::Copilot);
+        reg.upsert(info).await;
+
+        // Now a PowerShell hook fires from a SHELL pane (where the
+        // agent ran Get-ChildItem), publishing SessionStarted with
+        // the SHELL pane's GUID.
+        let applied = reg
+            .apply_event(SessionEvent::SessionStarted {
+                key: "agent-sid".to_string(),
+                cli_source: CliSource::Copilot,
+                pane_session_id: "shell-pane".to_string(),
+                cwd: PathBuf::from("/repo"),
+                title: "system32".to_string(),
+            })
+            .await;
+        assert!(applied, "still applied (activity heartbeat update)");
+
+        let row = reg.lookup(&sid).await.unwrap();
+        assert_eq!(
+            row.pane_session_id.as_deref(),
+            Some("helper-pane"),
+            "agent-pane row's pane_session_id must NOT be clobbered by \
+             a hook from a different pane; got {:?}",
+            row.pane_session_id
+        );
+        assert_eq!(row.origin, Some(SessionOrigin::AgentPane), "origin preserved");
+        assert_eq!(row.status, Some(AgentStatus::Idle), "status preserved");
+    }
+
+    #[tokio::test]
+    async fn session_started_hook_DOES_set_pane_on_class_b_unknown_origin() {
+        // Defense-against-overcorrection: the guard above must only
+        // protect AgentPane rows. For Class B (origin=Unknown, e.g.
+        // user typed `gemini` in pwsh) the shell pane IS the agent
+        // pane, so the hook is authoritative and must take effect.
+        use crate::agent_sessions::{AgentStatus, CliSource, SessionEvent, SessionOrigin};
+        let reg = InMemoryRegistry::new();
+        // Don't pre-seed — Class B sessions are born from the hook
+        // itself.
+        let applied = reg
+            .apply_event(SessionEvent::SessionStarted {
+                key: "shell-agent-sid".to_string(),
+                cli_source: CliSource::Gemini,
+                pane_session_id: "shell-pane".to_string(),
+                cwd: PathBuf::from("/repo"),
+                title: "ask me".to_string(),
+            })
+            .await;
+        assert!(applied);
+        let row = reg
+            .lookup(&acp::SessionId::new("shell-agent-sid"))
+            .await
+            .unwrap();
+        assert_eq!(row.pane_session_id.as_deref(), Some("shell-pane"));
+        assert_eq!(row.status, Some(AgentStatus::Idle));
+        // origin defaults to None at creation; would be set to Unknown
+        // explicitly by the caller if needed. Test only what we set.
+        assert!(matches!(row.origin, None | Some(SessionOrigin::Unknown)));
     }
 
     // ─── activity-event resurrection guards ─────────────────────────
