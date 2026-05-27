@@ -68,14 +68,18 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         // on Black = invisible) before the cursor overlay had anything to
         // reveal.
         //
-        // Only paint the white block when the pane is focused — when WT's
-        // block cursor isn't landing on the cell, the bare white square is
-        // a misleading "cursor here" indicator. Render the whole placeholder
+        // Only paint the white block when the input cell will actually have
+        // a cursor on it: the pane has XAML focus *and* the TUI is in input
+        // mode (not browsing a completed turn). When either is false WT's
+        // block cursor won't land here, so a bare white square would be a
+        // misleading "cursor here" indicator. Render the whole placeholder
         // dim instead.
+        let input_active =
+            app.pane_focused && app.current_tab().selected_completed_turn_idx.is_none();
         let mut placeholder_spans = vec![Span::styled(INPUT_PROMPT, theme::DIM)];
         let mut chars = placeholder.chars();
         if let Some(first) = chars.next() {
-            let first_style = if app.pane_focused {
+            let first_style = if input_active {
                 Style::new().fg(Color::Black).bg(Color::White)
             } else {
                 theme::DIM
