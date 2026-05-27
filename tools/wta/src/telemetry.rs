@@ -122,11 +122,16 @@ pub fn log_agent_response_first_token(
 
 /// Emitted when the agent finishes responding (prompt request completes).
 /// `total_duration_ms` is wall-clock from prompt dispatch to completion.
-/// `total_response_bytes` is the aggregate byte length of all chunks.
+/// `raw_stdout_bytes_after_prompt` is the raw byte count read from the
+/// agent CLI's stdout after the prompt was dispatched. This includes the
+/// JSON-RPC framing / tool-call payloads, not just the user-visible text
+/// chunks — it is a transport-level volume metric, not a measure of the
+/// final answer length. The ETW field name (`TotalResponseBytes`) is
+/// preserved for downstream compatibility.
 pub fn log_agent_response_complete(
     session_id: &str,
     total_duration_ms: f64,
-    total_response_bytes: u64,
+    raw_stdout_bytes_after_prompt: u64,
     success: bool,
 ) {
     let success_i32: i32 = if success { 1 } else { 0 };
@@ -138,7 +143,7 @@ pub fn log_agent_response_complete(
         str8("SessionId", session_id),
         str8("Phase", "Complete"),
         f64("TotalDurationMs", &total_duration_ms),
-        u64("TotalResponseBytes", &total_response_bytes),
+        u64("TotalResponseBytes", &raw_stdout_bytes_after_prompt),
         bool32("Success", &success_i32),
         u64("PartA_PrivTags", &PDT_PRODUCT_AND_SERVICE_PERFORMANCE),
     );

@@ -504,7 +504,7 @@ impl PromptTimingState {
                         crate::telemetry::log_agent_response_first_token(
                             session_id,
                             first_token_latency_ms,
-                            text_len as u32,
+                            u32::try_from(text_len).unwrap_or(u32::MAX),
                         );
                     }
                 }
@@ -2612,7 +2612,7 @@ async fn dispatch_prompt_body(
             // Together the two emissions cover both prompt-entry routes.
             crate::telemetry::log_agent_prompt_sent(
                 &prompt_session_id_str,
-                text.len() as u32,
+                u32::try_from(text.len()).unwrap_or(u32::MAX),
                 prompt.is_autofix,
                 match kind {
                     TemplateKind::Autofix => "Autofix",

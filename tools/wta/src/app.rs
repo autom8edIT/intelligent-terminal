@@ -1201,9 +1201,11 @@ pub struct App {
     pub autofix_pane_id: Option<String>,
     // Monotonic timestamp captured at the moment the current `autofix_pane_id`
     // was armed. Used to compute `TimeSinceFixMs` (elapsed duration) when the
-    // fix resolves (next command in the same pane exits zero). Overwritten on
-    // every new arming; the resolve path is gated by `autofix_pane_id`, so a
-    // stale value here is unreachable.
+    // fix resolves (next command in the same pane exits zero). This field is
+    // always cleared together with `autofix_pane_id` (every site that assigns
+    // `autofix_pane_id = None` also sets `autofix_armed_at = None`), so the
+    // two are kept in sync and a stale arming timestamp cannot outlive its
+    // pane id.
     pub autofix_armed_at: Option<std::time::Instant>,
     // Auto-fix Suggested state: pane ID with a non-actionable suggestion shown on
     // the bottom bar. Cleared when the user runs a successful command in the
@@ -3416,17 +3418,17 @@ impl App {
                             if is_exit_zero && self.autofix_pane_id.as_deref() == Some(pane_id.as_str()) {
                                 // Telemetry: a fix was armed for this pane and the next
                                 // command exited cleanly — the user's problem resolved.
-                                // Elapsed is wall-clock from arm to clean exit; if the
-                                // arming Instant is missing (defensive), report 0.0.
-                                let elapsed_ms = self
-                                    .autofix_armed_at
-                                    .take()
-                                    .map(|t| t.elapsed().as_secs_f64() * 1000.0)
-                                    .unwrap_or(0.0);
-                                crate::telemetry::log_error_fix_resolved(
-                                    pane_id.as_str(),
-                                    elapsed_ms,
-                                );
+                                // Elapsed is wall-clock from arm to clean exit. Skip the
+                                // event when the arming Instant is missing rather than
+                                // reporting 0.0, mirroring the ACP timing telemetry which
+                                // only emits when it can compute a reliable duration.
+                                if let Some(armed) = self.autofix_armed_at.take() {
+                                    let elapsed_ms = armed.elapsed().as_secs_f64() * 1000.0;
+                                    crate::telemetry::log_error_fix_resolved(
+                                        pane_id.as_str(),
+                                        elapsed_ms,
+                                    );
+                                }
 
                                 // `turn_cancel` owns the full cleanup: bumps
                                 // `autofix_generation`, emits autofix_state_cleared
@@ -4812,6 +4814,7 @@ impl App {
             None => {
                 self.emit_autofix_state_cleared(&armed_pane);
                 self.autofix_pane_id = None;
+                self.autofix_armed_at = None;
                 return;
             }
         };
@@ -4822,6 +4825,7 @@ impl App {
         let Some(mut choice) = rec.choices.get(idx).cloned() else {
             self.emit_autofix_state_cleared(&armed_pane);
             self.autofix_pane_id = None;
+            self.autofix_armed_at = None;
             return;
         };
         // Auto-fill parent for Send actions, same as Enter path.
@@ -4854,6 +4858,7 @@ impl App {
         let choice_label = choice.choice;
         if !routed {
             self.autofix_pane_id = None;
+            self.autofix_armed_at = None;
             self.clear_recommendations();
             let _ = self
                 .recommendation_tx
@@ -5224,6 +5229,7 @@ impl App {
         if let Some(pane) = autofix_pane {
             self.emit_autofix_state_cleared(&pane);
             self.autofix_pane_id = None;
+            self.autofix_armed_at = None;
         }
         self.turn_release_end_pending(session_id);
         self.turn_clear_agent_progress(session_id);
@@ -5252,6 +5258,7 @@ impl App {
                     self.emit_autofix_state_cleared(&pane_id);
                 }
                 self.autofix_pane_id = None;
+                self.autofix_armed_at = None;
                 let tab = self.session_tab_mut(session_id);
                 let prompt = tab.turn.prompt().cloned().expect("prompt set");
                 tab.turn = TurnState::Surfaced {
@@ -5382,6 +5389,7 @@ impl App {
             self.emit_autofix_state_cleared(&pane_id);
         }
         self.autofix_pane_id = None;
+        self.autofix_armed_at = None;
         let tab = self.session_tab_mut(session_id);
         let TurnState::Surfaced { prompt, end_pending, .. } =
             std::mem::replace(&mut tab.turn, TurnState::Idle)
@@ -5415,6 +5423,7 @@ impl App {
             self.emit_autofix_state_cleared(&pane_id);
         }
         self.autofix_pane_id = None;
+        self.autofix_armed_at = None;
         let tab = self.session_tab_mut(session_id);
         tab.selected_recommendation = 0;
         tab.selected_button = 0;
@@ -5556,6 +5565,7 @@ impl App {
         self.emit_autofix_state_suggested(&pane_id, &title);
         self.suggested_pane_id = Some(pane_id.clone());
         self.autofix_pane_id = None;
+        self.autofix_armed_at = None;
 
         let tab = self.session_tab_mut(session_id);
         let prompt = tab.turn.prompt().cloned().expect("prompt set");
