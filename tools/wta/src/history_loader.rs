@@ -217,6 +217,7 @@ pub(crate) fn key_is_resumable_on_disk_in(
     use crate::agent_sessions::CliSource;
     match cli {
         CliSource::Claude  => claude_key_is_resumable_on_disk_in(home, key),
+        CliSource::Codex   => true,
         CliSource::Copilot => copilot_key_is_resumable_on_disk_in(home, key),
         CliSource::Gemini  => gemini_key_is_resumable_on_disk_in(home, key),
         CliSource::Unknown(_) => true,
@@ -261,6 +262,7 @@ pub(crate) fn key_has_definite_resumable_content_in(
     use crate::agent_sessions::CliSource;
     match cli {
         CliSource::Claude  => claude_key_has_definite_resumable_content_in(home, key),
+        CliSource::Codex   => true,
         CliSource::Copilot => copilot_key_has_definite_resumable_content_in(home, key),
         CliSource::Gemini  => gemini_key_has_definite_resumable_content_in(home, key),
         CliSource::Unknown(_) => true,

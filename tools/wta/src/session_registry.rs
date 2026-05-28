@@ -439,6 +439,7 @@ impl From<&crate::agent_sessions::CliSource> for SessionHookCliSource {
     fn from(value: &crate::agent_sessions::CliSource) -> Self {
         match value {
             crate::agent_sessions::CliSource::Claude => Self::Known("Claude".to_string()),
+            crate::agent_sessions::CliSource::Codex => Self::Known("Codex".to_string()),
             crate::agent_sessions::CliSource::Copilot => Self::Known("Copilot".to_string()),
             crate::agent_sessions::CliSource::Gemini => Self::Known("Gemini".to_string()),
             crate::agent_sessions::CliSource::Unknown(value) => Self::Unknown {
@@ -453,6 +454,7 @@ impl From<SessionHookCliSource> for crate::agent_sessions::CliSource {
         match value {
             SessionHookCliSource::Known(value) => match value.as_str() {
                 "Claude" | "claude" => Self::Claude,
+                "Codex"  | "codex"  => Self::Codex,
                 "Copilot" | "copilot" => Self::Copilot,
                 "Gemini" | "gemini" => Self::Gemini,
                 other => Self::Unknown(other.to_string()),

@@ -2158,6 +2158,7 @@ impl App {
             ref known => {
                 let id = match known {
                     crate::agent_sessions::CliSource::Claude => "claude",
+                    crate::agent_sessions::CliSource::Codex => "codex",
                     crate::agent_sessions::CliSource::Copilot => "copilot",
                     crate::agent_sessions::CliSource::Gemini => "gemini",
                     crate::agent_sessions::CliSource::Unknown(_) => unreachable!(),
@@ -2211,6 +2212,7 @@ impl App {
                 // Agents view (which is rendered in-tab).
                 let cli_id = match s.cli_source {
                     crate::agent_sessions::CliSource::Claude => "claude",
+                    crate::agent_sessions::CliSource::Codex => "codex",
                     crate::agent_sessions::CliSource::Copilot => "copilot",
                     crate::agent_sessions::CliSource::Gemini => "gemini",
                     crate::agent_sessions::CliSource::Unknown(_) => "this CLI",
@@ -2359,6 +2361,7 @@ impl App {
     fn dispatch_resume(&mut self, s: &crate::agent_sessions::AgentSession) {
         let cli_id = match s.cli_source {
             crate::agent_sessions::CliSource::Claude => "claude",
+            crate::agent_sessions::CliSource::Codex => "codex",
             crate::agent_sessions::CliSource::Copilot => "copilot",
             crate::agent_sessions::CliSource::Gemini => "gemini",
             crate::agent_sessions::CliSource::Unknown(_) => {
@@ -2597,6 +2600,7 @@ impl App {
             let short_key: String = s.key.chars().take(8).collect();
             let cli_id = match s.cli_source {
                 crate::agent_sessions::CliSource::Claude => "claude",
+                crate::agent_sessions::CliSource::Codex => "codex",
                 crate::agent_sessions::CliSource::Copilot => "copilot",
                 crate::agent_sessions::CliSource::Gemini => "gemini",
                 crate::agent_sessions::CliSource::Unknown(_) => "this CLI",

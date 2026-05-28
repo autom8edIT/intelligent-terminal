@@ -414,6 +414,7 @@ fn cli_suffix_for(s: &AgentSession, selected: bool) -> String {
     }
     let label = match s.cli_source {
         CliSource::Claude => "claude",
+        CliSource::Codex => "codex",
         CliSource::Copilot => "copilot",
         CliSource::Gemini => "gemini",
         CliSource::Unknown(_) => return String::new(),

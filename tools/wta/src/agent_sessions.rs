@@ -34,6 +34,7 @@ pub type AgentKey = String;
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum CliSource {
     Claude,
+    Codex,
     Copilot,
     Gemini,
     Unknown(String),
@@ -43,6 +44,7 @@ impl CliSource {
     pub fn parse(s: Option<&str>) -> Self {
         match s.unwrap_or("").to_ascii_lowercase().as_str() {
             "claude"  => Self::Claude,
+            "codex"   => Self::Codex,
             "copilot" => Self::Copilot,
             "gemini"  => Self::Gemini,
             ""        => Self::Unknown(String::new()),
@@ -50,15 +52,16 @@ impl CliSource {
         }
     }
 
-    /// Map an `agent_registry` agent id (`"copilot"`, `"claude"`, `"gemini"`,
+    /// Map an `agent_registry` agent id (`"copilot"`, `"claude"`, `"codex"`, `"gemini"`,
     /// ...) to the matching `CliSource` variant. Returns `None` for agents
-    /// the session registry does not track (e.g. `"codex"`, `"unknown"`, or
+    /// the session registry does not track (e.g. `"unknown"`, or
     /// an empty string), which the session-management view treats as
     /// "no filter — show all rows".
     pub fn from_agent_id(agent_id: &str) -> Option<Self> {
         match agent_id.to_ascii_lowercase().as_str() {
-            "copilot" => Some(Self::Copilot),
             "claude"  => Some(Self::Claude),
+            "codex"   => Some(Self::Codex),
+            "copilot" => Some(Self::Copilot),
             "gemini"  => Some(Self::Gemini),
             _ => None,
         }
@@ -1981,12 +1984,29 @@ mod tests {
 
     #[test]
     fn from_agent_id_returns_none_for_untracked_or_empty() {
-        // Empty / unknown / codex are all "no filter" — the F2 view will
+        // Empty / unknown are "no filter" — the F2 view will
         // fall back to showing every row.
         assert_eq!(CliSource::from_agent_id(""),         None);
-        assert_eq!(CliSource::from_agent_id("codex"),    None);
         assert_eq!(CliSource::from_agent_id("unknown"),  None);
         assert_eq!(CliSource::from_agent_id("bogus"),    None);
+    }
+
+    #[test]
+    fn cli_source_from_agent_id_recognizes_codex() {
+        assert_eq!(
+            CliSource::from_agent_id("codex"),
+            Some(CliSource::Codex),
+        );
+    }
+
+    #[test]
+    fn cli_source_parse_round_trips_codex() {
+        // Wire format used by SessionHookCliSource::Known("Codex" | "codex")
+        // must parse back to the typed variant — otherwise Codex hook events
+        // would degrade to CliSource::Unknown after a serde round-trip.
+        // Note: CliSource has `pub fn parse(Option<&str>) -> Self` (not FromStr).
+        assert_eq!(CliSource::parse(Some("Codex")), CliSource::Codex);
+        assert_eq!(CliSource::parse(Some("codex")), CliSource::Codex);
     }
 
     #[test]
