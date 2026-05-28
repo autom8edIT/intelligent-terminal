@@ -3,6 +3,7 @@ name = "wta"
 version = "0.1.0"
 edition = "2021"
 description = "Windows Terminal Agent — ACP TUI client / MCP tool server"
+build = "build.rs"
 
 [[bin]]
 name = "wta"

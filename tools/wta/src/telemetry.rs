@@ -4,27 +4,38 @@
 // ETW TraceLogging provider for the WTA (Windows Terminal Agent) process.
 //
 // This module registers the SAME ETW provider as the C++ Windows Terminal
-// side (`Microsoft.Windows.Terminal.App`, registered by
-// `g_hTerminalAppProvider` in `src/cascadia/TerminalApp/init.cpp`). WTA and
-// the C++ side therefore emit into a single merged ETW provider stream, so
-// listeners (xperf/wpa/UTC) see one unified view of the fork.
+// side (`g_hTerminalAppProvider` declared in
+// `src/cascadia/TerminalApp/init.cpp`). WTA and the C++ side therefore
+// emit into a single merged ETW provider stream, so listeners
+// (xperf/wpa/UTC) see one unified view of the fork.
 //
-// In OSS builds the derived GUID is `{24a1622f-7da7-5c77-3303-d850bd1ab2ed}`
-// (TraceLogging-style SHA-1 hash of the provider name, computed identically
-// on both the C++ and Rust sides). Microsoft-internal builds may rewrite the
-// provider-name string literal below via the
-// `Microsoft.Windows.Terminal.Versioning` NuGet package's `Setup.ps1`
-// (see `build/pipelines/templates-v2/steps-setup-versioning.yml`).
+// Single source of truth — both halves of this module's compile-time
+// inputs come from the C++ side via the build-script (`build.rs`):
 //
-// On the C++ side the provider is declared with `TRACELOGGING_DEFINE_PROVIDER`
-// in `src/cascadia/TerminalApp/init.cpp`, which takes BOTH the name string
-// *and* an explicit GUID literal (originally produced by `TlgGuid.exe`).
-// An internal overlay therefore has to keep those two values in sync on the
-// C++ side. On this Rust side we intentionally pass only the name to
-// `tlg::define_provider!` and let the crate's `Guid::from_name` derive the
-// GUID, so the overlay only needs to touch one string here — but the C++
-// side remains the canonical place where the (name, GUID) pair is asserted
-// to match.
+//   - Provider name             ← `TRACELOGGING_DEFINE_PROVIDER(...)` in
+//                                  `src/cascadia/TerminalApp/init.cpp`
+//   - `MICROSOFT_KEYWORD_*`     ← `#define` in
+//   - `PDT_PRODUCT_AND_SERVICE_*`  `dep/telemetry/ProjectTelemetry.h`
+//
+// Both files are the OSS-or-overlaid versions present on disk at cargo
+// build time, so the Microsoft-internal `Setup.ps1` shipped by the
+// `Microsoft.Windows.Terminal.Versioning` NuGet package rewrites both
+// languages from one place: it edits the two C++ files, and `cargo build`
+// re-reads them. In the public OSS tree all four numeric stubs are `0x0`,
+// meaning OSS-built binaries register the provider but emit events
+// without a privacy tag and without the Microsoft-pipeline keyword (so
+// UTC ignores them). The pipeline runs the overlay *before* `cargo
+// build` — see `build/pipelines/templates-v2/job-build-project.yml`
+// (`beforeRustBuildSteps`).
+//
+// In OSS the derived GUID is `{24a1622f-7da7-5c77-3303-d850bd1ab2ed}`
+// (TraceLogging-style SHA-1 hash of the provider name, computed
+// identically on both the C++ and Rust sides — so passing only the name
+// to `tlg::define_provider!` is sufficient to land on the same GUID).
+// The C++ side still declares its GUID as an explicit literal paired
+// with the name in `TRACELOGGING_DEFINE_PROVIDER`; an overlay must keep
+// those two values in sync on the C++ side, but the Rust side only
+// derives, so nothing extra to keep in sync here.
 //
 // Note: cross-process correlation by `SessionId` is intentionally NOT
 // provided here. The `SessionId` field on WTA events identifies the ACP
@@ -60,39 +71,11 @@
 
 use tracelogging as tlg;
 
-// Compliance stubs — these mirror the values defined in
-// `dep/telemetry/ProjectTelemetry.h` used by Microsoft-internal builds. In the
-// public OSS build they are all zero; Microsoft-internal builds replace them
-// with real values.
-#[allow(dead_code)]
-pub const MICROSOFT_KEYWORD_MEASURES: u64 = 0x0;
-#[allow(dead_code)]
-pub const MICROSOFT_KEYWORD_TELEMETRY: u64 = 0x0;
-pub const PDT_PRODUCT_AND_SERVICE_USAGE: u64 = 0x0;
-pub const PDT_PRODUCT_AND_SERVICE_PERFORMANCE: u64 = 0x0;
-
-// Provider definition.
-//
-// Provider name matches the C++ side (`Microsoft.Windows.Terminal.App`,
-// `g_hTerminalAppProvider` in `src/cascadia/TerminalApp/init.cpp`). The ETW
-// provider GUID is derived from the name by the `tracelogging` crate's
-// `Guid::from_name` (TraceLogging-style SHA-1 hash) — exactly the same
-// algorithm the C++ side uses — so registering only the name here is
-// sufficient to land on the same GUID. The C++ side still declares its
-// GUID as an explicit literal (paired with the name in
-// `TRACELOGGING_DEFINE_PROVIDER`); any internal overlay that rewrites the
-// name must update both halves on the C++ side. Omitting the literal here
-// just means the Rust side has one less thing to keep in sync.
-//
-// `group_id` is the Microsoft Telemetry option group, equivalent to the C++
-// TraceLoggingOptionMicrosoftTelemetry() macro
-// (group GUID: 9aa7a361-583f-4c09-b1f1-cea1ef5863b0; this is a public,
-// well-known constant and is the same in OSS and internal builds).
-tlg::define_provider!(
-    AGENT_PROVIDER,
-    "Microsoft.Windows.Terminal.App",
-    group_id("9aa7a361-583f-4c09-b1f1-cea1ef5863b0")
-);
+// Provider definition + numeric stubs (`MICROSOFT_KEYWORD_*` /
+// `PDT_PRODUCT_AND_SERVICE_*`) — all generated by `build.rs` from the C++
+// source files listed at the top of this module. See the build script
+// for the exact files read and the panic-on-miss policy.
+include!(concat!(env!("OUT_DIR"), "/telemetry_codegen.rs"));
 
 /// Register the ETW provider. Safe to call multiple times — the underlying
 /// `TraceLoggingRegister`-style API is guarded by a `Once`, so only the
