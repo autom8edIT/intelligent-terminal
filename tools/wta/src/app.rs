@@ -1200,12 +1200,13 @@ pub struct App {
     // Auto-fix: the pane ID where the error occurred (used to auto-fill Send parent)
     pub autofix_pane_id: Option<String>,
     // Monotonic timestamp captured at the moment the current `autofix_pane_id`
-    // was armed. Used to compute `TimeSinceFixMs` (elapsed duration) when the
-    // fix resolves (next command in the same pane exits zero). This field is
-    // always cleared together with `autofix_pane_id` (every site that assigns
-    // `autofix_pane_id = None` also sets `autofix_armed_at = None`), so the
-    // two are kept in sync and a stale arming timestamp cannot outlive its
-    // pane id.
+    // was armed. Used to compute `TimeSinceFixMs` (a monotonic elapsed
+    // duration, not wall-clock — `Instant` is unaffected by clock jumps) when
+    // the fix resolves (next command in the same pane exits zero). This field
+    // is always cleared together with `autofix_pane_id`: every site that
+    // clears the pane id (whether via `= None` or `.take()`) also clears
+    // `autofix_armed_at` in the same handling block. The two are therefore
+    // kept in sync and a stale arming timestamp cannot outlive its pane id.
     pub autofix_armed_at: Option<std::time::Instant>,
     // Auto-fix Suggested state: pane ID with a non-actionable suggestion shown on
     // the bottom bar. Cleared when the user runs a successful command in the
@@ -3418,7 +3419,8 @@ impl App {
                             if is_exit_zero && self.autofix_pane_id.as_deref() == Some(pane_id.as_str()) {
                                 // Telemetry: a fix was armed for this pane and the next
                                 // command exited cleanly — the user's problem resolved.
-                                // Elapsed is wall-clock from arm to clean exit. Skip the
+                                // Elapsed is a monotonic duration (`Instant::elapsed`)
+                                // from arm to clean exit, not wall-clock. Skip the
                                 // event when the arming Instant is missing rather than
                                 // reporting 0.0, mirroring the ACP timing telemetry which
                                 // only emits when it can compute a reliable duration.

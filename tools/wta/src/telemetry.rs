@@ -130,7 +130,8 @@ pub fn log_agent_prompt_sent(
 }
 
 /// Emitted when the agent's first text chunk arrives back over ACP.
-/// `first_token_latency_ms` is wall-clock from prompt dispatch to first token.
+/// `first_token_latency_ms` is a monotonic duration (`Instant::elapsed`)
+/// from prompt dispatch to first token, not wall-clock.
 ///
 /// Uses a distinct event name (`AgentResponseFirstToken`) so the field
 /// schema is unambiguous in downstream decoders — keeping a single
@@ -155,7 +156,8 @@ pub fn log_agent_response_first_token(
 }
 
 /// Emitted when the agent finishes responding (prompt request completes).
-/// `total_duration_ms` is wall-clock from prompt dispatch to completion.
+/// `total_duration_ms` is a monotonic duration (`Instant::elapsed`) from
+/// prompt dispatch to completion, not wall-clock.
 /// `raw_stdout_bytes_after_prompt` is the raw byte count read from the
 /// agent CLI's stdout after the prompt was dispatched. This includes the
 /// JSON-RPC framing / tool-call payloads, not just the user-visible text
@@ -201,8 +203,9 @@ pub fn log_error_detected(severity: &str, method: &str, pane_id: &str) {
 }
 
 /// Emitted when the next command after an attempted fix succeeds (exit 0)
-/// in the same pane where autofix was armed. `time_since_fix_ms` is
-/// wall-clock from arming the fix to observing the successful exit.
+/// in the same pane where autofix was armed. `time_since_fix_ms` is a
+/// monotonic duration (`Instant::elapsed`) from arming the fix to observing
+/// the successful exit, not wall-clock.
 pub fn log_error_fix_resolved(pane_id: &str, time_since_fix_ms: f64) {
     tlg::write_event!(
         AGENT_PROVIDER,
