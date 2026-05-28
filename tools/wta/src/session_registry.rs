@@ -2185,6 +2185,25 @@ mod tests {
     }
 
     #[test]
+    fn session_hook_cli_source_round_trips_codex() {
+        use crate::agent_sessions::CliSource;
+        let typed = CliSource::Codex;
+        let wire: SessionHookCliSource = (&typed).into();
+        assert!(matches!(wire, SessionHookCliSource::Known(ref s) if s == "Codex"),
+                "Codex must serialize to Known(\"Codex\"), got {:?}", wire);
+        let back: CliSource = wire.into();
+        assert_eq!(back, CliSource::Codex);
+    }
+
+    #[test]
+    fn session_hook_cli_source_accepts_lowercase_codex() {
+        use crate::agent_sessions::CliSource;
+        let wire = SessionHookCliSource::Known("codex".to_string());
+        let typed: CliSource = wire.into();
+        assert_eq!(typed, CliSource::Codex);
+    }
+
+    #[test]
     fn parse_session_hook_params_rejects_garbage() {
         let raw = serde_json::value::RawValue::from_string(r#"{"wrong":"shape"}"#.into()).unwrap();
         assert!(parse_session_hook_params(&raw).is_err());
