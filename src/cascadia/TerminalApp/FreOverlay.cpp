@@ -273,8 +273,8 @@ namespace winrt::TerminalApp::implementation
         const bool detectionOn = detect.IsOn();
         const bool autoFixLocked = _settings && _settings.GlobalSettings().IsAutoFixPolicyLocked();
 
-        // Master-detail: detection off ⇒ turn the suggestion off and make it
-        // non-interactable (can't configure a suggestion you can't detect).
+        // Master-detail: detection off ⇒ turn the suggestion off and disable it
+        // (can't configure a suggestion you can't detect).
         // Detection on ⇒ re-enable it; its On/Off is the stored preference
         // (set on init), so re-enabling doesn't force it on. The auto-fix GPO
         // can still lock it off.
