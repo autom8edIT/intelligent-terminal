@@ -1481,6 +1481,58 @@ fn parse_gemini_extensions_list_json(stdout: &str) -> Option<PluginPresence> {
     })
 }
 
+/// Parse `codex plugin marketplace list` plain-text output.
+/// Returns `(registered, root_path)` where `registered` is true when a
+/// row whose first whitespace-delimited column equals `wt-local`
+/// exists, and `root_path` is the remainder of that row trimmed.
+fn parse_codex_marketplace_list(stdout: &str) -> (bool, Option<String>) {
+    for line in stdout.lines() {
+       let line = line.trim_end();
+       // Skip header and blank lines.
+       if line.is_empty() || line.starts_with("MARKETPLACE") {
+           continue;
+       }
+       let mut split = line.splitn(2, char::is_whitespace);
+       let name = match split.next() {
+           Some(s) => s.trim(),
+           None => continue,
+       };
+       if name == MARKETPLACE_NAME {
+           let rest = split.next().unwrap_or("").trim();
+           let path = if rest.is_empty() { None } else { Some(rest.to_string()) };
+           return (true, path);
+       }
+    }
+    (false, None)
+}
+
+/// Parse `codex plugin list` plain-text output. Returns true when a row
+/// for `wt-agent-hooks` exists AND its STATUS column starts with
+/// "installed" (not "not installed", "available", etc.).
+fn parse_codex_plugin_list(stdout: &str) -> bool {
+    for line in stdout.lines() {
+       let line = line.trim_end();
+       if line.is_empty() || line.starts_with("PLUGIN") {
+           continue;
+       }
+       let mut cols = line.split_whitespace();
+       let name = match cols.next() {
+           Some(s) => s,
+           None => continue,
+       };
+       if name != PLUGIN_NAME {
+           continue;
+       }
+       let rest: Vec<&str> = cols.collect();
+       if rest.is_empty() {
+           return false;
+       }
+       // Status starts at rest[0]. "not installed" → not installed.
+       return rest[0] != "not";
+    }
+    false
+}
+
 // ---------------------------------------------------------------------------
 // Public uninstall entry point (Track 2 / #18)
 // ---------------------------------------------------------------------------
@@ -3797,5 +3849,46 @@ Registered marketplaces:
         let tmp = unique_dir("codex-dispatch");
         ensure_installed_in(&tmp);
         let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn parse_codex_marketplace_list_finds_wt_local() {
+        let sample = "MARKETPLACE      ROOT\n\
+                      openai-curated   https://github.com/openai/codex-marketplace\n\
+                      wt-local         C:\\some\\path\\to\\codex\n";
+        let (registered, path) = parse_codex_marketplace_list(sample);
+        assert!(registered);
+        assert_eq!(path.as_deref(), Some("C:\\some\\path\\to\\codex"));
+    }
+
+    #[test]
+    fn parse_codex_marketplace_list_absent() {
+        let sample = "MARKETPLACE      ROOT\n\
+                      openai-curated   https://github.com/openai/codex-marketplace\n";
+        let (registered, path) = parse_codex_marketplace_list(sample);
+        assert!(!registered);
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn parse_codex_plugin_list_finds_wt_agent_hooks() {
+        let sample = "PLUGIN            STATUS         VERSION   PATH\n\
+                      github            not installed  -         -\n\
+                      wt-agent-hooks    installed      0.1.0     C:\\some\\path\n";
+        assert!(parse_codex_plugin_list(sample));
+    }
+
+    #[test]
+    fn parse_codex_plugin_list_not_installed() {
+        let sample = "PLUGIN            STATUS         VERSION   PATH\n\
+                      wt-agent-hooks    not installed  -         -\n";
+        assert!(!parse_codex_plugin_list(sample));
+    }
+
+    #[test]
+    fn parse_codex_plugin_list_absent_row() {
+        let sample = "PLUGIN            STATUS         VERSION   PATH\n\
+                      github            not installed  -         -\n";
+        assert!(!parse_codex_plugin_list(sample));
     }
 }
