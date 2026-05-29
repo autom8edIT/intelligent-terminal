@@ -163,18 +163,25 @@ pub enum CliKind {
     Copilot,
     Claude,
     Gemini,
+    Codex,
 }
 
 impl CliKind {
     /// Iteration order also dictates the order rows appear in
     /// `wta hooks status` output.
-    pub const ALL: &'static [CliKind] = &[CliKind::Copilot, CliKind::Claude, CliKind::Gemini];
+    pub const ALL: &'static [CliKind] = &[
+        CliKind::Copilot,
+        CliKind::Claude,
+        CliKind::Gemini,
+        CliKind::Codex,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::Copilot => "copilot",
             Self::Claude => "claude",
             Self::Gemini => "gemini",
+            Self::Codex => "codex",
         }
     }
 
@@ -183,6 +190,7 @@ impl CliKind {
             "copilot" => Some(Self::Copilot),
             "claude" => Some(Self::Claude),
             "gemini" => Some(Self::Gemini),
+            "codex" => Some(Self::Codex),
             _ => None,
         }
     }
@@ -194,6 +202,7 @@ impl CliKind {
             Self::Claude => "claude",
             Self::Copilot => "copilot",
             Self::Gemini => "gemini-extension",
+            Self::Codex => "codex",
         }
     }
 }
@@ -3620,5 +3629,14 @@ Registered marketplaces:
         assert!(v2.get("marketplace_path").is_none());
         // marketplace_path_valid is always present (it's a bool, not Option).
         assert!(v2.get("marketplace_path_valid").is_some());
+    }
+
+    #[test]
+    fn cli_kind_codex_roundtrips() {
+        assert_eq!(CliKind::from_name("codex"), Some(CliKind::Codex));
+        assert_eq!(CliKind::from_name("CODEX"), Some(CliKind::Codex));
+        assert_eq!(CliKind::Codex.name(), "codex");
+        assert_eq!(CliKind::Codex.dir_name(), "codex");
+        assert!(CliKind::ALL.contains(&CliKind::Codex));
     }
 }
