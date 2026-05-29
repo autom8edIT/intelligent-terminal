@@ -2921,15 +2921,15 @@
     <comment>Failure summary shown when installing agent session tracking hooks fails. {Locked="Hooks","%LOCALAPPDATA%","IntelligentTerminal","logs","wta-install-hooks.log"}</comment>
   </data>
   <data name="AIAgents_AutoErrorDetectionTitle.Text" xml:space="preserve">
-    <value>Automatic error detection</value>
+    <value>자동 오류 검색</value>
   </data>
   <data name="AIAgents_AutoErrorDetectionCaption.Text" xml:space="preserve">
-    <value>Give Intelligent Terminal permission to access your shell and automatically detect errors. Available in PowerShell and Windows PowerShell.</value>
+    <value>Intelligent Terminal이 셸에 액세스하여 오류를 자동으로 검색하도록 허용합니다. PowerShell 및 Windows PowerShell에서 사용할 수 있습니다.</value>
   </data>
   <data name="AIAgents_AutoErrorSuggestionTitle.Text" xml:space="preserve">
-    <value>Automatic error suggestion</value>
+    <value>자동 오류 제안</value>
   </data>
   <data name="AIAgents_AutoErrorSuggestionCaption.Text" xml:space="preserve">
-    <value>Give Intelligent Terminal permission to send errors to your agent to automatically suggest fixes.</value>
+    <value>Intelligent Terminal이 오류를 에이전트로 보내 수정 사항을 자동으로 제안하도록 허용합니다.</value>
   </data>
 </root>

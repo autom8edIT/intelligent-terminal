@@ -258,11 +258,6 @@
                                                   HorizontalAlignment="Right" MinWidth="0"
                                                   Toggled="_OnAutoDetectToggled" />
                                 </Grid>
-                                <TextBlock x:Name="AutoDetectPolicyNotice"
-                                           FontSize="12" FontStyle="Italic"
-                                           Foreground="#CCFFA500" TextWrapping="Wrap"
-                                           Visibility="Collapsed"
-                                           AutomationProperties.LiveSetting="Polite" />
                             </StackPanel>
                         </Border>
 

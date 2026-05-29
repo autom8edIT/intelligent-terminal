@@ -2565,15 +2565,15 @@
     <comment>Failure summary shown when installing agent session tracking hooks fails. {Locked="Hooks","%LOCALAPPDATA%","IntelligentTerminal","logs","wta-install-hooks.log"}</comment>
   </data>
   <data name="AIAgents_AutoErrorDetectionTitle.Text" xml:space="preserve">
-    <value>Automatic error detection</value>
+    <value>Автоматичне виявлення помилок</value>
   </data>
   <data name="AIAgents_AutoErrorDetectionCaption.Text" xml:space="preserve">
-    <value>Give Intelligent Terminal permission to access your shell and automatically detect errors. Available in PowerShell and Windows PowerShell.</value>
+    <value>Дозвольте Intelligent Terminal отримати доступ до оболонки та автоматично виявляти помилки. Доступно в PowerShell і Windows PowerShell.</value>
   </data>
   <data name="AIAgents_AutoErrorSuggestionTitle.Text" xml:space="preserve">
-    <value>Automatic error suggestion</value>
+    <value>Автоматична пропозиція виправлень</value>
   </data>
   <data name="AIAgents_AutoErrorSuggestionCaption.Text" xml:space="preserve">
-    <value>Give Intelligent Terminal permission to send errors to your agent to automatically suggest fixes.</value>
+    <value>Дозвольте Intelligent Terminal надсилати помилки вашому агенту для автоматичної пропозиції виправлень.</value>
   </data>
 </root>
