@@ -16,7 +16,7 @@
 #include <string>
 #include <string_view>
 
-#include "ShellIntegration.h"
+#include "../inc/ShellIntegration.h"
 
 using namespace WEX::Common;
 using namespace WEX::Logging;
