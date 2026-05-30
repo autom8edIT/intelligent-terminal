@@ -4,13 +4,13 @@
 // CustomAgentId.h — derive a short, stable identifier from a user-supplied
 // command line for a "custom" AI agent (the ACP / delegate agent slot).
 //
-// The settings UI lets the user paste an arbitrary command (e.g. `qwen.cmd
-// --acp`, `"C:\Program Files\qwen\qwen.cmd" --acp`, or just `qwen`). The
-// settings model stores this command verbatim in AcpCustomCommand /
+// The settings UI lets the user paste an arbitrary command (e.g. `mybot.cmd
+// --acp`, `"C:\Program Files\mybot\mybot.cmd" --acp`, or just `mybot`).
+// The settings model stores this command verbatim in AcpCustomCommand /
 // DelegateCustomCommand. But the agent *id* itself (AcpAgent /
 // DelegateAgent) needs to be a single short token so that the rest of the
-// pipeline (policy allowlist, telemetry, display name) has something
-// stable to key on.
+// pipeline (policy allowlist, display name) has something stable to key
+// on.
 //
 // `DeriveCustomAgentId` performs that extraction:
 //   1. Trim leading whitespace.
@@ -24,9 +24,11 @@
 // Header-only and pure: no settings-model or registry access. Callers must
 // always prefix the returned id with "custom:" before storing it in the
 // AcpAgent / DelegateAgent setting — that prefix is the system-wide
-// discriminator used by EffectiveAcpAgent, the command-line resolver, the
-// custom-edit/delete UI gates, and telemetry. Storing a bare id silently
-// breaks all of them; see PR #123.
+// discriminator used by EffectiveAcpAgent, the command-line resolver, and
+// the custom-edit/delete UI gates. (Telemetry collapses every non-built-in
+// id to literal `custom` via `sanitizeProviderId` and does not key on the
+// prefix.) Storing a bare id silently breaks the consumers above; see
+// PR #123.
 
 #pragma once
 
