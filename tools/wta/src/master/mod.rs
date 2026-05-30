@@ -1170,7 +1170,28 @@ pub async fn run_master_mode(cli: Cli, pipe_name: String) -> Result<()> {
     // IT install/upgrade does any per-CLI work. Caveat: when an upgrade is
     // actually needed, the agent CLI process master is about to spawn may
     // miss the new hooks until its next restart.
-    tokio::task::spawn_blocking(crate::agent_hooks_installer::upgrade_installed_hooks);
+    //
+    // Wrap in `catch_unwind` so an unexpected panic inside the upgrade flow
+    // (or any of its transitive dependencies) doesn't get silently swallowed
+    // by tokio's fire-and-forget JoinHandle. Master keeps running either
+    // way; this just promotes the panic into a visible trace event.
+    tokio::task::spawn_blocking(|| {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            crate::agent_hooks_installer::upgrade_installed_hooks,
+        ));
+        if let Err(panic) = result {
+            let msg = panic
+                .downcast_ref::<&'static str>()
+                .copied()
+                .or_else(|| panic.downcast_ref::<String>().map(|s| s.as_str()))
+                .unwrap_or("<non-string panic payload>");
+            tracing::error!(
+                target: "agent_hooks",
+                panic = %msg,
+                "upgrade_installed_hooks panicked; master continues",
+            );
+        }
+    });
 
     let local_set = LocalSet::new();
     local_set

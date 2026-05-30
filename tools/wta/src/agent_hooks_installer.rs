@@ -2885,7 +2885,21 @@ fn upgrade_one_cli(cli: CliKind, home: &Path, bundle_version: Option<Version>) {
         UpgradeAction::UpdatePlugin => match cli {
             CliKind::Copilot => upgrade_copilot(home),
             CliKind::Claude => upgrade_claude(home),
-            CliKind::Gemini => unreachable!("UpdatePlugin never returned for Gemini"),
+            CliKind::Gemini => {
+                // Defensive: `decide_upgrade` is the only producer of
+                // `UpdatePlugin` and currently only returns it for
+                // Copilot/Claude — Gemini always routes to
+                // `GeminiUpdateInPlace` / `GeminiReinstall`. If a future
+                // refactor breaks that invariant we'd rather skip than
+                // panic on the blocking-pool thread (which would only be
+                // visible as a silent task failure to whoever cares to
+                // look). Log loudly so the inconsistency surfaces.
+                tracing::error!(
+                    target: "agent_hooks",
+                    cli = cli.name(),
+                    "decide_upgrade returned UpdatePlugin for Gemini; skipping (treat as bug)",
+                );
+            }
         },
         UpgradeAction::GeminiUpdateInPlace => upgrade_gemini_in_place(),
         UpgradeAction::GeminiReinstall => upgrade_gemini_reinstall(home),
