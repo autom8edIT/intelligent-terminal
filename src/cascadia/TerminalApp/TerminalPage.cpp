@@ -318,16 +318,30 @@ namespace winrt::TerminalApp::implementation
         //      in place. We now call UninstallForTarget to strip it.
         //   2. Roaming/sync: a synced settings.json arriving on a fresh
         //      machine never triggered an install because no user action
-        //      ran. First-load reconcile installs based on the current
-        //      effective setting.
+        //      ran. First-load reconcile installs based on an explicit
+        //      setting value (sync delivers one). When no explicit value
+        //      exists (truly fresh user), first-load is a no-op and the
+        //      FRE / Settings Save flow remains the consent path.
         //
         // Install/Uninstall are both idempotent — when the on-disk state
         // already matches the desired state they return alreadyInstalled
         // and do no I/O beyond a read. Safe to call every reload.
         {
             const bool currentDetection = _settings.GlobalSettings().EffectiveAutoErrorDetectionEnabled();
-            const bool shouldReconcile = !_autoErrorDetectionSnapshotInitialized ||
-                                         _lastAutoErrorDetectionEnabled != currentDetection;
+            const bool hasExplicit = _settings.GlobalSettings().HasAutoErrorDetectionEnabled();
+            const bool isFirstLoad = !_autoErrorDetectionSnapshotInitialized;
+            // First load gating:
+            //   - explicit value present (true or false, e.g. roaming-synced settings.json,
+            //     or local user has already saved) -> reconcile, which installs/uninstalls
+            //     to match the user's expressed intent.
+            //   - no explicit value (fresh user, default true) -> do NOT install just because
+            //     the default is true. The FRE / Settings Save flow is the explicit consent
+            //     path for first-time PowerShell profile mutation.
+            // Subsequent reloads: fire on any change (so explicit toggle in Settings works
+            // even when transitioning back to the default value).
+            const bool shouldReconcile = isFirstLoad
+                                             ? hasExplicit
+                                             : (_lastAutoErrorDetectionEnabled != currentDetection);
             _lastAutoErrorDetectionEnabled = currentDetection;
             _autoErrorDetectionSnapshotInitialized = true;
             if (shouldReconcile)
