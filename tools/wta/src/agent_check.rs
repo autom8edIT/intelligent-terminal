@@ -186,12 +186,81 @@ pub async fn install(agent_id: &str, on_line: impl FnMut(String) + Send + 'stati
     }
 }
 
-/// Refresh the current process's PATH from the Windows registry.
-/// Call after installing software so `find_exe` picks up the new binary.
+/// Refresh the current process's PATH so newly-installed binaries become
+/// discoverable. Merges the inherited PATH (preserving its entries and order)
+/// with the registry-fresh PATH from HKLM+HKCU\Environment, appending any
+/// entries from the registry that weren't already present.
+///
+/// Merging (rather than overwriting) preserves PATH entries that the parent
+/// deliberately injected — e.g. a dev session launching WT with a portable
+/// or custom agent CLI on a temporary PATH — while still picking up shims
+/// that were registered to the user/system environment after this process
+/// inherited its env block.
 pub fn refresh_path() {
-    let path = fresh_path();
-    if !path.is_empty() {
-        std::env::set_var("PATH", &path);
+    let fresh = fresh_path();
+    if fresh.is_empty() {
+        return;
+    }
+    let inherited = std::env::var("PATH").unwrap_or_default();
+    let merged = merge_path(&inherited, &fresh);
+    if !merged.is_empty() {
+        std::env::set_var("PATH", merged);
+    }
+}
+
+/// Merge two `;`-separated PATH strings: keep `base` entries in their original
+/// order, then append entries from `extra` that aren't already present. Entry
+/// comparison is case-insensitive and ignores trailing `\` (Windows path
+/// conventions).
+fn merge_path(base: &str, extra: &str) -> String {
+    use std::collections::HashSet;
+    let normalize = |s: &str| s.trim_end_matches('\\').to_ascii_lowercase();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<&str> = Vec::new();
+    for entry in base.split(';').filter(|s| !s.is_empty()) {
+        if seen.insert(normalize(entry)) {
+            out.push(entry);
+        }
+    }
+    for entry in extra.split(';').filter(|s| !s.is_empty()) {
+        if seen.insert(normalize(entry)) {
+            out.push(entry);
+        }
+    }
+    out.join(";")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_path;
+
+    #[test]
+    fn merge_preserves_inherited_order_and_appends_new_entries() {
+        let base = r"C:\custom\bin;C:\Windows\System32";
+        let extra = r"C:\Windows\System32;C:\Users\me\AppData\Local\Microsoft\WinGet\Links";
+        let merged = merge_path(base, extra);
+        assert_eq!(
+            merged,
+            r"C:\custom\bin;C:\Windows\System32;C:\Users\me\AppData\Local\Microsoft\WinGet\Links"
+        );
+    }
+
+    #[test]
+    fn merge_dedupes_case_insensitively_and_ignores_trailing_backslash() {
+        let base = r"C:\Foo\;C:\bar";
+        let extra = r"c:\foo;C:\BAR\;C:\baz";
+        let merged = merge_path(base, extra);
+        assert_eq!(merged, r"C:\Foo\;C:\bar;C:\baz");
+    }
+
+    #[test]
+    fn merge_with_empty_base_returns_extra_deduped() {
+        assert_eq!(merge_path("", r"C:\a;C:\a\;c:\A"), r"C:\a");
+    }
+
+    #[test]
+    fn merge_with_empty_extra_returns_base_deduped() {
+        assert_eq!(merge_path(r"C:\a;;C:\b", ""), r"C:\a;C:\b");
     }
 }
 
