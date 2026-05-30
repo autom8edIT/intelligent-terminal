@@ -8,10 +8,11 @@
 //
 //   1. JSON round-trip of the custom-agent settings. A regression that
 //      drops the "custom:" prefix from AcpAgent / DelegateAgent breaks
-//      every downstream consumer (the EffectiveAcpAgent policy gate, the
-//      launcher's command-line resolver, the custom-edit/delete UI
-//      gates, and telemetry). The first half of this file asserts that
-//      these settings survive an unmodified load.
+//      every downstream consumer that keys on the prefix (the
+//      EffectiveAcpAgent policy gate, the launcher's command-line
+//      resolver, and the custom-edit/delete UI gates). The first half
+//      of this file asserts that these settings survive an unmodified
+//      load.
 //
 //   2. The GPO policy matrix on EffectiveAcpAgent / EffectiveDelegateAgent.
 //      AllowedAgents (registry REG_MULTI_SZ) only filters built-in agent

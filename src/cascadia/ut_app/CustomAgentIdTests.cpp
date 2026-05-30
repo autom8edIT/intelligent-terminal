@@ -6,13 +6,13 @@
 // Tests for `DeriveCustomAgentId` (src/cascadia/inc/CustomAgentId.h).
 //
 // This is the function used by the AI Agents settings page to turn a
-// user-supplied command line (e.g. `qwen.cmd --acp`, `"C:\Program
-// Files\qwen\qwen.cmd" --acp`) into the short token that becomes the
-// suffix of the stored agent id (e.g. `custom:qwen`). Every downstream
-// consumer (EffectiveAcpAgent policy gate, command-line resolver,
-// custom-edit/delete UI gates, telemetry) keys on the resulting id;
-// regressing this function silently breaks the save/reload round-trip
-// (PR #123) or the launcher.
+// user-supplied command line (e.g. `mybot.cmd --acp`, `"C:\Program
+// Files\mybot\mybot.cmd" --acp`) into the short token that becomes the
+// suffix of the stored agent id (e.g. `custom:mybot`). Every downstream
+// consumer that keys on the prefixed id (EffectiveAcpAgent policy gate,
+// command-line resolver, custom-edit/delete UI gates) depends on this
+// derivation; regressing this function silently breaks the save/reload
+// round-trip (PR #123) or the launcher.
 
 #include "precomp.h"
 
