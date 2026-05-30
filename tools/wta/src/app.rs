@@ -2858,16 +2858,19 @@ impl App {
 
         #[cfg(test)]
         {
+            let mut argv = vec![
+                "resume_in_new_agent_tab".to_string(),
+                "--session-id".to_string(),
+                s.key.clone(),
+            ];
+            if !cwd_string.is_empty() {
+                argv.push("--cwd".to_string());
+                argv.push(cwd_string);
+            }
             self.last_dispatched_command = Some(DispatchedCommand {
                 kind: DispatchedCommandKind::ResumeInAgentPane,
                 session_id: Some(s.key.clone()),
-                argv: vec![
-                    "resume_in_new_agent_tab".to_string(),
-                    "--session-id".to_string(),
-                    s.key.clone(),
-                    "--cwd".to_string(),
-                    cwd_string,
-                ],
+                argv,
             });
         }
     }
@@ -10125,7 +10128,7 @@ mod tests {
         use crate::agent_sessions::{CliSource, SessionEvent};
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         // Use a real existing directory so cwd_util::validate_starting_directory
-        // accepts it. A non-existent path would (correctly) be dropped from
+        // accepts it. A missing path would (correctly) be dropped from
         // the argv — that behaviour is covered by
         // `enter_on_history_row_with_missing_cwd_omits_d_flag` below.
         let real_cwd = std::env::temp_dir();
@@ -10355,9 +10358,15 @@ mod tests {
         assert_eq!(cmd.kind, DispatchedCommandKind::ResumeInAgentPane);
         let argv = cmd.argv.join(" ");
         assert!(argv.contains("resume_in_new_agent_tab"), "argv: {}", argv);
-        // The cwd is recorded in the dispatched-command tape as
-        // `--cwd <s>` where `<s>` is empty after fallback. We assert
-        // the stale path doesn't leak through.
+        // Fallback contract: the --cwd flag (and any value) must be
+        // omitted entirely so the consumer uses its default. A
+        // regression that sent `--cwd ""` would slip past a
+        // string-contains check, hence the explicit flag assertion.
+        assert!(
+            !cmd.argv.iter().any(|a| a == "--cwd"),
+            "argv must omit --cwd when cwd is missing: {:?}",
+            cmd.argv
+        );
         assert!(
             !argv.contains(&missing.to_string_lossy().to_string()),
             "argv must not embed the stale cwd: {}",

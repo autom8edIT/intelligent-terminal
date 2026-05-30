@@ -1,4 +1,4 @@
-//! Drops stale cwds before wta hands them to a launcher (`wtcli new-tab -d`,
+//! Drops stale cwd values before wta hands them to a launcher (`wtcli new-tab -d`,
 //! `resume_in_new_agent_tab`, `--initial-load-cwd`). A missing cwd would
 //! otherwise turn into a broken pane via `CreateProcessW` failing with
 //! `ERROR_DIRECTORY`. On failure we omit the arg so the launcher uses its
@@ -6,7 +6,7 @@
 //!
 //! Only *local* Windows paths are existence-checked. Unix-style, WSL UNC
 //! and network UNC paths pass through unchanged: they can't be checked
-//! against the Windows fs without false-rejecting valid WSL cwds, and
+//! against the Windows fs without false-rejecting valid WSL paths, and
 //! WSL/network UNC can stall `fs::metadata` for seconds (see GH#9541).
 
 use std::path::{Component, Path, Prefix};
@@ -90,7 +90,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Unix-style cwds (typical for WSL profiles) must pass through
+    /// Unix-style paths (typical for WSL profiles) must pass through
     /// unchanged. They can't be validated against the Windows filesystem
     /// without false-rejecting every WSL session — that bug would show
     /// up as "all my WSL agent panes boot in %USERPROFILE% instead of
@@ -160,12 +160,12 @@ mod tests {
     /// Windows path and SHOULD be validated like a regular `C:\...`.
     #[test]
     fn extended_length_drive_letter_is_validated() {
-        let dir = unique_temp_dir("extlen");
+        let dir = unique_temp_dir("extended_len");
         fs::create_dir_all(&dir).unwrap();
         let ext = format!(r"\\?\{}", dir.to_string_lossy());
         let got = validate_starting_directory(&ext);
         assert_eq!(got, Some(ext.clone()));
-        // Non-existent extended-length path → None.
+        // Missing extended-length path → None.
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(validate_starting_directory(&ext), None);
     }
