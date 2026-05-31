@@ -216,12 +216,7 @@
                                     <TextBlock x:Uid="FreOverlay_AgentLabel"
                                                FontSize="14" FontWeight="SemiBold"
                                                Foreground="White" />
-                                    <!--  Description with "ACP" rendered as an inline Hyperlink.
-                                          Mirrors the PageSubtitle pattern in AIAgents.xaml: the
-                                          Run.Text values are populated from code-behind by splitting
-                                          the localized FreOverlay_AgentDescription/Text string on
-                                          "ACP" ({Locked="ACP"} guarantees the token appears verbatim
-                                          in every locale).  -->
+                                    <!--  Run.Text values populated from code-behind by splitting on "ACP".  -->
                                     <TextBlock x:Name="AgentDescriptionText"
                                                FontSize="12" Foreground="#99FFFFFF"
                                                TextWrapping="Wrap">

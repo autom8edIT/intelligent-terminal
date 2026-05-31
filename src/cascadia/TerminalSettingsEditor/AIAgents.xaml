@@ -67,22 +67,8 @@
                        Style="{StaticResource TextBlockSubHeaderStyle}"
                        Margin="0,0,0,4" />
 
-            <!--  Agent (ACP CLI)
-
-                  This setting is rendered as a hand-built Grid that mimics
-                  the chrome of local:SettingContainer (NonExpanderGrid style:
-                  ExpanderHeaderBackground / border / corner radius / 16,0,8,0
-                  padding) rather than using local:SettingContainer directly.
-                  The reason is that SettingContainer's template puts the
-                  description text in Column 0 and the Content slot in
-                  Column 1, with no slot below the description; we want the
-                  "Learn more about ACP" hyperlink to sit immediately below
-                  the description text in the same column so it visually
-                  belongs to the description, not to the input control.
-                  Keeping the markup local to this one card (instead of
-                  adding a Footer property to SettingContainer + threading it
-                  through all 8 template variants in SettingContainerStyle.xaml)
-                  contains the change to a single file.  -->
+            <!--  Agent (ACP CLI) — hand-built Grid mimicking the NonExpanderGrid chrome of
+                  local:SettingContainer, so the description TextBlock can host an inline Hyperlink.  -->
             <Grid x:Name="AcpAgent"
                   Background="{ThemeResource ExpanderHeaderBackground}"
                   BorderThickness="{ThemeResource ExpanderHeaderBorderThickness}"
@@ -98,18 +84,12 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <!--  Column 0: header + description + ACP reference link  -->
                 <StackPanel Grid.Column="0"
                             VerticalAlignment="Center"
                             Padding="0,12,0,12">
                     <TextBlock x:Name="AcpAgentHeaderText"
                                Style="{StaticResource SettingsPageItemHeaderStyle}" />
-                    <!--  Description with "ACP" rendered as an inline Hyperlink.
-                          Mirrors the PageSubtitlePrivacyLink pattern above: the
-                          Run.Text values are populated from code-behind by splitting
-                          the localized AIAgents_AcpAgent/HelpText string on "ACP"
-                          ({Locked="ACP"} guarantees the token appears verbatim in
-                          every locale).  -->
+                    <!--  Run.Text values populated from code-behind by splitting on "ACP".  -->
                     <TextBlock x:Name="AcpAgentDescriptionText"
                                Style="{StaticResource SettingsPageItemDescriptionStyle}">
                         <Run x:Name="AcpAgentDescriptionBefore" />
@@ -119,11 +99,6 @@
                         <Run x:Name="AcpAgentDescriptionAfter" />
                     </TextBlock>
                 </StackPanel>
-                <!--  Column 1: ComboBox + custom-agent preview / editable panels.
-                      Vertical Margin gives the content (which grows beyond the
-                      card's MinHeight=64 when a custom agent is selected and the
-                      command preview + Edit/Delete buttons appear) breathing
-                      room from the top/bottom card edges.  -->
                 <StackPanel Grid.Column="1"
                             HorizontalAlignment="Right"
                             VerticalAlignment="Center"

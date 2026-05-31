@@ -167,9 +167,7 @@ namespace winrt::TerminalApp::implementation
         SettingsSubtitlePrefix().Text(RS_(L"FreOverlay_SettingsSubtitlePrefix"));
         SettingsSubtitleLink().Text(RS_(L"FreOverlay_SettingsSubtitleLink"));
 
-        // Agent description: render "ACP" as an inline Hyperlink by splitting
-        // the localized string on the literal "ACP" token (locked in every
-        // locale's resw via {Locked="ACP"}).
+        // Split the description on "ACP" (locked token) so it can be rendered as an inline Hyperlink.
         {
             const std::wstring_view desc{ RS_(L"FreOverlay_AgentDescription/Text") };
             constexpr std::wstring_view token{ L"ACP" };
