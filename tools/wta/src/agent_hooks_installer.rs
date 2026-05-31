@@ -1546,6 +1546,63 @@ fn parse_codex_plugin_list(stdout: &str) -> bool {
     false
 }
 
+/// Parse `codex plugin list` for the auto-upgrade flow. Returns
+/// `Some(InstalledInfo)` only when the wt-agent-hooks row reports an
+/// `installed*` status, extracting the version (column 3) and the
+/// enabled flag (`installed, enabled` vs `installed, disabled`).
+/// Returns `None` for "not installed" / "available" / missing rows so
+/// the caller treats the plugin as absent.
+///
+/// Sibling of [`parse_codex_plugin_list`]; that function returns a
+/// bool used by the install verifier, this one returns the richer
+/// state used by `decide_upgrade`.
+fn parse_codex_plugin_list_entry(stdout: &str) -> Option<InstalledInfo> {
+    let qualified = format!("{}@{}", PLUGIN_NAME, MARKETPLACE_NAME);
+    for line in stdout.lines() {
+        let line = line.trim_end();
+        if line.is_empty()
+            || line.starts_with("PLUGIN")
+            || line.starts_with("Marketplace ")
+            || line.starts_with("C:\\")
+            || line.starts_with('/')
+            || line.starts_with('.')
+        {
+            continue;
+        }
+        let mut cols = line.split_whitespace();
+        let name = cols.next()?;
+        if name != PLUGIN_NAME && name != qualified {
+            continue;
+        }
+        let rest: Vec<&str> = cols.collect();
+        // Must start with "installed" (rules out "not installed",
+        // "available", etc.).
+        if !rest.first().map(|s| s.starts_with("installed")).unwrap_or(false) {
+            return None;
+        }
+        // Enabled unless the next status token explicitly says
+        // "disabled". Codex doesn't currently expose a disable
+        // subcommand, but be defensive in case that changes.
+        let enabled = rest
+            .get(1)
+            .map(|s| !s.starts_with("disabled"))
+            .unwrap_or(true);
+        // Version: first token after the status column that parses as
+        // semver. Skips past the status word(s) and any "-" placeholder.
+        let version = rest
+            .iter()
+            .skip(1)
+            .find_map(|t| t.parse::<Version>().ok());
+        return Some(InstalledInfo {
+            version,
+            enabled,
+            gemini_source: None,
+            gemini_type: None,
+        });
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Public uninstall entry point (Track 2 / #18)
 // ---------------------------------------------------------------------------
@@ -2785,6 +2842,24 @@ fn read_installed_claude() -> Option<InstalledInfo> {
     None
 }
 
+/// Spawn `codex plugin list` and parse the wt-agent-hooks row to
+/// determine installed version + enabled state. Codex is a Rust
+/// binary so the list call is fast (~10ms); no PATH probe needed.
+/// Returns `None` when the spawn fails, the plugin row is missing,
+/// or the status indicates "not installed" / "available".
+fn read_installed_codex() -> Option<InstalledInfo> {
+    let outcome = run_plugin_cli_capture("codex", &["plugin", "list"]).ok()?;
+    if !outcome.success {
+        return None;
+    }
+    let payload = if !outcome.stdout.trim().is_empty() {
+        &outcome.stdout
+    } else {
+        &outcome.stderr
+    };
+    parse_codex_plugin_list_entry(payload)
+}
+
 /// Read Gemini's installed extension from disk: version from
 /// `gemini-extension.json`, source/type from `.gemini-extension-install.json`.
 /// Pure file IO. Treats a missing metadata file as `gemini_source: None`,
@@ -2852,6 +2927,15 @@ enum UpgradeAction {
     /// Copilot / Claude: rewrite stale marketplace path, then
     /// `plugin update <name>@<marketplace>`.
     UpdatePlugin,
+    /// Codex: no `plugin update` subcommand exists and
+    /// `marketplace upgrade` only refreshes Git marketplaces (not the
+    /// local `wt-local` marketplace), so we uninstall + reinstall via
+    /// the same flow as the first-run installer. Trust hashes in
+    /// `~/.codex/config.toml` survive because they hash the hook
+    /// *command string* (with the literal `${PLUGIN_ROOT}` token, not
+    /// a resolved path), so a reinstall pointing at a different
+    /// bundle dir still validates against the cached hash.
+    CodexReinstall,
     /// Gemini, source path still under the current bundle:
     /// `gemini extensions update <name>` with trust env.
     GeminiUpdateInPlace,
@@ -2889,14 +2973,7 @@ fn decide_upgrade(
     }
     match cli {
         CliKind::Copilot | CliKind::Claude => UpgradeAction::UpdatePlugin,
-        CliKind::Codex => {
-            // Codex auto-upgrade isn't wired up yet. `upgrade_one_cli`
-            // already reads `None` for the installed state, so we never
-            // actually reach this arm — but `decide_upgrade` has unit
-            // tests that may call it directly, so keep the result
-            // conservative.
-            UpgradeAction::Skip(SkipReason::NotInstalled)
-        }
+        CliKind::Codex => UpgradeAction::CodexReinstall,
         CliKind::Gemini => {
             // Auto-update only `local` installs; `git`/`link` are user
             // configurations we don't second-guess.
@@ -3216,9 +3293,9 @@ fn upgrade_one_cli(cli: CliKind, home: &Path, bundle_version: Option<Version>) {
             }
         }
         CliKind::Codex => {
-            // Codex auto-upgrade isn't wired up yet (no installed-state
-            // reader). Treat as not-installed so `decide_upgrade` skips.
-            None
+            // Codex is a Rust binary so the list call is fast; no
+            // need for the PATH presence pre-check we use for Claude.
+            read_installed_codex()
         }
         CliKind::Gemini => read_installed_gemini(home),
     };
@@ -3247,9 +3324,10 @@ fn upgrade_one_cli(cli: CliKind, home: &Path, bundle_version: Option<Version>) {
             CliKind::Claude => upgrade_claude(home),
             CliKind::Codex => {
                 // Defensive: `decide_upgrade` for Codex always returns
-                // Skip, so this arm shouldn't fire. Log and no-op so a
-                // future regression is visible without panicking on the
-                // blocking-pool thread.
+                // `CodexReinstall` (Codex has no `plugin update`
+                // subcommand), so this arm shouldn't fire. Log and
+                // no-op so a future regression is visible without
+                // panicking on the blocking-pool thread.
                 tracing::error!(
                     target: "agent_hooks",
                     cli = cli.name(),
@@ -3272,6 +3350,7 @@ fn upgrade_one_cli(cli: CliKind, home: &Path, bundle_version: Option<Version>) {
                 );
             }
         },
+        UpgradeAction::CodexReinstall => upgrade_codex(home),
         UpgradeAction::GeminiUpdateInPlace => upgrade_gemini_in_place(),
         UpgradeAction::GeminiReinstall => upgrade_gemini_reinstall(home),
     }
@@ -3342,6 +3421,37 @@ fn upgrade_claude(home: &Path) {
             "claude plugin update failed",
         );
     }
+}
+
+/// Codex auto-upgrade: reinstall the plugin in place. Codex has no
+/// `plugin update` subcommand and `marketplace upgrade` only refreshes
+/// Git marketplaces (not the local `wt-local` marketplace), so we
+/// re-run the same uninstall + install flow used at first-run.
+///
+/// Trust hashes recorded in `~/.codex/config.toml` survive the
+/// reinstall as long as the hook command strings in `hooks.json`
+/// don't change — the hashes are computed over the command string
+/// (which uses the literal `${PLUGIN_ROOT}` token, not a resolved
+/// path), so they stay stable even when the bundle dir moves between
+/// MSIX version directories.
+fn upgrade_codex(home: &Path) {
+    // 1. Uninstall — `uninstall_for_codex` already tolerates
+    //    "not installed" / "not registered" idempotency, so it's safe
+    //    to call against a partial install state.
+    let result = uninstall_for_codex(Some(home));
+    for msg in &result.messages {
+        tracing::debug!(
+            target: "agent_hooks",
+            cli = "codex",
+            msg = %msg,
+            "codex pre-upgrade uninstall step",
+        );
+    }
+
+    // 2. Reinstall pointing at the current bundle dir. Reuse the
+    //    existing install flow so we pick up the WindowsApps staging
+    //    and `already registered` tolerance handling.
+    install_for_codex(home);
 }
 
 fn upgrade_gemini_in_place() {
@@ -5025,6 +5135,69 @@ Registered marketplaces:
     }
 
     #[test]
+    fn parse_codex_plugin_list_entry_extracts_version_and_enabled() {
+        let sample = "Marketplace `wt-local`\n\
+                      C:\\path\\to\\bundle\\.agents\\plugins\\marketplace.json\n\
+                      \n\
+                      PLUGIN                   STATUS              VERSION  PATH\n\
+                      wt-agent-hooks@wt-local  installed, enabled  0.1.0    C:\\path\n";
+        let info = parse_codex_plugin_list_entry(sample).expect("expected entry");
+        assert_eq!(info.version, Some("0.1.0".parse().unwrap()));
+        assert!(info.enabled);
+        assert!(info.gemini_source.is_none());
+        assert!(info.gemini_type.is_none());
+    }
+
+    #[test]
+    fn parse_codex_plugin_list_entry_handles_bare_installed_status() {
+        // Some Codex builds may omit the ", enabled" suffix; tolerate
+        // bare "installed" and default to enabled=true.
+        let sample = "PLUGIN                   STATUS     VERSION  PATH\n\
+                      wt-agent-hooks@wt-local  installed  0.2.3    C:\\path\n";
+        let info = parse_codex_plugin_list_entry(sample).expect("expected entry");
+        assert_eq!(info.version, Some("0.2.3".parse().unwrap()));
+        assert!(info.enabled);
+    }
+
+    #[test]
+    fn parse_codex_plugin_list_entry_marks_disabled_status() {
+        // Defensive: if a future Codex release surfaces a disabled
+        // status, the upgrade flow must back off (decide_upgrade
+        // returns Skip(Disabled) when enabled=false).
+        let sample = "PLUGIN                   STATUS               VERSION  PATH\n\
+                      wt-agent-hooks@wt-local  installed, disabled  0.1.0    C:\\path\n";
+        let info = parse_codex_plugin_list_entry(sample).expect("expected entry");
+        assert_eq!(info.version, Some("0.1.0".parse().unwrap()));
+        assert!(!info.enabled);
+    }
+
+    #[test]
+    fn parse_codex_plugin_list_entry_returns_none_when_not_installed() {
+        let sample = "PLUGIN                   STATUS         VERSION  PATH\n\
+                      wt-agent-hooks@wt-local  not installed  -        -\n";
+        assert!(parse_codex_plugin_list_entry(sample).is_none());
+    }
+
+    #[test]
+    fn parse_codex_plugin_list_entry_returns_none_when_row_absent() {
+        let sample = "PLUGIN                   STATUS         VERSION  PATH\n\
+                      linear@openai-curated    not installed  -        -\n";
+        assert!(parse_codex_plugin_list_entry(sample).is_none());
+    }
+
+    #[test]
+    fn parse_codex_plugin_list_entry_returns_none_when_version_unparseable() {
+        // Status is installed but version column is "-" — InstalledInfo
+        // returned with version=None so decide_upgrade conservative-skips
+        // via UnknownInstalledVersion.
+        let sample = "PLUGIN                   STATUS              VERSION  PATH\n\
+                      wt-agent-hooks@wt-local  installed, enabled  -        C:\\path\n";
+        let info = parse_codex_plugin_list_entry(sample).expect("expected entry");
+        assert!(info.version.is_none());
+        assert!(info.enabled);
+    }
+
+    #[test]
     fn uninstall_for_codex_skips_when_home_absent() {
         let parent = unique_dir("uninstall_codex_absent");
         let result = uninstall_for_codex(Some(&parent));
@@ -5254,6 +5427,55 @@ Registered marketplaces:
             );
             assert_eq!(a, UpgradeAction::UpdatePlugin, "cli={cli:?}");
         }
+    }
+
+    #[test]
+    fn decide_codex_upgrade_via_reinstall() {
+        // Codex outdated installed → CodexReinstall (Codex has no
+        // `plugin update` subcommand).
+        let info = installed("0.1.0", true);
+        let a = decide_upgrade(
+            CliKind::Codex,
+            Some("0.1.1".parse().unwrap()),
+            Some(&info),
+            None,
+        );
+        assert_eq!(a, UpgradeAction::CodexReinstall);
+    }
+
+    #[test]
+    fn decide_codex_skip_when_up_to_date() {
+        let info = installed("0.1.1", true);
+        let a = decide_upgrade(
+            CliKind::Codex,
+            Some("0.1.1".parse().unwrap()),
+            Some(&info),
+            None,
+        );
+        assert_eq!(a, UpgradeAction::Skip(SkipReason::UpToDate));
+    }
+
+    #[test]
+    fn decide_codex_skip_when_disabled() {
+        let info = installed("0.1.0", false);
+        let a = decide_upgrade(
+            CliKind::Codex,
+            Some("0.1.1".parse().unwrap()),
+            Some(&info),
+            None,
+        );
+        assert_eq!(a, UpgradeAction::Skip(SkipReason::Disabled));
+    }
+
+    #[test]
+    fn decide_codex_skip_when_not_installed() {
+        let a = decide_upgrade(
+            CliKind::Codex,
+            Some("0.1.1".parse().unwrap()),
+            None,
+            None,
+        );
+        assert_eq!(a, UpgradeAction::Skip(SkipReason::NotInstalled));
     }
 
     #[test]
