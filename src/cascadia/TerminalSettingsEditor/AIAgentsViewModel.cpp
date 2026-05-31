@@ -9,6 +9,7 @@
 #include "EnumEntry.h"
 #include "../inc/AgentRegistry.h"
 #include "../inc/AgentHooksStatus.h"
+#include "../inc/CustomAgentId.h"
 #include "../inc/WtaProcess.h"
 
 #include <json/json.h>
@@ -67,21 +68,9 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
     winrt::hstring AIAgentsViewModel::_DeriveId(const winrt::hstring& command)
     {
-        const auto str = winrt::to_string(command);
-        const auto pos = str.find(' ');
-        auto token = (pos != std::string::npos) ? str.substr(0, pos) : str;
-        auto slash = token.rfind('\\');
-        if (slash == std::string::npos) slash = token.rfind('/');
-        if (slash != std::string::npos) token = token.substr(slash + 1);
-        for (const auto* ext : { ".exe", ".cmd", ".bat" })
-        {
-            if (token.size() > strlen(ext) && token.substr(token.size() - strlen(ext)) == ext)
-            {
-                token = token.substr(0, token.size() - strlen(ext));
-                break;
-            }
-        }
-        return winrt::to_hstring(token);
+        // Delegate to the header-only helper shared with the unit tests.
+        return ::Microsoft::Terminal::Settings::Model::DeriveCustomAgentId(
+            std::wstring_view{ command });
     }
 
     void AIAgentsViewModel::_AppendAddNewEntry(IObservableVector<Editor::AgentEntry>& list)
@@ -100,9 +89,8 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
         const auto bareId = _DeriveId(customCommand);
         const bool isBuiltIn = _IsKnownAgent(bareId);
-        const auto settingsId = isBuiltIn
-            ? winrt::hstring{ L"custom:" + std::wstring_view{ bareId } }
-            : bareId;
+        // Mirror SaveCustom*: the saved id always carries "custom:".
+        const auto settingsId = winrt::hstring{ L"custom:" + std::wstring_view{ bareId } };
         const auto displayName = isBuiltIn
             ? winrt::hstring{ std::wstring_view{ bareId } + L" (custom)" }
             : bareId;
@@ -564,12 +552,19 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         if (_GlobalSettings.IsCustomAgentPolicyLocked()) return;
         if (_customAcpCommand.empty()) return;
         const auto bareId = _DeriveId(_customAcpCommand);
+        // Whitespace-only / quote-only commands derive to an empty id and
+        // would otherwise be saved as a bare "custom:" entry, leaving the
+        // UI with a blank, unusable custom agent. Reject before persisting.
+        if (bareId.empty()) return;
         _GlobalSettings.AcpCustomCommand(_customAcpCommand);
 
+        // Custom agents always carry the "custom:" discriminator — every
+        // downstream consumer (EffectiveAcpAgent policy gate, command-line
+        // resolver, custom-edit/delete UI gates) keys on this prefix.
+        // Storing a bare id silently breaks all of them and makes the page
+        // revert to the default agent on next load.
         const bool isBuiltIn = _IsKnownAgent(bareId);
-        const auto settingsId = isBuiltIn
-            ? winrt::hstring{ L"custom:" + std::wstring_view{ bareId } }
-            : bareId;
+        const auto settingsId = winrt::hstring{ L"custom:" + std::wstring_view{ bareId } };
         const auto displayName = isBuiltIn
             ? winrt::hstring{ std::wstring_view{ bareId } + L" (custom)" }
             : bareId;
@@ -601,12 +596,13 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         if (_GlobalSettings.IsCustomAgentPolicyLocked()) return;
         if (_customDelegateCommand.empty()) return;
         const auto bareId = _DeriveId(_customDelegateCommand);
+        // See SaveCustomAcpAgent — reject empty derivations before persisting.
+        if (bareId.empty()) return;
         _GlobalSettings.DelegateCustomCommand(_customDelegateCommand);
 
+        // See SaveCustomAcpAgent — always carry the "custom:" prefix.
         const bool isBuiltIn = _IsKnownAgent(bareId);
-        const auto settingsId = isBuiltIn
-            ? winrt::hstring{ L"custom:" + std::wstring_view{ bareId } }
-            : bareId;
+        const auto settingsId = winrt::hstring{ L"custom:" + std::wstring_view{ bareId } };
         const auto displayName = isBuiltIn
             ? winrt::hstring{ std::wstring_view{ bareId } + L" (custom)" }
             : bareId;

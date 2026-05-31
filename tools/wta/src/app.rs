@@ -1228,6 +1228,25 @@ pub enum AppEvent {
         request_id: u64,
         sessions: Vec<crate::session_registry::SessionInfo>,
     },
+    /// `sessions/list` RPC failed or timed out — unblock the tab's
+    /// `refetch_in_flight` gate without overwriting the existing
+    /// snapshot, so the 5s periodic tick / next `SessionsChanged`
+    /// broadcast can retry. Emitted by `dispatch_master_ext_request`'s
+    /// `SessionsList` arm when `conn.ext_method(...)` returns Err or
+    /// `tokio::time::timeout` elapses. The timeout path is a
+    /// workaround for a `agent-client-protocol@0.10` cancellation-
+    /// safety bug in `RpcConnection::handle_io`: when
+    /// `select_biased!`'s outgoing arm preempts an in-progress
+    /// `read_line`, BufReader bytes already pulled off the pipe are
+    /// silently dropped, the next read returns a frame starting
+    /// mid-message, JSON parse fails, and the matching
+    /// `pending_responses` entry never resolves — so the
+    /// `ext_method` future would otherwise wait forever, keeping
+    /// `refetch_in_flight=true` permanently for the affected tab.
+    /// See the GH issue for upgrading to 0.12.
+    AgentsSnapshotFailed {
+        request_id: u64,
+    },
     MasterMutationCompleted {
         request_id: u64,
     },
@@ -2661,7 +2680,7 @@ impl App {
         }
         let short_key: String = key.chars().take(8).collect();
         let launch_commandline = format!(
-            "cmd /c echo \x1b[1;36;5mResuming {} session {}...\x1b[0m && {}",
+            "cmd /c echo \x1b[2;37mResuming {} session {}...\x1b[0m && {}",
             cli_id, short_key, commandline
         );
         let mut argv = vec![
@@ -3038,6 +3057,41 @@ impl App {
                 }
             };
             self.restore_agents_selection(&tab_id, old_selected);
+            if needs_trailing {
+                self.schedule_agents_refetch_for_tab(&tab_id);
+            }
+        }
+    }
+
+    /// Counterpart to [`Self::handle_agents_snapshot_loaded`] for the
+    /// failure / timeout path. Clears `refetch_in_flight` so the 5s
+    /// periodic tick (or the next `sessions/changed` broadcast) can
+    /// retry, but leaves `snapshot` untouched so the rendered rows
+    /// stay on the last good data instead of flashing empty.
+    ///
+    /// Drives the `dirty` trailing-refetch the same way the success
+    /// path does: if pushes coalesced while this RPC was in flight,
+    /// schedule one follow-up immediately rather than wait 5s.
+    fn handle_agents_snapshot_failed(&mut self, request_id: u64) {
+        let tabs: Vec<String> = self
+            .tab_sessions
+            .iter()
+            .filter_map(|(id, tab)| {
+                (tab.agents_view.latest_request_id == Some(request_id)).then(|| id.clone())
+            })
+            .collect();
+        for tab_id in tabs {
+            let needs_trailing = {
+                let tab = self.tab_mut(&tab_id);
+                if tab.agents_view.snapshot.is_none() {
+                    false
+                } else {
+                    tab.agents_view.refetch_in_flight = false;
+                    let dirty = tab.agents_view.dirty;
+                    tab.agents_view.dirty = false;
+                    dirty
+                }
+            };
             if needs_trailing {
                 self.schedule_agents_refetch_for_tab(&tab_id);
             }
@@ -3884,6 +3938,7 @@ impl App {
             AppEvent::AliveJoinUpgrade(_) => "alive_join_upgrade",
             AppEvent::SessionsChanged => "sessions_changed",
             AppEvent::AgentsSnapshotLoaded { .. } => "agents_snapshot_loaded",
+            AppEvent::AgentsSnapshotFailed { .. } => "agents_snapshot_failed",
             AppEvent::MasterMutationCompleted { .. } => "master_mutation_completed",
             AppEvent::RevealTick => "reveal_tick",
         }
@@ -4620,6 +4675,9 @@ impl App {
                 sessions,
             } => {
                 self.handle_agents_snapshot_loaded(request_id, sessions);
+            }
+            AppEvent::AgentsSnapshotFailed { request_id } => {
+                self.handle_agents_snapshot_failed(request_id);
             }
             AppEvent::MasterMutationCompleted { request_id } => {
                 tracing::debug!(target: "agents_view", request_id, "master mutation completed; refetching open views");
@@ -10225,6 +10283,147 @@ mod tests {
         );
     }
 
+    /// Failure / timeout path must unblock `refetch_in_flight` so the
+    /// next `SessionsChanged` (from a broadcast or the 5s tick) can
+    /// retry, while keeping the existing snapshot rendered. Without
+    /// this, an `ext_method` future that never resolves (the ACP-0.10
+    /// cancellation-safety bug) would freeze the view forever.
+    #[test]
+    fn agents_snapshot_failed_unblocks_refetch_without_dropping_snapshot() {
+        let (mut app, mut master_rx) = test_app_with_master_rx();
+        app.open_agents_view_for_tab(DEFAULT_TAB_ID.to_string());
+        let first_req = match master_rx.try_recv().unwrap() {
+            crate::protocol::acp::client::MasterExtRequest::SessionsList { request_id } => {
+                request_id
+            }
+            other => panic!("expected SessionsList, got {other:?}"),
+        };
+        // Land a real snapshot first so we can assert it is preserved
+        // across the subsequent failure.
+        app.handle_event(AppEvent::AgentsSnapshotLoaded {
+            request_id: first_req,
+            sessions: vec![session_info_for_test("a"), session_info_for_test("b")],
+        });
+        assert!(!app.current_tab().agents_view.refetch_in_flight);
+        let before_len = app
+            .current_tab()
+            .agents_view
+            .snapshot
+            .as_ref()
+            .map(|v| v.len())
+            .unwrap_or(0);
+        assert_eq!(before_len, 2);
+
+        // Kick a second refetch and report it as failed.
+        app.handle_event(AppEvent::SessionsChanged);
+        let second_req = match master_rx.try_recv().expect("second refetch sent") {
+            crate::protocol::acp::client::MasterExtRequest::SessionsList { request_id } => {
+                request_id
+            }
+            other => panic!("expected SessionsList, got {other:?}"),
+        };
+        assert!(app.current_tab().agents_view.refetch_in_flight);
+        app.handle_event(AppEvent::AgentsSnapshotFailed {
+            request_id: second_req,
+        });
+
+        // refetch_in_flight must clear; snapshot must NOT be wiped.
+        assert!(
+            !app.current_tab().agents_view.refetch_in_flight,
+            "failure path must unblock the gate"
+        );
+        let after_len = app
+            .current_tab()
+            .agents_view
+            .snapshot
+            .as_ref()
+            .map(|v| v.len())
+            .unwrap_or(0);
+        assert_eq!(
+            after_len, 2,
+            "failure path must not overwrite the existing snapshot"
+        );
+        assert!(
+            master_rx.try_recv().is_err(),
+            "no spurious immediate retry without dirty coalescing"
+        );
+    }
+
+    /// If pushes arrive while the in-flight `sessions/list` is doomed
+    /// to fail, the trailing-refetch behaviour must still fire on
+    /// `AgentsSnapshotFailed` — otherwise the user would have to wait
+    /// for the next 5s tick after every failure even when state has
+    /// already changed since the request went out.
+    #[test]
+    fn agents_snapshot_failed_fires_dirty_trailing_refetch() {
+        let (mut app, mut master_rx) = test_app_with_master_rx();
+        app.open_agents_view_for_tab(DEFAULT_TAB_ID.to_string());
+        let req_id = match master_rx.try_recv().unwrap() {
+            crate::protocol::acp::client::MasterExtRequest::SessionsList { request_id } => {
+                request_id
+            }
+            other => panic!("expected SessionsList, got {other:?}"),
+        };
+        // While the request is in-flight, more pushes arrive and
+        // coalesce into `dirty=true`.
+        for _ in 0..5 {
+            app.handle_event(AppEvent::SessionsChanged);
+        }
+        assert!(app.current_tab().agents_view.dirty);
+        assert!(
+            master_rx.try_recv().is_err(),
+            "additional pushes must coalesce while in flight"
+        );
+
+        app.handle_event(AppEvent::AgentsSnapshotFailed { request_id: req_id });
+        match master_rx
+            .try_recv()
+            .expect("dirty trailing refetch after failure")
+        {
+            crate::protocol::acp::client::MasterExtRequest::SessionsList { .. } => {}
+            other => panic!("expected SessionsList, got {other:?}"),
+        }
+        assert!(app.current_tab().agents_view.refetch_in_flight);
+        assert!(!app.current_tab().agents_view.dirty);
+    }
+
+    /// `AgentsSnapshotFailed` for a stale `request_id` (e.g. arrives
+    /// after the tab was closed and reopened) must be a no-op — it
+    /// must not clobber a fresh in-flight refetch's
+    /// `refetch_in_flight=true` flag.
+    #[test]
+    fn agents_snapshot_failed_ignores_stale_request_id() {
+        let (mut app, mut master_rx) = test_app_with_master_rx();
+        app.open_agents_view_for_tab(DEFAULT_TAB_ID.to_string());
+        let _stale = match master_rx.try_recv().unwrap() {
+            crate::protocol::acp::client::MasterExtRequest::SessionsList { request_id } => {
+                request_id
+            }
+            other => panic!("expected SessionsList, got {other:?}"),
+        };
+        // Resolve the first request, then kick another so latest_request_id
+        // moves on.
+        app.handle_event(AppEvent::AgentsSnapshotLoaded {
+            request_id: _stale,
+            sessions: vec![session_info_for_test("a")],
+        });
+        app.handle_event(AppEvent::SessionsChanged);
+        let _fresh = match master_rx.try_recv().unwrap() {
+            crate::protocol::acp::client::MasterExtRequest::SessionsList { request_id } => {
+                request_id
+            }
+            other => panic!("expected SessionsList, got {other:?}"),
+        };
+        assert!(app.current_tab().agents_view.refetch_in_flight);
+
+        // A stale failure must NOT touch the fresh in-flight state.
+        app.handle_event(AppEvent::AgentsSnapshotFailed { request_id: _stale });
+        assert!(
+            app.current_tab().agents_view.refetch_in_flight,
+            "stale failure must not clear the fresh in-flight gate"
+        );
+    }
+
     fn session_info_for_test(id: &str) -> crate::session_registry::SessionInfo {
         let mut info = crate::session_registry::SessionInfo::new(
             agent_client_protocol::SessionId::new(id),
@@ -10312,15 +10511,18 @@ mod tests {
         // The CLI invocation is still wrapped in `cmd /c` so .cmd shims
         // resolve via PATHEXT, but the legacy `cd /d` prefix is gone —
         // cwd is threaded through wtcli's `-d` flag now. Issue #135:
-        // a blinking ANSI loading banner (`SGR 1;36;5` = bold cyan
-        // slow-blink) is prepended so the user sees immediate animated
-        // feedback while the CLI cold-starts; the CLI's alt-screen TUI
-        // overwrites it on success.
+        // a muted "Resuming … session …" banner is prepended so the
+        // user sees immediate feedback while the CLI cold-starts; the
+        // CLI's alt-screen TUI overwrites it on success. (Previously
+        // SGR 1;36;5 — bold + cyan + slow-blink — was used, but the
+        // blink + bold were too noisy. Now SGR 2;37 = dim + white, a
+        // low-contrast tone similar to the cwd line in a typical
+        // Copilot-CLI shell prompt.)
         assert!(
             argv.contains(
-                "cmd /c echo \x1b[1;36;5mResuming claude session abc-123...\x1b[0m"
+                "cmd /c echo \x1b[2;37mResuming claude session abc-123...\x1b[0m"
             ),
-            "expected blinking loading banner echo; argv: {:?}",
+            "expected dim-white Resuming banner echo; argv: {:?}",
             argv
         );
         assert!(
