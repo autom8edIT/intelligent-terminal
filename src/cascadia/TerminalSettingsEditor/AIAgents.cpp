@@ -25,6 +25,17 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
         PageSubtitlePrefix().Text(RS_(L"AIAgents_PageSubtitlePrefix"));
         PageSubtitlePrivacyLink().Text(RS_(L"AIAgents_PageSubtitlePrivacyLink"));
+
+        // The Agent card is hand-built (not a SettingContainer) so we can put
+        // the "Learn more about ACP" link in Column 0 directly below the
+        // description text. Re-use the existing AIAgents_AcpAgent resw keys
+        // (originally targeting SettingContainer's Header/HelpText DPs) via
+        // ResourceLoader path syntax so we don't have to add new keys + 89
+        // locale translations for the same strings.
+        const auto agentHeader = RS_(L"AIAgents_AcpAgent/Header");
+        AcpAgentHeaderText().Text(agentHeader);
+        AcpAgentDescriptionText().Text(RS_(L"AIAgents_AcpAgent/HelpText"));
+        Automation::AutomationProperties::SetName(AcpAgent(), agentHeader);
     }
 
     void AIAgents::OnNavigatedTo(const NavigationEventArgs& e)

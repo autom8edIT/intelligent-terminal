@@ -216,10 +216,17 @@
                                     <TextBlock x:Uid="FreOverlay_AgentDescription"
                                                FontSize="12" Foreground="#99FFFFFF"
                                                TextWrapping="Wrap" />
+                                    <!--  FontSize=12 matches the FreOverlay_AgentDescription
+                                          TextBlock above (HyperlinkButton default is ~14,
+                                          which renders visibly larger than the description).
+                                          Padding override keeps text flush-left while removing
+                                          the default vertical padding so the link sits snug
+                                          beneath the description.  -->
                                     <HyperlinkButton x:Uid="FreOverlay_AcpReferenceLink"
                                                      NavigateUri="https://aka.ms/intelligent-terminal-acpref"
+                                                     FontSize="12"
                                                      Margin="-12,0,0,0"
-                                                     Padding="12,0,12,0"
+                                                     Padding="12,2,12,2"
                                                      Foreground="#FF99EBFF" />
                                     <TextBlock x:Uid="FreOverlay_AgentInstallHint"
                                                x:Name="AgentInstallHint"
