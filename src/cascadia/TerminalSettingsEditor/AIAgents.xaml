@@ -70,7 +70,12 @@
             <!--  Agent (ACP CLI)  -->
             <local:SettingContainer x:Name="AcpAgent"
                                     x:Uid="AIAgents_AcpAgent">
-                <StackPanel>
+                <!--  Vertical Margin gives the content (which can grow beyond
+                      the SettingContainer's MinHeight=64 when a custom agent
+                      is selected and the command preview + Edit/Delete buttons
+                      appear) breathing room from the top/bottom card edges.
+                      Without this, the stacked rows hug the card border.  -->
+                <StackPanel Margin="0,12,0,12">
                     <ComboBox AutomationProperties.AccessibilityView="Content"
                               ItemTemplate="{StaticResource AgentEntryTemplate}"
                               ItemsSource="{x:Bind ViewModel.AcpAgentList, Mode=OneWay}"
@@ -355,7 +360,11 @@
             <!--  Agent (delegate / on-demand CLI)  -->
             <local:SettingContainer x:Name="DelegateAgent"
                                     x:Uid="AIAgents_DelegateAgent">
-                <StackPanel>
+                <!--  Vertical Margin — same rationale as the AcpAgent
+                      container above: when a custom delegate agent is
+                      selected the content grows past the SettingContainer's
+                      MinHeight=64 and would otherwise hug the card edges.  -->
+                <StackPanel Margin="0,12,0,12">
                     <ComboBox AutomationProperties.AccessibilityView="Content"
                               ItemTemplate="{StaticResource AgentEntryTemplate}"
                               ItemsSource="{x:Bind ViewModel.DelegateAgentList, Mode=OneWay}"
