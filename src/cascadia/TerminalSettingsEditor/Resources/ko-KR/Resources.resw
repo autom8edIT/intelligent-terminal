@@ -2784,10 +2784,6 @@
     <value>에이전트 창에서 사용할 에이전트를 선택하세요. 호환되는 ACP 에이전트는 모두 감지됩니다.</value>
     <comment>Supplementary description for the agent pane setting. {Locked="ACP"}</comment>
   </data>
-  <data name="AIAgents_AcpReferenceLink.Content" xml:space="preserve">
-    <value>ACP에 대해 자세히 알아보기</value>
-    <comment>{Locked="ACP"} HyperlinkButton displayed below the AIAgents_AcpAgent ComboBox that links to the Agent Client Protocol reference page.</comment>
-  </data>
   <data name="AIAgents_AcpModel.Header" xml:space="preserve">
     <value>모델</value>
     <comment>Header for the setting that specifies the model used by the agent pane agent.</comment>

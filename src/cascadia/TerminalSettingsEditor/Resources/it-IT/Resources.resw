@@ -2766,10 +2766,6 @@
   <data name="AIAgents_DelegateGroupHeader.Text" xml:space="preserve"><value>Riquadro comandi</value></data>
   <data name="AIAgents_AcpAgent.Header" xml:space="preserve"><value>Agente</value></data>
   <data name="AIAgents_AcpAgent.HelpText" xml:space="preserve"><value>Scegli l'agente usato nel riquadro agente. Verrà rilevato qualsiasi agente ACP compatibile.</value><comment>Supplementary description for the agent pane agent setting. {Locked="ACP"}</comment></data>
-  <data name="AIAgents_AcpReferenceLink.Content" xml:space="preserve">
-    <value>Ulteriori informazioni su ACP</value>
-    <comment>{Locked="ACP"} HyperlinkButton displayed below the AIAgents_AcpAgent ComboBox that links to the Agent Client Protocol reference page.</comment>
-  </data>
   <data name="AIAgents_AcpModel.Header" xml:space="preserve"><value>Modello</value></data>
   <data name="AIAgents_AcpModel.HelpText" xml:space="preserve"><value>Scegli il modello usato da questo agente.</value></data>
   <data name="AIAgents_DelegateAgent.Header" xml:space="preserve"><value>Agente</value></data>

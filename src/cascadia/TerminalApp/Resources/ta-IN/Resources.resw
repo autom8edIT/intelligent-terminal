@@ -166,10 +166,6 @@
     <value>முகவர் பலகத்தில் பயன்படுத்தப்படும் முகவரைத் தேர்ந்தெடுக்கவும். இணக்கமான எந்த ACP முகவரும் தானாகக் கண்டறியப்படும்.</value>
     <comment>{Locked="ACP"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
-  <data name="FreOverlay_AcpReferenceLink.Content" xml:space="preserve">
-    <value>ACP பற்றி மேலும் அறிக</value>
-    <comment>{Locked="ACP"} HyperlinkButton displayed below FreOverlay_AgentDescription that links to the Agent Client Protocol reference page.</comment>
-  </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
     <value>ℹ இந்த முகவருக்கு Node.js மற்றும் NPX தேவை, ஏற்கனவே இல்லாவிட்டால் தானாக நிறுவப்படும்.</value>
     <comment>{Locked="Node.js","NPX"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>

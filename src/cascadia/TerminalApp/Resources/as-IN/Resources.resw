@@ -167,10 +167,6 @@
     <value>এজেণ্ট পেনত ব্যৱহৃত এজেণ্ট বাছনি কৰক। যিকোনো সুসংগত ACP এজেণ্ট স্বয়ংক্ৰিয়ভাৱে চিনাক্ত হ'ব।</value>
     <comment>{Locked="ACP"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
-  <data name="FreOverlay_AcpReferenceLink.Content" xml:space="preserve">
-    <value>ACP বিষয়ে অধিক জানক</value>
-    <comment>{Locked="ACP"} HyperlinkButton displayed below FreOverlay_AgentDescription that links to the Agent Client Protocol reference page.</comment>
-  </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
     <value>ℹ এই এজেণ্টৰ বাবে Node.js আৰু NPX প্ৰয়োজন, যদি ইতিমধ্যে নাই তেন্তে স্বয়ংক্ৰিয়ভাৱে ইনষ্টল হ'ব।</value>
     <comment>{Locked="Node.js","NPX"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>

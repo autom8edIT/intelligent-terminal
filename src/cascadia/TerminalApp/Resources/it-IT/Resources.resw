@@ -1005,10 +1005,6 @@
     <value>Scegli l'agente utilizzato nel riquadro agente. Verrà rilevato qualsiasi agente ACP compatibile.</value>
     <comment>{Locked="ACP"}</comment>
   </data>
-  <data name="FreOverlay_AcpReferenceLink.Content" xml:space="preserve">
-    <value>Ulteriori informazioni su ACP</value>
-    <comment>{Locked="ACP"} HyperlinkButton displayed below FreOverlay_AgentDescription that links to the Agent Client Protocol reference page.</comment>
-  </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
     <value>ℹ Questo agente richiede Node.js e NPX, che verranno installati automaticamente se non già presenti.</value>
     <comment>{Locked="Node.js","NPX"}</comment>

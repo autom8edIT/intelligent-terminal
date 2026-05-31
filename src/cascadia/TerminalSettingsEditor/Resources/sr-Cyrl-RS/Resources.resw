@@ -718,10 +718,6 @@
   </data><data name="AIAgents_AcpAgent.HelpText" xml:space="preserve">
     <value>Изаберите агента који се користи у панелу агента. Сваки компатибилан ACP агент биће аутоматски откривен.</value>
     <comment>Supplementary description for the agent pane setting. {Locked="ACP"}</comment>
-  </data>
-  <data name="AIAgents_AcpReferenceLink.Content" xml:space="preserve">
-    <value>Сазнајте више о ACP</value>
-    <comment>{Locked="ACP"} HyperlinkButton displayed below the AIAgents_AcpAgent ComboBox that links to the Agent Client Protocol reference page.</comment>
   </data><data name="AIAgents_AcpModel.Header" xml:space="preserve">
     <value>Модел</value>
     <comment>Header for the setting that specifies the model used by the agent pane agent.</comment>

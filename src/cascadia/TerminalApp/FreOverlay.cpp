@@ -95,6 +95,26 @@ namespace winrt::TerminalApp::implementation
         SettingsSubtitlePrefix().Text(RS_(L"FreOverlay_SettingsSubtitlePrefix"));
         SettingsSubtitleLink().Text(RS_(L"FreOverlay_SettingsSubtitleLink"));
 
+        // Agent description: render "ACP" as an inline Hyperlink by splitting
+        // the localized string on the literal "ACP" token (locked in every
+        // locale's resw via {Locked="ACP"}).
+        {
+            const std::wstring_view desc{ RS_(L"FreOverlay_AgentDescription/Text") };
+            constexpr std::wstring_view token{ L"ACP" };
+            const auto pos = desc.find(token);
+            if (pos != std::wstring_view::npos)
+            {
+                AgentDescriptionBefore().Text(winrt::hstring{ desc.substr(0, pos) });
+                AgentDescriptionAcpToken().Text(winrt::hstring{ token });
+                AgentDescriptionAfter().Text(winrt::hstring{ desc.substr(pos + token.size()) });
+            }
+            else
+            {
+                // Fallback (shouldn't happen — ACP is locked): degrade to plain text.
+                AgentDescriptionBefore().Text(winrt::hstring{ desc });
+            }
+        }
+
         // Set toggle On/Off labels
         AutoDetectToggle().OnContent(winrt::box_value(RS_(L"FreOverlay_ToggleOn")));
         AutoDetectToggle().OffContent(winrt::box_value(RS_(L"FreOverlay_ToggleOff")));

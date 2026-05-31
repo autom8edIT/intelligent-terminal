@@ -34,7 +34,29 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         // locale translations for the same strings.
         const auto agentHeader = RS_(L"AIAgents_AcpAgent/Header");
         AcpAgentHeaderText().Text(agentHeader);
-        AcpAgentDescriptionText().Text(RS_(L"AIAgents_AcpAgent/HelpText"));
+
+        // Description: render "ACP" as an inline Hyperlink by splitting the
+        // localized string on the literal "ACP" token (locked in every
+        // locale's resw via {Locked="ACP"}). Mirrors the PageSubtitlePrivacyLink
+        // approach above (x:Uid on inline Run is not reliably honored by
+        // ResourceLoader, so we set Run.Text from code).
+        {
+            const std::wstring_view desc{ RS_(L"AIAgents_AcpAgent/HelpText") };
+            constexpr std::wstring_view token{ L"ACP" };
+            const auto pos = desc.find(token);
+            if (pos != std::wstring_view::npos)
+            {
+                AcpAgentDescriptionBefore().Text(winrt::hstring{ desc.substr(0, pos) });
+                AcpAgentDescriptionAcpToken().Text(winrt::hstring{ token });
+                AcpAgentDescriptionAfter().Text(winrt::hstring{ desc.substr(pos + token.size()) });
+            }
+            else
+            {
+                // Fallback (shouldn't happen — ACP is locked): degrade to plain text.
+                AcpAgentDescriptionBefore().Text(winrt::hstring{ desc });
+            }
+        }
+
         Automation::AutomationProperties::SetName(AcpAgent(), agentHeader);
     }
 

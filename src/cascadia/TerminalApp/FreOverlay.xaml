@@ -213,25 +213,22 @@
                                     <TextBlock x:Uid="FreOverlay_AgentLabel"
                                                FontSize="14" FontWeight="SemiBold"
                                                Foreground="White" />
-                                    <TextBlock x:Uid="FreOverlay_AgentDescription"
+                                    <!--  Description with "ACP" rendered as an inline Hyperlink.
+                                          Mirrors the PageSubtitle pattern in AIAgents.xaml: the
+                                          Run.Text values are populated from code-behind by splitting
+                                          the localized FreOverlay_AgentDescription/Text string on
+                                          "ACP" ({Locked="ACP"} guarantees the token appears verbatim
+                                          in every locale).  -->
+                                    <TextBlock x:Name="AgentDescriptionText"
                                                FontSize="12" Foreground="#99FFFFFF"
-                                               TextWrapping="Wrap" />
-                                    <!--  Match the 12px description above. Setting FontSize on
-                                          HyperlinkButton itself doesn't propagate to the inner
-                                          ContentPresenter's auto-wrapped TextBlock (which inherits
-                                          BodyTextBlockStyle = 14px), so we override via an implicit
-                                          TextBlock style in the button's resource scope.  -->
-                                    <HyperlinkButton x:Uid="FreOverlay_AcpReferenceLink"
-                                                     NavigateUri="https://aka.ms/intelligent-terminal-acpref"
-                                                     Margin="-12,0,0,0"
-                                                     Padding="12,2,12,2"
-                                                     Foreground="#FF99EBFF">
-                                        <HyperlinkButton.Resources>
-                                            <Style TargetType="TextBlock">
-                                                <Setter Property="FontSize" Value="12" />
-                                            </Style>
-                                        </HyperlinkButton.Resources>
-                                    </HyperlinkButton>
+                                               TextWrapping="Wrap">
+                                        <Run x:Name="AgentDescriptionBefore" />
+                                        <Hyperlink NavigateUri="https://aka.ms/intelligent-terminal-acpref"
+                                                   Foreground="#FF99EBFF">
+                                            <Run x:Name="AgentDescriptionAcpToken" />
+                                        </Hyperlink>
+                                        <Run x:Name="AgentDescriptionAfter" />
+                                    </TextBlock>
                                     <TextBlock x:Uid="FreOverlay_AgentInstallHint"
                                                x:Name="AgentInstallHint"
                                                FontSize="12" Foreground="#99FFFFFF"

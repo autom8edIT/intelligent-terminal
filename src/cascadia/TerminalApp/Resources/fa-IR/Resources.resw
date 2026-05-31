@@ -167,10 +167,6 @@
     <value>عامل استفاده‌شده در پنل عامل را انتخاب کنید. هر عامل سازگار با ACP به‌طور خودکار شناسایی خواهد شد.</value>
     <comment>{Locked="ACP"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
-  <data name="FreOverlay_AcpReferenceLink.Content" xml:space="preserve">
-    <value>اطلاعات بیشتر درباره ACP</value>
-    <comment>{Locked="ACP"} HyperlinkButton displayed below FreOverlay_AgentDescription that links to the Agent Client Protocol reference page.</comment>
-  </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
     <value>ℹ این عامل به Node.js و NPX نیاز دارد که در صورت عدم وجود به‌طور خودکار نصب خواهند شد.</value>
     <comment>{Locked="Node.js","NPX"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>

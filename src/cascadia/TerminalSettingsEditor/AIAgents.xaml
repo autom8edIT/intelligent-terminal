@@ -104,19 +104,20 @@
                             Padding="0,12,0,12">
                     <TextBlock x:Name="AcpAgentHeaderText"
                                Style="{StaticResource SettingsPageItemHeaderStyle}" />
+                    <!--  Description with "ACP" rendered as an inline Hyperlink.
+                          Mirrors the PageSubtitlePrivacyLink pattern above: the
+                          Run.Text values are populated from code-behind by splitting
+                          the localized AIAgents_AcpAgent/HelpText string on "ACP"
+                          ({Locked="ACP"} guarantees the token appears verbatim in
+                          every locale).  -->
                     <TextBlock x:Name="AcpAgentDescriptionText"
-                               Style="{StaticResource SettingsPageItemDescriptionStyle}" />
-                    <!--  "Learn more about ACP". FontSize=12 matches the
-                          description text above (HyperlinkButton's default
-                          is ~14, which renders visibly larger). The negative
-                          left margin + horizontal Padding cancels out the
-                          button's built-in padding so the link text aligns
-                          flush-left under the description.  -->
-                    <HyperlinkButton x:Uid="AIAgents_AcpReferenceLink"
-                                     NavigateUri="https://aka.ms/intelligent-terminal-acpref"
-                                     FontSize="12"
-                                     Margin="-12,2,0,0"
-                                     Padding="12,2,12,2" />
+                               Style="{StaticResource SettingsPageItemDescriptionStyle}">
+                        <Run x:Name="AcpAgentDescriptionBefore" />
+                        <Hyperlink NavigateUri="https://aka.ms/intelligent-terminal-acpref">
+                            <Run x:Name="AcpAgentDescriptionAcpToken" />
+                        </Hyperlink>
+                        <Run x:Name="AcpAgentDescriptionAfter" />
+                    </TextBlock>
                 </StackPanel>
                 <!--  Column 1: ComboBox + custom-agent preview / editable panels.
                       Vertical Margin gives the content (which grows beyond the

@@ -2766,10 +2766,6 @@
   <data name="AIAgents_DelegateGroupHeader.Text" xml:space="preserve"><value>Paleta de comandos</value><comment>Section header for the command palette agent settings group.</comment></data>
   <data name="AIAgents_AcpAgent.Header" xml:space="preserve"><value>Agente</value><comment>Header for the setting that specifies which AI agent CLI powers the agent pane.</comment></data>
   <data name="AIAgents_AcpAgent.HelpText" xml:space="preserve"><value>Elija el agente usado en el panel del agente. Se detectará cualquier agente compatible con ACP.</value><comment>Supplementary description for the agent pane agent setting. {Locked="ACP"}</comment></data>
-  <data name="AIAgents_AcpReferenceLink.Content" xml:space="preserve">
-    <value>Más información acerca de ACP</value>
-    <comment>{Locked="ACP"} HyperlinkButton displayed below the AIAgents_AcpAgent ComboBox that links to the Agent Client Protocol reference page.</comment>
-  </data>
   <data name="AIAgents_AcpModel.Header" xml:space="preserve"><value>Modelo</value><comment>Header for the setting that specifies the model used by the agent pane agent.</comment></data>
   <data name="AIAgents_AcpModel.HelpText" xml:space="preserve"><value>Elija el modelo usado por este agente.</value><comment>Supplementary description for the model setting.</comment></data>
   <data name="AIAgents_DelegateAgent.Header" xml:space="preserve"><value>Agente</value><comment>Header for the setting that specifies which agent CLI handles command palette / on-demand requests.</comment></data>

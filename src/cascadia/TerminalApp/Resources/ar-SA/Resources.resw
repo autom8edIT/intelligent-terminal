@@ -167,10 +167,6 @@
     <value>اختر الوكيل المستخدم في لوحة الوكيل. سيتم اكتشاف أي وكيل متوافق مع ACP تلقائيًا.</value>
     <comment>{Locked="ACP"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
-  <data name="FreOverlay_AcpReferenceLink.Content" xml:space="preserve">
-    <value>مزيد من المعلومات حول ACP</value>
-    <comment>{Locked="ACP"} HyperlinkButton displayed below FreOverlay_AgentDescription that links to the Agent Client Protocol reference page.</comment>
-  </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
     <value>ℹ يتطلب هذا الوكيل Node.js وNPX، وسيتم تثبيتهما تلقائيًا إن لم يكونا موجودين.</value>
     <comment>{Locked="Node.js","NPX"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>

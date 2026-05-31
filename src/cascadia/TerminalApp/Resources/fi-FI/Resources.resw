@@ -166,10 +166,6 @@
     <value>Valitse agenttipaneelissa käytettävä agentti. Kaikki yhteensopivat ACP-agentit tunnistetaan automaattisesti.</value>
     <comment>{Locked="ACP"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
-  <data name="FreOverlay_AcpReferenceLink.Content" xml:space="preserve">
-    <value>Lisätietoja ACP:stä</value>
-    <comment>{Locked="ACP"} HyperlinkButton displayed below FreOverlay_AgentDescription that links to the Agent Client Protocol reference page.</comment>
-  </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
     <value>ℹ Tämä agentti vaatii Node.js- ja NPX-asennuksen, jotka asennetaan automaattisesti, jos niitä ei vielä ole.</value>
     <comment>{Locked="Node.js","NPX"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>

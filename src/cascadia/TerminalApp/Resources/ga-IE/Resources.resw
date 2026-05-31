@@ -53,10 +53,6 @@
     <value>Roghnaigh an gníomhaire a úsáidtear sa phán gníomhaire. Aithneofar aon ghníomhaire ACP comhoiriúnach go huathoibríoch.</value>
     <comment>{Locked="ACP"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
-  <data name="FreOverlay_AcpReferenceLink.Content" xml:space="preserve">
-    <value>Tuilleadh eolais faoi ACP</value>
-    <comment>{Locked="ACP"} HyperlinkButton displayed below FreOverlay_AgentDescription that links to the Agent Client Protocol reference page.</comment>
-  </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
     <value>ℹ Tá Node.js agus NPX ag teastáil ón ngníomhaire seo, a shuiteálfar go huathobríoch mura bhfuil siad ann cheana.</value>
     <comment>{Locked="Node.js","NPX"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>

@@ -53,10 +53,6 @@
     <value>ជ្រើសរើសភ្នាក់ងារដែលប្រើក្នុងផ្ទាំងភ្នាក់ងារ។ ភ្នាក់ងារ ACP ដែលត្រូវគ្នានឹងត្រូវបានកត់សម្គាល់ដោយស្វ័យប្រវត្តិ។</value>
     <comment>{Locked="ACP"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>
   </data>
-  <data name="FreOverlay_AcpReferenceLink.Content" xml:space="preserve">
-    <value>ស្វែងយល់បន្ថែមអំពី ACP</value>
-    <comment>{Locked="ACP"} HyperlinkButton displayed below FreOverlay_AgentDescription that links to the Agent Client Protocol reference page.</comment>
-  </data>
   <data name="FreOverlay_AgentInstallHint.Text" xml:space="preserve">
     <value>ℹ ភ្នាក់ងារនេះត្រូវការ Node.js និង NPX ដែលនឹងត្រូវបានតំឡើងដោយស្វ័យប្រវត្តិប្រសិនបើមិនទាន់មាន។</value>
     <comment>{Locked="Node.js","NPX"} In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human agent or representative.</comment>

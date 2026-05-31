@@ -2779,10 +2779,6 @@
     <value>Escolha o agente usado no painel do agente. Qualquer agente compatível com ACP será detectado.</value>
     <comment>Supplementary description for the agent pane agent setting. {Locked="ACP"}</comment>
   </data>
-  <data name="AIAgents_AcpReferenceLink.Content" xml:space="preserve">
-    <value>Saiba mais sobre o ACP</value>
-    <comment>{Locked="ACP"} HyperlinkButton displayed below the AIAgents_AcpAgent ComboBox that links to the Agent Client Protocol reference page.</comment>
-  </data>
   <data name="AIAgents_AcpModel.Header" xml:space="preserve">
     <value>Modelo</value>
   </data>
