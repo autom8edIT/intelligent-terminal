@@ -1137,6 +1137,7 @@ nullability
 nullness
 nullonfailure
 nullopts
+Numer
 NUMSCROLL
 NUnit
 nupkg
@@ -1320,6 +1321,7 @@ propsys
 PROPTITLE
 propvar
 propvariant
+PRRT
 psa
 PSECURITY
 pseudoconsole

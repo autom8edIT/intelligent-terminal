@@ -139,7 +139,7 @@ Skills are self-contained folders in the `skills/` directory that include a `SKI
 
 ### Adding Plugins
 
-Plugins group related agents, commands, and skills around specific themes or workflows, making it easy for users to install comprehensive toolkits via GitHub Copilot CLI.
+Plugins group related agents, commands, and skills around specific themes or workflows, making it easy for users to install comprehensive tool sets via GitHub Copilot CLI.
 
 1. **Create your plugin**: Run `npm run plugin:create` to scaffold a new plugin
 2. **Follow the naming convention**: Use descriptive, lowercase folder names with hyphens (e.g., `python-web-development`)
@@ -267,7 +267,7 @@ The six-month re-review window starts when an approved submission issue is **clo
 
 Maintainers complete the re-review on the **original approved submission issue** with one of these issue-comment commands:
 
-- `/re-review-keep` — renew the listing for another six months by reopening and reclosing the approved issue, which resets the `closed_at` review anchor and removes the due labels
+- `/re-review-keep` — renew the listing for another six months by reopening and closing again the approved issue, which resets the `closed_at` review anchor and removes the due labels
 - `/re-review-needs-changes` — keep the listing in the due queue while adding `re-review-follow-up` so maintainers can track extra investigation or remediation work
 - `/re-review-remove` — open or update a PR against `staged` that removes the plugin from `plugins/external.json` and regenerates marketplace outputs; the issue stays in the due queue until that removal lands
 
