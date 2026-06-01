@@ -166,6 +166,8 @@ namespace winrt::TerminalApp::implementation
         WelcomeSubtitleLink().Text(RS_(L"FreOverlay_WelcomeSubtitleLink"));
         SettingsSubtitlePrefix().Text(RS_(L"FreOverlay_SettingsSubtitlePrefix"));
         SettingsSubtitleLink().Text(RS_(L"FreOverlay_SettingsSubtitleLink"));
+        AutoDetectShellIntegrationHintPrefix().Text(RS_(L"FreOverlay_AutoDetectShellIntegrationHintPrefix"));
+        AutoDetectShellIntegrationHintLink().Text(RS_(L"FreOverlay_AutoDetectShellIntegrationHintLink"));
 
         // Split the description on "ACP" (locked token) so it can be rendered as an inline Hyperlink.
         {
@@ -316,6 +318,16 @@ namespace winrt::TerminalApp::implementation
                                           const RoutedEventArgs& /*args*/)
     {
         _UpdateSuggestionEnabledState();
+
+        // Hide/show the whole hint row (icon + text) — the (i) glyph would
+        // otherwise dangle when detection is off and the side-effect described
+        // by the hint no longer applies. Mirrors SessionManagementHintRow.
+        auto toggle = AutoDetectToggle();
+        auto row = AutoDetectShellIntegrationHintRow();
+        if (toggle && row)
+        {
+            row.Visibility(toggle.IsOn() ? Visibility::Visible : Visibility::Collapsed);
+        }
     }
 
     void FreOverlay::_UpdateSuggestionEnabledState()

@@ -199,4 +199,10 @@
   </data><data name="FreOverlay_ErrorHelpLink" xml:space="preserve">
     <value>Ionnsaich mar a chàraicheas tu seo a làimh</value>
     <comment>Hyperlink shown below an FRE setup error message. Opens step-by-step manual setup instructions in the browser.</comment>
-  </data></root>
+  </data>  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>Ma chuireas tu seo air thèid co-aonachadh shell a stàladh gus fàilligidhean àithne a lorg. </value>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>Faigh a-mach barrachd</value>
+  </data>
+</root>

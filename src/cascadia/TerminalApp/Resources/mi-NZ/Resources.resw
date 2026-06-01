@@ -199,4 +199,10 @@
   </data><data name="FreOverlay_ErrorHelpLink" xml:space="preserve">
     <value>Akona me pēhea te whakatika i tēnei mā te ringa</value>
     <comment>Hyperlink shown below an FRE setup error message. Opens step-by-step manual setup instructions in the browser.</comment>
-  </data></root>
+  </data>  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>Mā te whakakā i tēnei ka tāuta te hononga shell hei kite i ngā rahunga tono. </value>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>He atu kōrero</value>
+  </data>
+</root>

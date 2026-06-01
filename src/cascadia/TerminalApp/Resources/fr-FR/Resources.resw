@@ -1162,4 +1162,10 @@
   <data name="FreOverlay_AutoDetectDescription.Text" xml:space="preserve">
     <value>Autorisez Intelligent Terminal à accéder à votre shell et à détecter automatiquement les erreurs.</value>
   </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>L'activation de cette option installera l'intégration shell pour détecter les échecs de commande. </value>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>En savoir plus</value>
+  </data>
 </root>

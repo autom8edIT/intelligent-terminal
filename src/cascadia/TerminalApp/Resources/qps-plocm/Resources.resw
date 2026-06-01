@@ -1143,4 +1143,10 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   <data name="FreOverlay_AutoDetectDescription.Text" xml:space="preserve">
     <value>Give Intelligent Terminal permission to access your shell and automatically detect errors.</value>
   </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>Enabling this will install shell integration to detect command failures. </value>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>Learn more</value>
+  </data>
 </root>

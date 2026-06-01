@@ -1086,6 +1086,14 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
     <value>Give Intelligent Terminal permission to access your shell and automatically detect errors.</value>
     <comment>{Locked=qps-ploc,qps-ploca,qps-plocm} "Intelligent Terminal" is the product name. Description for the automatic-error-detection toggle in the first-run wizard.</comment>
   </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>Enabling this will install shell integration to detect command failures. </value>
+    <comment>Hint shown under the "Automatic error detection" toggle in the first-run wizard, explaining that turning the toggle on installs shell integration into the user's shell profile. The trailing space is intentional — it separates this prefix from the inline "Learn more" hyperlink that follows.</comment>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>Learn more</value>
+    <comment>Inline hyperlink text that follows FreOverlay_AutoDetectShellIntegrationHintPrefix, linking to the shell-integration documentation.</comment>
+  </data>
   <data name="FreOverlay_AutoErrorLabel.Text" xml:space="preserve">
     <value>Automatic error suggestion</value>
     <comment>Header for the toggle that lets the agent automatically suggest fixes for detected errors. Depends on automatic error detection being on.</comment>

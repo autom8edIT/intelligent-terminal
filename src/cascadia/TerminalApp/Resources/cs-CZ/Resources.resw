@@ -312,4 +312,10 @@
   </data><data name="FreOverlay_ErrorHelpLink" xml:space="preserve">
     <value>Zjistěte, jak to opravit ručně</value>
     <comment>Hyperlink shown below an FRE setup error message. Opens step-by-step manual setup instructions in the browser.</comment>
-  </data></root>
+  </data>  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>Povolením této funkce se nainstaluje integrace prostředí shell pro zjišťování selhání příkazů. </value>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>Další informace</value>
+  </data>
+</root>

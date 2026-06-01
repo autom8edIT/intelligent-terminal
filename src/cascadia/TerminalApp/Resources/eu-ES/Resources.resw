@@ -135,4 +135,10 @@
   </data><data name="FreOverlay_ErrorHelpLink" xml:space="preserve">
     <value>Ikasi nola konpondu hau eskuz</value>
     <comment>Hyperlink shown below an FRE setup error message. Opens step-by-step manual setup instructions in the browser.</comment>
-  </data></root>
+  </data>  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>Hau gaitzeak shell integrazioa instalatuko du komando-hutsegiteak hautemateko. </value>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>Gehiago jakin</value>
+  </data>
+</root>

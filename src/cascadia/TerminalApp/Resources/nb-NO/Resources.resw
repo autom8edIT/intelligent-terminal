@@ -313,4 +313,10 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   </data><data name="FreOverlay_ErrorHelpLink" xml:space="preserve">
     <value>Finn ut hvordan du løser dette manuelt</value>
     <comment>Hyperlink shown below an FRE setup error message. Opens step-by-step manual setup instructions in the browser.</comment>
-  </data></root>
+  </data>  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>Aktivering av dette vil installere skallintegrasjon for å oppdage kommandofeil. </value>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>Finn ut mer</value>
+  </data>
+</root>

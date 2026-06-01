@@ -307,4 +307,10 @@
   </data><data name="FreOverlay_ErrorHelpLink" xml:space="preserve">
     <value>Learn how to fix this manually</value>
     <comment>Hyperlink shown below an FRE setup error message. Opens step-by-step manual setup instructions in the browser.</comment>
-  </data></root>
+  </data>  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>Enabling this will install shell integration to detect command failures. </value>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>Learn more</value>
+  </data>
+</root>

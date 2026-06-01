@@ -322,6 +322,40 @@
                                         <TextBlock x:Uid="FreOverlay_AutoDetectDescription"
                                                    FontSize="12" Foreground="#99FFFFFF"
                                                    TextWrapping="Wrap" />
+                                        <!--  Hint row: monochrome info glyph
+                                              + text with inline "Learn more"
+                                              link to the shell-integration
+                                              docs. Same Grid + FontIcon
+                                              pattern as SessionManagementHint
+                                              (2 cols so the wrapping
+                                              TextBlock is width-bounded).
+                                              Run texts can't use x:Uid, so
+                                              they're set in code-behind via
+                                              RS_.  -->
+                                        <Grid x:Name="AutoDetectShellIntegrationHintRow"
+                                              Margin="0,4,0,0"
+                                              ColumnSpacing="6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <FontIcon Grid.Column="0"
+                                                      Glyph="&#xE946;"
+                                                      FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                                      FontSize="12"
+                                                      Foreground="#99FFFFFF"
+                                                      VerticalAlignment="Top"
+                                                      Margin="0,2,0,0" />
+                                            <TextBlock Grid.Column="1"
+                                                       FontSize="12" Foreground="#99FFFFFF"
+                                                       TextWrapping="Wrap">
+                                                <Run x:Name="AutoDetectShellIntegrationHintPrefix" />
+                                                <Hyperlink NavigateUri="https://github.com/microsoft/intelligent-terminal/blob/main/doc/installing-dependencies.md#8-powershell-shell-integration"
+                                                           Foreground="#FF99EBFF">
+                                                    <Run x:Name="AutoDetectShellIntegrationHintLink" />
+                                                </Hyperlink>
+                                            </TextBlock>
+                                        </Grid>
                                     </StackPanel>
                                     <ToggleSwitch x:Name="AutoDetectToggle" Grid.Column="1"
                                                   IsOn="True" VerticalAlignment="Center"

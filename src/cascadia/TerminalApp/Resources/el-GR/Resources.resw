@@ -199,4 +199,10 @@
   </data><data name="FreOverlay_ErrorHelpLink" xml:space="preserve">
     <value>Μάθετε πώς να το διορθώσετε με μη αυτόματο τρόπο</value>
     <comment>Hyperlink shown below an FRE setup error message. Opens step-by-step manual setup instructions in the browser.</comment>
-  </data></root>
+  </data>  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>Η ενεργοποίηση αυτής της λειτουργίας θα εγκαταστήσει ενοποίηση shell για τον εντοπισμό αποτυχιών εντολών. </value>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>Μάθετε περισσότερα</value>
+  </data>
+</root>

@@ -199,4 +199,10 @@
   </data><data name="FreOverlay_ErrorHelpLink" xml:space="preserve">
     <value>Kayta makillawan imayna allichanaykita yachay</value>
     <comment>Hyperlink shown below an FRE setup error message. Opens step-by-step manual setup instructions in the browser.</comment>
-  </data></root>
+  </data>  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>Kayta hurquqtiyki shell integración nisqata churanqa kamachiy pantaykunata riqsichinapaq. </value>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>Aswan yachay</value>
+  </data>
+</root>

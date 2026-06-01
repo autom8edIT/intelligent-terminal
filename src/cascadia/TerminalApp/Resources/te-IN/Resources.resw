@@ -312,4 +312,10 @@
   </data><data name="FreOverlay_ErrorHelpLink" xml:space="preserve">
     <value>దీన్ని మాన్యువల్‌గా ఎలా పరిష్కరించాలో తెలుసుకోండి</value>
     <comment>Hyperlink shown below an FRE setup error message. Opens step-by-step manual setup instructions in the browser.</comment>
-  </data></root>
+  </data>  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>దీన్ని ఎనేబుల్ చేయడం వలన కమాండ్ వైఫల్యాలను గుర్తించడానికి shell ఇంటిగ్రేషన్ ఇన్‌స్టాల్ చేయబడుతుంది. </value>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>మరింత తెలుసుకోండి</value>
+  </data>
+</root>

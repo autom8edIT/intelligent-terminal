@@ -135,4 +135,10 @@
   </data><data name="FreOverlay_ErrorHelpLink" xml:space="preserve">
     <value>ស្វែងយល់ពីរបៀបជួសជុលវាដោយដៃ</value>
     <comment>Hyperlink shown below an FRE setup error message. Opens step-by-step manual setup instructions in the browser.</comment>
-  </data></root>
+  </data>  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>ការបើកនេះនឹងតំឡើងការរួមបញ្ចូល shell ដើម្បីរកឃើញការបរាជ័យនៃពាក្យបញ្ជា។ </value>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>ស្វែងយល់បន្ថែម</value>
+  </data>
+</root>

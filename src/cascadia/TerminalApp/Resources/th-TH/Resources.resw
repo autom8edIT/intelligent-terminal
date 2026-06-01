@@ -248,4 +248,10 @@
   </data><data name="FreOverlay_ErrorHelpLink" xml:space="preserve">
     <value>เรียนรู้วิธีแก้ไขปัญหานี้ด้วยตนเอง</value>
     <comment>Hyperlink shown below an FRE setup error message. Opens step-by-step manual setup instructions in the browser.</comment>
-  </data></root>
+  </data>  <data name="FreOverlay_AutoDetectShellIntegrationHintPrefix" xml:space="preserve">
+    <value>การเปิดใช้งานนี้จะติดตั้งการรวม shell เพื่อตรวจหาความล้มเหลวของคำสั่ง </value>
+  </data>
+  <data name="FreOverlay_AutoDetectShellIntegrationHintLink" xml:space="preserve">
+    <value>เรียนรู้เพิ่มเติม</value>
+  </data>
+</root>
