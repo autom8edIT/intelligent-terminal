@@ -4,6 +4,8 @@ Below is our guidance for how to report issues, propose new features, and submit
 
 Intelligent Terminal is a fork of [Windows Terminal](https://github.com/microsoft/terminal) with native agent integration. Much of the contribution workflow mirrors upstream Windows Terminal; project-specific differences are called out below.
 
+> **Filing bugs in shared / upstream code.** Intelligent Terminal periodically syncs shared code from [microsoft/terminal](https://github.com/microsoft/terminal). If the bug you've found also reproduces on stock Windows Terminal — e.g., in the renderer, VT parser, text buffer, settings model, or other inherited code — please file (and ideally fix) it [upstream at microsoft/terminal](https://github.com/microsoft/terminal/issues). The fix will flow back to Intelligent Terminal at the next sync. Bugs that only reproduce in Intelligent Terminal (agent pane, WTA, autofix, hooks, command-palette `?` prefix, etc.) belong in [this repo](https://github.com/microsoft/intelligent-terminal/issues).
+
 ## Open Development Workflow
 
 The Intelligent Terminal team is active in this GitHub Repo and carries out development in the open.
@@ -103,16 +105,16 @@ If you don't have any additional info/context to add but would like to indicate 
 
 If you're able & willing to help fix issues and/or implement features, we'd love your contribution!
 
-A good starting point is the ["good first issue"](https://github.com/microsoft/intelligent-terminal/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) and ["Help Wanted"](https://github.com/microsoft/intelligent-terminal/issues?q=is%3Aopen+is%3Aissue+label%3A%22Help+Wanted%22) labels. Once you're comfortable in the codebase, find any open issue you're interested in and hop in.
+The best place to start is the list of ["walkthroughs"](https://aka.ms/terminal-walkthroughs). This is a collection of issues where we've written a "walkthrough", little guides to help get started with a particular issue. These are usually good first issues, and are a great way to get familiar with the codebase. Additionally, the list of ["good first issue"](https://github.com/microsoft/intelligent-terminal/issues?q=is%3Aopen+is%3Aissue+label%3A%22Help+Wanted%22++label%3A%22good+first+issue%22+)s is another set of issues that might be easier for first-time contributors. Once you're feeling more comfortable in the codebase, feel free to just use the ["Help Wanted"](https://github.com/microsoft/intelligent-terminal/issues?q=is%3Aopen+is%3Aissue+label%3A%22Help+Wanted%22+) label, or just find any issue you're interested in and hop in!
 
-Generally, we categorize issues in the following way:
-* ["Bugs"](https://github.com/microsoft/intelligent-terminal/issues?q=is%3Aopen+is%3Aissue+label%3A%22Issue-Bug%22) are parts of Intelligent Terminal that are not working the right way. Fixing these is generally a matter of debugging the broken functionality and correcting the code.
-* ["Tasks"](https://github.com/microsoft/intelligent-terminal/issues?q=is%3Aopen+is%3Aissue+label%3A%22Issue-Task%22) are usually smaller pieces of new functionality that don't yet exist. They generally:
+Generally, we categorize issues in the following way, which is largely derived from our old internal work tracking system:
+* ["Bugs"](https://github.com/microsoft/intelligent-terminal/issues?q=is%3Aopen+is%3Aissue+label%3A%22Issue-Bug%22+) are parts of the Terminal & Console that are not quite working the right way. There's code to already support some scenario, but it's not quite working right. Fixing these is generally a matter of debugging the broken functionality and fixing the wrong code.
+* ["Tasks"](https://github.com/microsoft/intelligent-terminal/issues?q=is%3Aopen+is%3Aissue+label%3A%22Issue-Task%22+) are usually new pieces of functionality that aren't yet implemented for the Terminal/Console. These are usually smaller features, which we believe
   - could be a single, atomic PR
-  - don't require much design consideration, or we've already written a spec for the larger feature they belong to.
-* ["Features"](https://github.com/microsoft/intelligent-terminal/issues?q=is%3Aopen+is%3Aissue+label%3A%22Issue-Feature%22) are larger pieces of new functionality that may require design discussion, new settings, or a spec written before development begins (see below).
+  - Don't require much design consideration, or we've already written the spec for the larger feature they belong to.
+* ["Features"](https://github.com/microsoft/intelligent-terminal/issues?q=is%3Aopen+is%3Aissue+label%3A%22Issue-Feature%22+) are larger pieces of new functionality. These are usually things we believe would require larger discussion of how they should be implemented, or they'll require some complicated new settings. They might just be features that are composed of many individual tasks. Often times, with features, we like to have a spec written before development work is started, to make sure we're all on the same page (see below).
 
-Bugs and tasks are the easiest to get started with, but don't shy away from features either.
+Bugs and tasks are obviously the easiest to get started with, but don't feel afraid of features either! We've had some community members contribute some amazing "feature"-level work to the Terminal (albeit, with lots of discussion 😄).
 
 
 Often, we like to assign issues that generally belong to somebody's area of expertise to the team member that owns that area. This doesn't mean the community can't jump in -- they should reach out and have a chat with the assignee to see if it'd okay to take. If an issue's been assigned more than a month ago, there's a good chance it's fair game to try yourself.
@@ -123,7 +125,7 @@ Some issues/features may be quick and simple to describe and understand. For suc
 
 Small issues that do not require a spec will be labelled `Issue-Bug` or `Issue-Task`.
 
-However, some issues/features will require careful thought & formal design before implementation. For these scenarios, we'll request that a spec is written and the associated issue will be labeled `Issue-Feature`.
+However, some issues/features will require careful thought & formal design before implementation. For these scenarios, we'll request that a spec is written and the associated issue will be labeled `Issue-Feature`. More often than not, we'll add such features to the ["Specification Tracker" project](https://github.com/microsoft/terminal/projects/1).
 
 Specs help collaborators discuss different approaches to solve a problem, describe how the feature will behave, how the feature will impact the user, what happens if something goes wrong, etc. Driving towards agreement in a spec, before any code is written, often results in simpler code, and less wasted effort in the long run.
 

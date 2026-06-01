@@ -3,8 +3,7 @@
 > **Note:** This file is **inherited from upstream Windows Terminal**
 > ([`microsoft/terminal`](https://github.com/microsoft/terminal)) and
 > documents the telemetry events emitted by the underlying Windows Terminal
-> / OpenConsole code that Intelligent Terminal forks from. The source links
-> below point to upstream and are pinned to commit `fb71a04`.
+> / OpenConsole code that Intelligent Terminal forks from.
 >
 > **Intelligent Terminal-specific telemetry** (events emitted by WTA,
 > agent-pane lifecycle, autofix, hooks installation, etc.) is **not yet
