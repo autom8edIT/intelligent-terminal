@@ -2502,7 +2502,15 @@ fn codex_status(on_path: bool, bin_path: Option<String>, home: Option<&Path>) ->
         Ok(o) if o.success => Some(parse_codex_marketplace_list(&o.stdout)),
         Ok(_) | Err(_) => None,
     };
-    let plugin = match run_plugin_cli_capture("codex", &["plugin", "list"]) {
+    // `--marketplace wt-local` scopes the listing to just our marketplace
+    // (the only plugin there is wt-agent-hooks). Without this flag Codex
+    // dumps every plugin from every registered marketplace (e.g. the
+    // ~150-entry `openai-curated` snapshot), which is pure noise for our
+    // parser and pollutes the master log.
+    let plugin = match run_plugin_cli_capture(
+        "codex",
+        &["plugin", "list", "--marketplace", MARKETPLACE_NAME],
+    ) {
         Ok(o) if o.success => Some(parse_codex_plugin_list(&o.stdout)),
         Ok(_) | Err(_) => None,
     };
@@ -2852,7 +2860,15 @@ fn read_installed_claude() -> Option<InstalledInfo> {
 /// Returns `None` when the spawn fails, the plugin row is missing,
 /// or the status indicates "not installed" / "available".
 fn read_installed_codex() -> Option<InstalledInfo> {
-    let outcome = run_plugin_cli_capture("codex", &["plugin", "list"]).ok()?;
+    // Scope the listing to our marketplace; otherwise Codex prints every
+    // plugin from every registered marketplace (~150 lines from the
+    // built-in `openai-curated` snapshot) which is wasted work and
+    // pollutes the master log.
+    let outcome = run_plugin_cli_capture(
+        "codex",
+        &["plugin", "list", "--marketplace", MARKETPLACE_NAME],
+    )
+    .ok()?;
     if !outcome.success {
         return None;
     }
