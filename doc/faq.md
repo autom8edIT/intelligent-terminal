@@ -50,18 +50,7 @@ This only affects the first tab of the first launch — subsequent tabs and subs
 
 ## 6. Why is there no model picker for the delegate agent in Settings?
 
-The Settings → Agent page exposes a **Model** dropdown for the **agent pane** agent, but there is no equivalent control for the **delegate agent** (the agent invoked by <kbd>Alt+Shift+/</kbd>, <kbd>Alt+Shift+B</kbd>, and the `?<prompt>` command-palette syntax). The delegate currently always runs against its agent CLI's default model.
-
-**Workaround:** The underlying `delegateModel` setting exists and is honored at runtime — you can set it directly in `settings.json`:
-
-```jsonc
-{
-    "delegateAgent": "copilot",
-    "delegateModel": "gpt-5"   // or any model string your delegate CLI accepts
-}
-```
-
-Save the file and Intelligent Terminal will pick the new value up on the next delegate launch. A Settings UI control is planned for a later release.
+The Settings → Agent page exposes a **Model** dropdown for the **agent pane** agent, but there is no equivalent control for the **delegate agent** (the agent invoked by <kbd>Alt+Shift+/</kbd>, <kbd>Alt+Shift+B</kbd>, and the `?<prompt>` command-palette syntax). The delegate currently always runs against its agent CLI's default model. A Settings UI control for this is planned for a later release.
 
 ## 7. Why doesn't Agent Management show my delegate-agent sessions?
 
