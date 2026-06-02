@@ -25,10 +25,10 @@ The FRE only sets up the session-tracking hooks for the agents you went through 
 
 **Workaround:**
 
-1. **Make sure the prerequisites are in place.** Follow the steps in [`installing-dependencies.md`](./installing-dependencies.md) that match your agent — install Node.js LTS and the agent's own CLI (via `npm install -g <package>`). The ACP wrapper itself requires no install action; it will be downloaded automatically the first time the agent is launched:
-   - Claude: [Steps 3.2.1 – 3.2.3](./installing-dependencies.md#32-claude-code-bring-your-own)
-   - Codex: [Steps 3.3.1 – 3.3.3](./installing-dependencies.md#33-openai-codex-bring-your-own)
-   - Gemini: [Section 3.4](./installing-dependencies.md#34-gemini-cli-bring-your-own)
+1. **Make sure the prerequisites are in place.** Follow the steps in [`installing-dependencies.md`](./installing-dependencies.md) that match your agent — install Node.js LTS and the agent's own CLI (via `npm install -g <package>`):
+   - Claude: [Steps 3.2.1 – 3.2.3](./installing-dependencies.md#32-claude-code-bring-your-own) — Intelligent Terminal launches Claude through an ACP wrapper that is fetched automatically via `npx` on first launch.
+   - Codex: [Steps 3.3.1 – 3.3.3](./installing-dependencies.md#33-openai-codex-bring-your-own) — same wrapper-via-`npx` pattern as Claude.
+   - Gemini: [Section 3.4](./installing-dependencies.md#34-gemini-cli-bring-your-own) — Gemini speaks ACP natively, so no wrapper is needed; just install the CLI itself.
 
 2. **Re-install the session-tracking hooks.** Open Intelligent Terminal **Settings → Agent**, scroll to the **Agent session tracking (hooks)** row ("Track sessions across agents. Required for agent session management."), expand it, and click the **Install hooks** button next to *Install agent hook script*. This wires the newly installed CLI into agent session management so its sessions show up in the panel.
 
