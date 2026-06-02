@@ -32,17 +32,13 @@ The FRE only sets up the session-tracking hooks for the agents you went through 
 
 2. **Re-install the session-tracking hooks.** Open Intelligent Terminal **Settings → Agent**, scroll to the **Agent session tracking (hooks)** row ("Track sessions across agents. Required for agent session management."), expand it, and click the **Install hooks** button next to *Install agent hook script*. This wires the newly installed CLI into Agent Management so its sessions show up in the panel.
 
-## 4. Why does the Model dropdown take a while to populate after I change agents?
+## 4. Why does the Model dropdown stay greyed out / show "default" after I change agents?
 
-After you change the **agent** in Settings → Agent (or save a custom-command agent), the **Model** dropdown for that agent briefly shows nothing (or stays disabled), then populates a few seconds later.
+After you change the **agent** in Settings → Agent (or save a custom-command agent), the **Model** dropdown for that agent first appears greyed out with `default` selected, then becomes enabled and populates a few seconds later.
 
-This isn't a freeze — Intelligent Terminal is running a one-shot `wta probe-models` against the newly selected CLI in the background. It does a full ACP handshake (`initialize` + a throwaway `session/new`) so the agent can tell us which models it actually offers, then exits and the dropdown re-renders from the result. How long that takes is dictated by the agent's own startup and ACP response time:
+This isn't a freeze — Intelligent Terminal is doing a one-shot ACP handshake against the newly selected CLI in the background to ask which models it offers. How long that takes depends on the agent's own responsiveness and your network connection at that moment.
 
-- A cached / warm agent typically returns in **under 2 seconds**.
-- A bring-your-own agent (Claude / Codex / Gemini) on a cold `npx` cache can take noticeably longer the first time, because `npx` has to download the ACP wrapper before the agent can even start. Subsequent probes hit the cache and are fast.
-- The probe is capped at **40 seconds** total (25 s for `initialize` on `npx`-launched agents + 10 s for `session/new` + slack). If it doesn't complete in time, Intelligent Terminal falls back to a free-form model textbox and you can type a model name manually.
-
-**Workaround:** just wait. If the dropdown is still empty after ~40 seconds, type your model name into the textbox that appears in place of the dropdown, or check `wta-probe.log` in the logs folder (use the **Report a bug (collect logs)** command palette action to grab it) to see why the probe failed.
+The fastest way to confirm everything is healthy: open the **agent pane** for that agent. If it shows **Connected**, the Model dropdown in Settings is ready and you can pick a model. If the agent pane reports a connection timeout instead, run `/restart` inside the agent pane — that's the easiest way to retry the connection.
 
 ## 5. Why doesn't Agent Management show my session on the first tab right after I install?
 
