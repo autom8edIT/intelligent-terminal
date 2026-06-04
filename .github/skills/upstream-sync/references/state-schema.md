@@ -5,6 +5,9 @@ Path: `.github/upstream-sync/state.json` (committed on `main`).
 ```jsonc
 {
   "version": 1,
+
+  // Provenance for the baseline below. v1 scripts intentionally sync
+  // microsoft/terminal main; these fields are not runtime configuration.
   "upstream_remote_url": "https://github.com/microsoft/terminal.git",
   "upstream_branch": "main",
 

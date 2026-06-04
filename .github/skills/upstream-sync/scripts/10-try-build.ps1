@@ -65,8 +65,10 @@ try {
 
     $proc = [System.Diagnostics.Process]::Start($psi)
 
-    # Tee stdout/stderr into the log file as the build runs.
-    $writer = [System.IO.StreamWriter]::new($logPath, $false, [System.Text.UTF8Encoding]::new($false))
+    # Tee stdout/stderr into the log file as the build runs. The synchronized
+    # wrapper serializes concurrent stdout/stderr DataReceived callbacks.
+    $baseWriter = [System.IO.StreamWriter]::new($logPath, $false, [System.Text.UTF8Encoding]::new($false))
+    $writer = [System.IO.TextWriter]::Synchronized($baseWriter)
     $proc.add_OutputDataReceived({ param($s,$e) if ($null -ne $e.Data) { $writer.WriteLine($e.Data) } })
     $proc.add_ErrorDataReceived({  param($s,$e) if ($null -ne $e.Data) { $writer.WriteLine($e.Data) } })
     $proc.BeginOutputReadLine()

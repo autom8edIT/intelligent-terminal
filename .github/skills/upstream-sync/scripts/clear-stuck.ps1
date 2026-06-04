@@ -41,6 +41,7 @@ if (-not ($tier3 -or $tier4)) {
     return
 }
 
+Assert-CleanWorktree
 Ensure-UpstreamRemote
 git fetch upstream main --no-tags | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "git fetch upstream main failed; refusing to clear stuck-lock against stale refs." }
