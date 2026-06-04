@@ -115,11 +115,17 @@ if ($AutoMergeStrategy -ne 'none') {
     }
 }
 
-# Backfill PR URL into state.last_run on the branch (best-effort follow-up
-# commit). If this push fails the PR is still open and the baseline is still
-# advanced on the branch — the only loss is the pr_url field in state.history,
-# which is recoverable from the PR itself.
+# Backfill PR URL into state.last_run AND state.history[0] (best-effort
+# follow-up commit). The same run summary object was prepended to history
+# earlier in this script — keep both views in sync so 'sessions' reports
+# and bug-reports can find the PR link from either field. If this push
+# fails the PR is still open and the baseline is still advanced on the
+# branch — the only loss is the pr_url field in state, which is
+# recoverable from the PR itself.
 $state.last_run.pr_url = $Ctx.PrUrl
+if ($state.history -and $state.history.Count -gt 0) {
+    $state.history[0].pr_url = $Ctx.PrUrl
+}
 Write-State $state
 git add -- (Get-StatePath) | Out-Null
 git commit -m "chore(upstream-sync): record PR url" | Out-Host

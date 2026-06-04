@@ -175,10 +175,9 @@ try {
         blocking = $blocking
     }
     $doc | ConvertTo-Json -Depth 8
-    exit 0
 }
 catch {
     Write-Error $_.Exception.Message
     Write-Error $_.ScriptStackTrace
-    exit 20
+    throw
 }

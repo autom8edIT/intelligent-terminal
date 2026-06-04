@@ -97,10 +97,9 @@ try {
         ok                 = $ok
     }
     $doc | ConvertTo-Json -Depth 4
-    exit 0
 }
 catch {
     Write-Error $_.Exception.Message
     Write-Error $_.ScriptStackTrace
-    exit 20
+    throw
 }
