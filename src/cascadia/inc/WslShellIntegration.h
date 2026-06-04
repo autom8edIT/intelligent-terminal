@@ -164,23 +164,45 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
                 // prior values of any length survive (a fixed buffer
                 // would silently fail to restore when the prior value
                 // exceeds the buffer).
+                //
+                // Empty-value handling: GetEnvironmentVariableW(..., nullptr, 0)
+                // returns 1 (just the NUL terminator) when the variable
+                // exists but is set to an empty string, and 0 only when
+                // the variable is genuinely unset. We must distinguish
+                // those two cases so the restore doesn't accidentally
+                // delete an empty-but-set variable. The buffer-write
+                // call's "successful" return is `written < needed` and
+                // `written` may legally be 0 (for an empty value), so
+                // hadPrev is anchored on the size probe, not the read.
                 std::wstring prevVal;
                 bool hadPrev = false;
                 {
                     const auto needed = GetEnvironmentVariableW(L"WSL_UTF8", nullptr, 0);
                     if (needed > 0)
                     {
-                        prevVal.resize(needed);
-                        const auto written = GetEnvironmentVariableW(L"WSL_UTF8", prevVal.data(), needed);
-                        if (written > 0 && written < needed)
+                        // Variable exists (possibly empty).
+                        hadPrev = true;
+                        if (needed > 1)
                         {
-                            prevVal.resize(written);
-                            hadPrev = true;
+                            prevVal.resize(needed);
+                            const auto written = GetEnvironmentVariableW(L"WSL_UTF8", prevVal.data(), needed);
+                            if (written > 0 && written < needed)
+                            {
+                                prevVal.resize(written);
+                            }
+                            else
+                            {
+                                // Raced with another writer that just
+                                // changed/removed the value between the
+                                // probe and the read. Best-effort: treat
+                                // as no prior value rather than restoring
+                                // garbage.
+                                prevVal.clear();
+                                hadPrev = false;
+                            }
                         }
-                        else
-                        {
-                            prevVal.clear();
-                        }
+                        // needed == 1 → empty string; prevVal stays empty,
+                        // hadPrev stays true (so restore sets back to "").
                     }
                 }
 
