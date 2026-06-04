@@ -28,7 +28,7 @@
     <!-- Note: The "Default terminal application" policy is intentionally NOT defined here.
          It is provided by the Windows Terminal ADMX and writes to the same registry key
          (Console\%%Startup\DelegationTerminal), so duplicating it here would surface two
-         identical "Default Terminal" entries in gpedit. See issue #212. -->
+         identical "Default Terminal" entries in the Group Policy Editor. See issue #212. -->
     <!-- Agent GPO policies -->
     <policy name="AllowedAgents" class="Both" displayName="$(string.AllowedAgents)" explainText="$(string.AllowedAgentsText)" presentation="$(presentation.AllowedAgents)" key="Software\Policies\Microsoft\IntelligentTerminal">
       <parentCategory ref="IntelligentTerminal" />
