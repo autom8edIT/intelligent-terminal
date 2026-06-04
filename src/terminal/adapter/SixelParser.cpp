@@ -96,7 +96,17 @@ std::function<bool(wchar_t)> SixelParser::DefineImage(const VTInt macroParameter
             }
             catch (...)
             {
-                // Ignore all further content.
+                // We can't continue parsing this sixel sequence, but we still
+                // need to run end-of-sequence cleanup — most importantly,
+                // restoring the text cursor visibility we hid at sequence
+                // start (see _updateTextCursor). Without this, an exception
+                // mid-sequence leaves the cursor hidden until the next sixel
+                // sequence completes successfully.
+                try
+                {
+                    _maybeFlushImageBuffer(true);
+                }
+                CATCH_LOG();
                 return false;
             }
             return true;
@@ -244,7 +254,7 @@ void SixelParser::_executeNextLine()
     _maybeFlushImageBuffer();
     // If we don't have any available pixel height, that means the image has
     // extended beyond the bottom of the display and we haven't triggered a
-    // a scroll (because sixel display mode is enabled). In this state, there
+    // scroll (because sixel display mode is enabled). In this state, there
     // is no point in extending the image any further, because the additional
     // content will never be seen, so we'll just be wasting memory.
     if (_availablePixelHeight > 0)
