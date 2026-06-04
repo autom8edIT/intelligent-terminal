@@ -124,7 +124,7 @@ That constraint shapes the response policy:
 | Comment type | Where to fix |
 |---|---|
 | **Build-blocking** (compile error, dedup of resw/manifest collisions exposed only at build time, CI gate failure on the sync PR itself) | **One** focused extra commit on the sync branch. The cherry-pick PR is what's broken; the cherry-pick PR is what gets the fix. |
-| **Everything else** — code-quality findings, logic-bug suggestions, translation corrections, spelling-allowlist migrations, typo fixes, doc nits, design pushback | **Follow-up PR** on top of the cherry-pick PR (see [references/follow-up-pr.md](./references/follow-up-pr.md)) |
+| **Everything else** — code-quality findings, logic-bug suggestions, translation corrections, spelling-allowlist migrations, typo fixes, doc nits, design feedback | **Follow-up PR** on top of the cherry-pick PR (see [references/follow-up-pr.md](./references/follow-up-pr.md)) |
 
 **Why split.** A reviewer scanning the cherry-pick PR is auditing
 "did the sync engine faithfully apply the upstream batch?" Mixing

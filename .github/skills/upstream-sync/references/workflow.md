@@ -211,7 +211,7 @@ not by reviewer:
 | Comment kind | Where to fix |
 |---|---|
 | Build-blocking on the sync PR — compile errors, dedup of conflicts surfaced only at build time, sync-PR CI gate failures (check-spelling, lint, format) genuinely caused by the cherry-picked content | **Sync PR**, in **one** focused extra commit. Anything more than one extra commit is a smell. |
-| Everything else — Copilot correctness findings, logic suggestions, translation corrections, spelling allow/expect migrations, doc/comment typos, design pushback | **Follow-up PR** based on the sync PR's HEAD. |
+| Everything else — Copilot correctness findings, logic suggestions, translation corrections, spelling allow/expect migrations, doc/comment typos, design feedback | **Follow-up PR** based on the sync PR's HEAD. |
 
 The cherry-pick PR's value to a reviewer is "N small commits, each
 faithful to one upstream commit, plus the bare minimum to make CI

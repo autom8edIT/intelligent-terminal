@@ -12,7 +12,7 @@ green**". Two failure modes break that:
 1. **Squashing fixes into the sync PR** (e.g. amending the cherry-pick
    commits or adding many follow-up commits to the same branch)
    destroys per-commit attribution, original author/committer dates, and
-   makes "which upstream commit broke X?" un-bisectable.
+   makes "which upstream commit broke X?" impossible to `git bisect`.
 2. **Substantive feedback bundled into the sync PR** forces the
    reviewer to mentally subtract those commits from every
    upstream-comparison check ("is this difference here because the
