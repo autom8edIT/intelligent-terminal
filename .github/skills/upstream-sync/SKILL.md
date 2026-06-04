@@ -1,0 +1,149 @@
+---
+name: upstream-sync
+description: 'Periodically sync new commits from microsoft/terminal into this manually-forked intelligent-terminal repo by cherry-picking commit-by-commit onto a dated sync branch, auto-skipping revert pairs and empty commits, auto-resolving known take-upstream files, and stopping cleanly on genuine conflicts with a written report and a GitHub issue. Use when the user asks to "sync upstream", "pull from microsoft/terminal", "run upstream sync", "catch up to upstream", or wires this into a scheduler (weekly/daily). Designed to be safe under repeated unattended runs.'
+license: Complete terms in LICENSE.txt
+---
+
+# Upstream Sync (microsoft/terminal → intelligent-terminal)
+
+Cherry-pick commit-by-commit from `https://github.com/microsoft/terminal`
+into this fork, preserving per-commit attribution, skipping commits that
+cancel each other out, and stopping cleanly the moment a human-judgement
+conflict appears.
+
+## When to Use This Skill
+
+- User asks to "sync upstream", "pull from microsoft/terminal", "catch up to upstream", or "run upstream sync".
+- A scheduler (Task Scheduler, cron, GitHub Actions) invokes
+  [`scripts/04-run-batch.ps1`](./scripts/04-run-batch.ps1) on a weekly/daily cadence.
+- The previous run left a stuck-lock and the human has finished resolving
+  the conflict — use [`scripts/clear-stuck.ps1`](./scripts/clear-stuck.ps1) and re-run.
+
+## When NOT to Use This Skill
+
+- The user wants a **one-shot rebase** of a single feature branch onto upstream — that's a normal `git rebase`, not this skill.
+- The fork has never been initialized (`state.json` missing) — first do the one-time bootstrap from [references/bootstrap.md](./references/bootstrap.md).
+- A stuck-lock is set — do not re-run; resolve the conflict on the stuck branch first.
+
+## Prerequisites
+
+- `git` 2.30+ and `gh` CLI authenticated against `microsoft/intelligent-terminal`.
+- PowerShell 7+ (`pwsh`) on PATH.
+- Remote named `upstream` pointing at `https://github.com/microsoft/terminal.git`
+  (the scripts create it if missing).
+- `state.json` initialized once (see [references/bootstrap.md](./references/bootstrap.md)).
+
+## Why Cherry-Pick (Not Rebase, Not Merge)
+
+| Approach | Why rejected / chosen |
+|---|---|
+| **Rebase** `upstream/main` | ❌ Fork history contains old "Merge upstream" commits; rebase replays them and explodes conflicts. Verified failure on sister repo `agentic-terminal`. |
+| **Merge** `upstream/main` | ⚠️ Works, but collapses the whole sync into one blob commit — kills per-commit review, kills `git bisect`. |
+| **Cherry-pick commit-by-commit** | ✅ Preserves authorship + per-commit content, allows mechanical revert-pair skipping, produces a reviewable PR with N small commits. |
+
+## Step-by-Step Workflow
+
+The scheduler entrypoint is a single PowerShell script. Full procedure
+with commands, exit codes, and the per-step delegation map lives in
+[references/workflow.md](./references/workflow.md).
+
+```
+fetch upstream → compute pending → drop revert pairs → drop empties
+  → create sync branch → cherry-pick loop (auto-resolve T0/T1, abort on T3)
+  → write report (always) → push + open PR  OR  open stuck issue + lock
+```
+
+**Run it:**
+
+```pwsh
+# Default: open a PR, let a human pick the merge strategy (must be rebase or merge — NOT squash)
+pwsh .github/skills/upstream-sync/scripts/04-run-batch.ps1
+
+# Open a PR AND arm GitHub auto-merge with rebase strategy (hands-off once CI/approvals pass)
+pwsh .github/skills/upstream-sync/scripts/04-run-batch.ps1 -AutoMergeStrategy rebase
+
+# Skip the PR entirely — fast-forward main to the sync tip. Requires admin/bypass on main.
+pwsh .github/skills/upstream-sync/scripts/04-run-batch.ps1 -PushDirectToMain
+
+# Compute & report without picking
+pwsh .github/skills/upstream-sync/scripts/04-run-batch.ps1 -DryRun
+```
+
+### Finalize modes — what each preserves
+
+| Mode | Per-commit content | Order on main | Original author date | Reviewer checkpoint | Requires admin? |
+|---|---|---|---|---|---|
+| PR + **rebase-merge** | ✅ | ✅ | ✅ | ✅ | No |
+| PR + **merge commit** | ✅ | ✅ | ✅ | ✅ | No |
+| PR + **squash** | ❌ collapsed | ❌ | ⚠️ folded | ✅ | No |
+| **`-PushDirectToMain`** | ✅ | ✅ | ✅ | ❌ | Yes (push to main) |
+
+Committer date is "now" in every mode (git default for cherry-pick) —
+that's the semantically correct "when this fork landed it" timestamp.
+
+Resumability is built into the state file — re-running after a successful
+run is a fast no-op (nothing pending), and re-running while the stuck-lock
+is set exits early without touching the branch.
+
+## Gotchas
+
+- **Never squash-merge the sync PR.** Squash collapses every cherry-picked
+  upstream commit into one, destroying per-commit attribution, original
+  author dates, and `git bisect` resolution. Use **"Rebase and merge"**
+  (preferred) or **"Create a merge commit"**. The PR body opens with a
+  banner reminding the reviewer; `-AutoMergeStrategy rebase` arms GitHub
+  auto-merge with the right strategy so a tired reviewer can't get it
+  wrong.
+- **Never rebase `upstream/main` onto this fork.** Old "Merge upstream"
+  commits in the fork history replay and cascade conflicts. Use cherry-pick.
+  Verified failure mode on the sister repo `agentic-terminal`.
+- **`.github/workflows/spelling2.yml` always conflicts** and the correct
+  resolution is always "take upstream wholesale". The Tier-0 list in
+  [references/known-conflicts.md](./references/known-conflicts.md) handles
+  this automatically — extend the list when you discover the next file
+  with the same pattern.
+- **`gh pr create` on Windows fails with "Head sha can't be blank"** if the
+  branch is freshly pushed and not yet visible. The finalize script uses
+  `--head <owner>:<branch>` and a 5s retry to work around this — do not
+  "fix" it by removing the retry.
+- **Do not run the scheduler twice while stuck.** The lock in
+  `state.json` makes the second run a no-op, but a human running the
+  script manually with `-Force` will overwrite the stuck branch and lose
+  their in-progress resolution. The `-Force` flag is documented but
+  intentionally not the default.
+- **Cherry-pick over `git revert` style commits is intentional, not skipped.**
+  We only skip revert-pairs where **both** sides are inside the pending
+  range. A revert of a commit we already merged last week must land as a
+  normal pick — otherwise the fork diverges silently.
+- **Always commit `state.json` and `reports/`** so the next scheduler
+  invocation (possibly on a different machine) starts from the right
+  checkpoint. The finalize PR includes the state update.
+- **Never push directly to `main`.** The skill always opens a PR. Direct
+  push bypasses CI and human review of the upstream batch.
+- **CRLF/LF on manifest files.** Cherry-picks normally preserve upstream
+  line endings, but any in-flight resolution touched by an LLM may downgrade
+  to LF. If a Tier-2 resolution touches a `.yml`/`.xml`/`.csproj`/winget
+  manifest, re-normalize before staging — see
+  [references/conflict-triage.md](./references/conflict-triage.md#line-endings).
+
+## Troubleshooting
+
+| Issue | Solution |
+|---|---|
+| `state.json` is missing | Run the one-time bootstrap — see [references/bootstrap.md](./references/bootstrap.md). Do not guess the baseline SHA. |
+| Stuck-lock prevents new run | Resolve the conflict on the stuck branch, open a PR, merge, then run [`scripts/clear-stuck.ps1`](./scripts/clear-stuck.ps1) and re-run the batch. |
+| Cherry-pick reports "empty commit" | Expected for upstream no-op commits and for fork-already-applied patches; the loop auto-resets and marks them skipped. No action needed. |
+| Same file conflicts every run | Add it to the Tier-0 list in [references/known-conflicts.md](./references/known-conflicts.md) with the correct resolution strategy (`take-upstream`, `take-ours`, or `union`). |
+| `gh pr create` returns "Head sha can't be blank" | Retry — the finalize script already does, but on slow networks may need a manual second run. |
+| Report says "no-op" but I expected commits | Run `git fetch upstream main` manually and recompute — the scheduler may have run between upstream pushes. |
+
+## References
+
+- [references/workflow.md](./references/workflow.md) — full per-step procedure with exit codes and delegation map.
+- [references/state-schema.md](./references/state-schema.md) — `state.json` shape and field semantics.
+- [references/bootstrap.md](./references/bootstrap.md) — one-time baseline-SHA discovery and initialization.
+- [references/conflict-triage.md](./references/conflict-triage.md) — Tier 0/1/2/3 resolution rubric with examples.
+- [references/known-conflicts.md](./references/known-conflicts.md) — files that always need a fixed resolution.
+- [references/reporting.md](./references/reporting.md) — report template and stuck-issue template.
+- [scripts/04-run-batch.ps1](./scripts/04-run-batch.ps1) — the scheduler entrypoint.
+- [scripts/clear-stuck.ps1](./scripts/clear-stuck.ps1) — clear the stuck-lock after human resolution.
