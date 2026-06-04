@@ -1,0 +1,113 @@
+<#
+.SYNOPSIS
+  Try build. Runs the configured build command in a razzle environment
+  and captures the result. Default: `cmd /c "tools\razzle.cmd && bz no_clean"`.
+
+.PARAMETER BuildCommand
+  Override the default build command. Must be a string the cmd.exe
+  shell can execute (razzle is cmd-based; PowerShell-keyword chaining
+  like 'if' won't work — keep it cmd-shell-friendly with &&).
+
+.PARAMETER TimeoutMinutes
+  Wall-clock cap. Default 45. On timeout, the build is killed and the
+  result is classified as 'build-inconclusive'.
+
+.PARAMETER LogDir
+  Where to write the full build log. Default:
+  <repo>/.github/upstream-sync/build-logs/.
+
+.OUTPUTS
+  JSON on stdout:
+    {
+      "kind":         "build-ok" | "build-failed" | "build-inconclusive",
+      "exit_code":    <int>,
+      "duration_ms":  <int>,
+      "command":      "<the command that ran>",
+      "log_path":     "<path to full log>",
+      "log_tail":     "<last ~200 lines of output>"
+    }
+
+  Exit codes:
+    0  = wrapper ran (inspect JSON for build status)
+    20 = wrapper itself errored out (couldn't start the build at all)
+#>
+[CmdletBinding()]
+param(
+    [string] $BuildCommand = 'tools\razzle.cmd && bz no_clean',
+    [int]    $TimeoutMinutes = 45,
+    [string] $LogDir
+)
+
+. "$PSScriptRoot/Common.ps1"
+
+try {
+    $root = Get-RepoRoot
+    if (-not $LogDir) {
+        $LogDir = Join-Path $root '.github/upstream-sync/build-logs'
+    }
+    if (-not (Test-Path -LiteralPath $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
+
+    $stamp   = (Get-Date).ToString('yyyy-MM-ddTHHmmss')
+    $logPath = Join-Path $LogDir "$stamp.log"
+
+    $cmdLine = "/c `"cd /d `"$root`" && $BuildCommand`""
+    $started = Get-Date
+
+    # Use Start-Process with redirection so we can both tail and tee.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName               = $env:ComSpec
+    $psi.Arguments              = $cmdLine
+    $psi.WorkingDirectory       = $root
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.UseShellExecute        = $false
+    $psi.CreateNoWindow         = $true
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+
+    # Tee stdout/stderr into the log file as the build runs.
+    $writer = [System.IO.StreamWriter]::new($logPath, $false, [System.Text.UTF8Encoding]::new($false))
+    $proc.add_OutputDataReceived({ param($s,$e) if ($null -ne $e.Data) { $writer.WriteLine($e.Data) } })
+    $proc.add_ErrorDataReceived({  param($s,$e) if ($null -ne $e.Data) { $writer.WriteLine($e.Data) } })
+    $proc.BeginOutputReadLine()
+    $proc.BeginErrorReadLine()
+
+    $timeoutMs = $TimeoutMinutes * 60 * 1000
+    $exited    = $proc.WaitForExit($timeoutMs)
+    $kind      = $null
+    $exitCode  = $null
+
+    if (-not $exited) {
+        try { $proc.Kill($true) } catch { }
+        $kind     = 'build-inconclusive'
+        $exitCode = -1
+    } else {
+        $exitCode = $proc.ExitCode
+        $kind     = if ($exitCode -eq 0) { 'build-ok' } else { 'build-failed' }
+    }
+
+    $writer.Flush(); $writer.Close()
+    $ended      = Get-Date
+    $durationMs = [int]($ended - $started).TotalMilliseconds
+
+    # Capture the last ~200 lines for the report / stuck issue.
+    $tailLines = if (Test-Path -LiteralPath $logPath) {
+        @(Get-Content -LiteralPath $logPath -Tail 200) -join "`n"
+    } else { '' }
+
+    $doc = [ordered] @{
+        kind        = $kind
+        exit_code   = $exitCode
+        duration_ms = $durationMs
+        command     = $BuildCommand
+        log_path    = $logPath
+        log_tail    = $tailLines
+    }
+    $doc | ConvertTo-Json -Depth 4
+    exit 0
+}
+catch {
+    Write-Error $_.Exception.Message
+    Write-Error $_.ScriptStackTrace
+    exit 20
+}

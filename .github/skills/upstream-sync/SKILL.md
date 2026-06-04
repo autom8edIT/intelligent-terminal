@@ -50,8 +50,22 @@ with commands, exit codes, and the per-step delegation map lives in
 ```
 fetch upstream → compute pending → drop revert pairs → drop empties
   → create sync branch → cherry-pick loop (auto-resolve T0/T1, abort on T3)
+  → toolchain preflight → static breakage scan → try-build (Tier-4 gates)
   → write report (always) → push + open PR  OR  open stuck issue + lock
 ```
+
+**Safety guarantees (post-pick validation pipeline).** Even when every
+cherry-pick applies cleanly, content-level breakage can slip in (duplicate
+`.resw` keys from a fork-local commit + an upstream rename touching the
+same names; a take-upstream resolution silently dropping a fork-specific
+warning suppression; etc. — see PR #220 audit). Before any push or PR,
+the orchestrator now runs three hard gates:
+
+1. **Toolchain preflight** ([`scripts/09-toolchain-preflight.ps1`](./scripts/09-toolchain-preflight.ps1)) — verifies the host has the `PlatformToolset` versions the repo requires. Missing → **Tier-4d infra-stuck** (lock set, NO GitHub issue — PR review can't fix host provisioning).
+2. **Static breakage scan** ([`scripts/08-static-scan.ps1`](./scripts/08-static-scan.ps1)) — baseline-diffs `.resw` files for newly-duplicated `<data name>` keys, and regex-checks fork invariants from [`references/fork-invariants.json`](./references/fork-invariants.json). Blocking → **Tier-4a stuck**.
+3. **Try-build** ([`scripts/10-try-build.ps1`](./scripts/10-try-build.ps1)) — runs `tools\razzle.cmd && bz no_clean` with a 45-minute wall-clock cap. Build failed → **Tier-4b stuck**; timeout → **Tier-4c stuck** (unless `-AllowInconclusiveBuild`).
+
+See [references/static-scan.md](./references/static-scan.md), [references/build-verification.md](./references/build-verification.md), and [references/conflict-triage.md](./references/conflict-triage.md) Tier-4 for details.
 
 **Run it:**
 
@@ -67,6 +81,19 @@ pwsh .github/skills/upstream-sync/scripts/04-run-batch.ps1 -PushDirectToMain
 
 # Compute & report without picking
 pwsh .github/skills/upstream-sync/scripts/04-run-batch.ps1 -DryRun
+
+# Skip the static scan (debugging only — schedulers must run it)
+pwsh .github/skills/upstream-sync/scripts/04-run-batch.ps1 -SkipStaticScan
+
+# Skip the try-build (debugging only — schedulers must run it).
+# Also skips toolchain preflight since they share the same infra prerequisite.
+pwsh .github/skills/upstream-sync/scripts/04-run-batch.ps1 -SkipBuild
+
+# Don't treat a build timeout as Tier-4 stuck (dev opt-in; never in a scheduler)
+pwsh .github/skills/upstream-sync/scripts/04-run-batch.ps1 -AllowInconclusiveBuild
+
+# Override build timeout (default 45 minutes)
+pwsh .github/skills/upstream-sync/scripts/04-run-batch.ps1 -BuildTimeoutMinutes 60
 ```
 
 ### Finalize modes — what each preserves
@@ -142,8 +169,11 @@ is set exits early without touching the branch.
 - [references/workflow.md](./references/workflow.md) — full per-step procedure with exit codes and delegation map.
 - [references/state-schema.md](./references/state-schema.md) — `state.json` shape and field semantics.
 - [references/bootstrap.md](./references/bootstrap.md) — one-time baseline-SHA discovery and initialization.
-- [references/conflict-triage.md](./references/conflict-triage.md) — Tier 0/1/2/3 resolution rubric with examples.
+- [references/conflict-triage.md](./references/conflict-triage.md) — Tier 0/1/2/3/4 resolution rubric with examples.
 - [references/known-conflicts.md](./references/known-conflicts.md) — files that always need a fixed resolution.
+- [references/static-scan.md](./references/static-scan.md) — post-pick static breakage scan rules.
+- [references/fork-invariants.json](./references/fork-invariants.json) — fork-specific patterns that must survive any upstream pick.
+- [references/build-verification.md](./references/build-verification.md) — try-build pipeline + toolchain preflight policy.
 - [references/reporting.md](./references/reporting.md) — report template and stuck-issue template.
 - [scripts/04-run-batch.ps1](./scripts/04-run-batch.ps1) — the scheduler entrypoint.
 - [scripts/clear-stuck.ps1](./scripts/clear-stuck.ps1) — clear the stuck-lock after human resolution.

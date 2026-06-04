@@ -82,19 +82,35 @@ function Format-ReportFilename {
 
 function New-RunContext {
     [pscustomobject] @{
-        StartedAt   = Get-Date
-        Host        = $env:COMPUTERNAME
-        Branch      = "upstream-sync/$((Get-Date).ToString('yyyy-MM-dd'))"
-        Picked      = @()
-        DroppedPairs= @()
-        SkippedEmpty= @()
-        Tier0       = @()
-        Tier2       = @()
-        StuckSha    = $null
-        StuckPaths  = @()
-        Status      = 'unknown'
-        ReportPath  = $null
-        PrUrl       = $null
-        IssueUrl    = $null
+        StartedAt        = Get-Date
+        Host             = $env:COMPUTERNAME
+        Branch           = "upstream-sync/$((Get-Date).ToString('yyyy-MM-dd'))"
+        Picked           = @()
+        DroppedPairs     = @()
+        SkippedEmpty     = @()
+        Tier0            = @()
+        Tier2            = @()
+        StuckSha         = $null
+        StuckPaths       = @()
+        # Tier-4 (post-pick validation failure):
+        StuckValidation  = $null   # hashtable { kind, base, head, range, findings_hash, branch, at, issue_url, ... }
+        # Validation step results (whether or not they blocked):
+        Preflight        = $null   # JSON from 09-toolchain-preflight.ps1
+        Scan             = $null   # JSON from 08-static-scan.ps1
+        Build            = $null   # JSON from 10-try-build.ps1
+        Status           = 'unknown'
+        ReportPath       = $null
+        PrUrl            = $null
+        IssueUrl         = $null
     }
+}
+
+function Get-FindingsHash {
+    param([Parameter(Mandatory)] $Findings)
+    # Stable hash of a findings list — used as a stuck_validation.findings_hash
+    # so repeat-runs of the same broken batch can be detected (and not re-issued).
+    $norm = ($Findings | ConvertTo-Json -Depth 8 -Compress)
+    $sha  = [System.Security.Cryptography.SHA256]::Create()
+    $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($norm))
+    return ([System.BitConverter]::ToString($hash) -replace '-','').ToLowerInvariant().Substring(0,16)
 }

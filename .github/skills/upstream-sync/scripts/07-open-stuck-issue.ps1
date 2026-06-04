@@ -50,7 +50,8 @@ $tmp  = New-TemporaryFile
 # Ensure label exists (best-effort; ignore if already present).
 gh label create 'upstream-sync-stuck' --color 'B60205' --description 'Upstream sync blocked on a manual conflict' 2>$null | Out-Null
 
-$issueUrl = gh issue create --title $title --label 'upstream-sync-stuck' --body-file $tmp 2>&1 | Select-Object -Last 1
+# -R is explicit because the `upstream` remote can make gh default to microsoft/terminal.
+$issueUrl = gh issue create -R microsoft/intelligent-terminal --title $title --label 'upstream-sync-stuck' --body-file $tmp 2>&1 | Select-Object -Last 1
 Remove-Item $tmp -Force
 if ($LASTEXITCODE -ne 0 -or $issueUrl -notmatch '^https://github.com/') {
     throw "gh issue create failed: $issueUrl"

@@ -1,28 +1,42 @@
 <#
 .SYNOPSIS
-  Clear the stuck-lock after a human has merged the manual-resolution PR.
+  Clear the stuck-lock (Tier-3 or Tier-4) after a human has resolved
+  the underlying issue.
 
 .DESCRIPTION
-  Validates that -ResolvedThroughSha is an ancestor of upstream/main and
-  is at least as new as the stuck SHA, then advances last_synced to it
-  and clears stuck_on_sha / stuck_branch / stuck_at / stuck_issue_url.
-  Commits state.json on main.
+  Detects which kind of stuck is currently set in state.json and clears it:
+
+  - Tier-3 (stuck_on_sha set): the scheduler stopped mid-cherry-pick on
+    a real merge conflict. -ResolvedThroughSha is REQUIRED and is
+    validated to be on upstream/main and >= stuck_on_sha; it becomes
+    the new last_synced_upstream_sha.
+
+  - Tier-4 (stuck_validation set): the picks were clean but post-pick
+    validation failed (static scan / build / toolchain). The human
+    fixed it (e.g. resw dedup, restored fork invariant, fixed build,
+    or provisioned the missing toolset). -ResolvedThroughSha is
+    OPTIONAL — if omitted, last_synced_upstream_sha is left as-is so
+    the next scheduler run re-attempts the same range; if provided,
+    it advances the watermark just like Tier-3.
 
 .PARAMETER ResolvedThroughSha
-  The upstream SHA the manual-resolution PR brought the fork up to.
-  This becomes the new last_synced_upstream_sha. Typically this is the
-  same SHA that was stuck — the next scheduled run picks up from
-  ResolvedThroughSha + 1.
+  See above.
+
+.PARAMETER Reason
+  Optional human-readable note recorded in the history entry.
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)] [string] $ResolvedThroughSha
+    [string] $ResolvedThroughSha,
+    [string] $Reason = ''
 )
 
 . "$PSScriptRoot/Common.ps1"
 
 $state = Read-State
-if (-not $state.stuck_on_sha) {
+$tier3 = [bool] $state.stuck_on_sha
+$tier4 = [bool] $state.stuck_validation
+if (-not ($tier3 -or $tier4)) {
     Write-Warning "No stuck-lock is set. Nothing to clear."
     return
 }
@@ -30,32 +44,56 @@ if (-not $state.stuck_on_sha) {
 Ensure-UpstreamRemote
 git fetch upstream main --no-tags | Out-Null
 
-# Validate the new SHA is on upstream/main.
-$null = git merge-base --is-ancestor $ResolvedThroughSha upstream/main
-if ($LASTEXITCODE -ne 0) {
-    throw "ResolvedThroughSha $ResolvedThroughSha is not on upstream/main. Refusing to clear lock."
-}
-
-# Validate it's >= the stuck SHA (i.e., stuck is ancestor of resolved).
-$null = git merge-base --is-ancestor $state.stuck_on_sha $ResolvedThroughSha
-if ($LASTEXITCODE -ne 0) {
-    throw "stuck_on_sha $($state.stuck_on_sha) is not an ancestor of $ResolvedThroughSha. Refusing — pass the same SHA or a later one."
-}
-
 git switch main | Out-Null
 git pull --ff-only | Out-Null
 
-$state.last_synced_upstream_sha = $ResolvedThroughSha
-$state.stuck_on_sha    = $null
-$state.stuck_branch    = $null
-$state.stuck_at        = $null
-$state.stuck_issue_url = $null
+if ($tier3) {
+    if (-not $ResolvedThroughSha) {
+        throw "Tier-3 stuck_on_sha is set ($($state.stuck_on_sha)) — -ResolvedThroughSha is required to clear it."
+    }
+    $null = git merge-base --is-ancestor $ResolvedThroughSha upstream/main
+    if ($LASTEXITCODE -ne 0) {
+        throw "ResolvedThroughSha $ResolvedThroughSha is not on upstream/main. Refusing to clear lock."
+    }
+    $null = git merge-base --is-ancestor $state.stuck_on_sha $ResolvedThroughSha
+    if ($LASTEXITCODE -ne 0) {
+        throw "stuck_on_sha $($state.stuck_on_sha) is not an ancestor of $ResolvedThroughSha. Refusing — pass the same SHA or a later one."
+    }
+    $state.last_synced_upstream_sha = $ResolvedThroughSha
+    $state.stuck_on_sha    = $null
+    $state.stuck_branch    = $null
+    $state.stuck_at        = $null
+    $state.stuck_issue_url = $null
+}
+
+if ($tier4) {
+    if ($ResolvedThroughSha) {
+        $null = git merge-base --is-ancestor $ResolvedThroughSha upstream/main
+        if ($LASTEXITCODE -ne 0) {
+            throw "ResolvedThroughSha $ResolvedThroughSha is not on upstream/main. Refusing to clear lock."
+        }
+        $state.last_synced_upstream_sha = $ResolvedThroughSha
+    }
+    $state.stuck_validation = $null
+}
+
+# Append a history note so we can see when locks were cleared.
+$entry = [ordered] @{
+    at       = Format-Iso8601
+    host     = $env:COMPUTERNAME
+    status   = if ($tier3 -and $tier4) { 'cleared-stuck (tier3+tier4)' }
+               elseif ($tier3)         { 'cleared-stuck (tier3)' }
+               else                    { 'cleared-stuck (tier4)' }
+    advanced_to = $ResolvedThroughSha
+    reason   = $Reason
+}
+$state.history = @($entry) + @($state.history) | Select-Object -First 20
 Write-State $state
 
 git add -- (Get-StatePath) | Out-Null
-git commit -m "chore(upstream-sync): clear stuck-lock at $($ResolvedThroughSha.Substring(0,9))" | Out-Host
+$shortLabel = if ($ResolvedThroughSha) { $ResolvedThroughSha.Substring(0,9) } else { 'no-advance' }
+git commit -m "chore(upstream-sync): clear stuck-lock ($shortLabel)" | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "git commit failed (state unchanged?); lock is NOT cleared on origin/main." }
-
 git push origin main | Out-Host
-if ($LASTEXITCODE -ne 0) { throw "git push origin main failed — lock cleared locally only. Push manually before the next scheduler tick." }
-Write-Host "Stuck-lock cleared. Next scheduled run will resume from $($ResolvedThroughSha.Substring(0,9))+1." -ForegroundColor Green
+if ($LASTEXITCODE -ne 0) { throw "git push origin main failed — lock cleared locally only. Push manually." }
+Write-Host "Stuck-lock cleared." -ForegroundColor Green

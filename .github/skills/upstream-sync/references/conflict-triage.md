@@ -83,7 +83,7 @@ Tier 3. If it returns content, **verify with a second fresh agent**:
 
 Stage only if both agents agree `high`/`OK`. Otherwise → Tier 3.
 
-## Tier 3 — Stop and escalate
+## Tier 3 — Stop and escalate (cherry-pick conflict)
 
 Anything not resolved by Tier 0–2:
 
@@ -105,6 +105,43 @@ The report **must** include:
   ```
   pwsh .github/skills/upstream-sync/scripts/clear-stuck.ps1 -ResolvedThroughSha <sha>
   ```
+
+## Tier 4 — Post-pick validation failed
+
+The cherry-picks all applied cleanly, but a hard gate after the loop
+said NO before any push or PR. This catches the class of bug missed by
+git-level conflict detection: clean-merge-but-broken-content (PR #220
+audit found duplicate `.resw` keys + a dropped fork-specific `C4459`
+suppression — both committed without git ever printing a conflict).
+
+The orchestrator runs three gates after the cherry-pick loop, in order:
+
+| Sub-tier | Gate | Symptom | Action |
+|---|---|---|---|
+| **4a** | Static breakage scan ([`scripts/08-static-scan.ps1`](../scripts/08-static-scan.ps1)) | New duplicate `.resw` keys vs base, or a missing fork invariant from [`fork-invariants.json`](./fork-invariants.json) | Lock + issue + exit 10 |
+| **4b** | Try-build ([`scripts/10-try-build.ps1`](../scripts/10-try-build.ps1)) | Build exited non-zero within timeout | Lock + issue + exit 10 |
+| **4c** | Try-build timeout | Wall-clock cap (default 45m) hit | Lock + issue + exit 10 — unless `-AllowInconclusiveBuild` (dev opt-in) |
+| **4d** | Toolchain preflight ([`scripts/09-toolchain-preflight.ps1`](../scripts/09-toolchain-preflight.ps1)) | Required `PlatformToolset` (e.g. v143) not present on host | Lock + **NO issue** — provisioning problem, not code |
+
+**Why these three gates and not more.** They were sized to catch the
+historical real-world failures with zero false positives:
+- 4a covers content-level pattern breakage where git is happy but the
+  resulting file violates a fork-specific invariant.
+- 4b is the broadest possible "did this even compile" check.
+- 4c distinguishes "build hung — needs investigation" from "build
+  failed for a discoverable reason".
+- 4d distinguishes "this code is broken" from "this host can't even
+  try to build it" — the latter must never open a GitHub issue.
+
+Tier-4 state lives in `state.stuck_validation` (separate from
+Tier-3's `state.stuck_on_sha`); either being set causes the
+scheduler to skip. Clear with [`clear-stuck.ps1`](../scripts/clear-stuck.ps1)
+(omit `-ResolvedThroughSha` to keep the watermark and re-attempt the
+same range; pass it to advance past the broken upstream batch).
+
+The Tier-4 report includes a `findings_hash` (16-hex prefix). Re-runs
+that produce the same hash mean the underlying defect is unchanged;
+a changed hash means validation has moved to a new failure mode.
 
 ## Line endings
 

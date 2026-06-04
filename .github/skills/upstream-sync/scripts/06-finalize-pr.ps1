@@ -83,7 +83,7 @@ $title = "chore(upstream): sync microsoft/terminal up to $shortTo"
 # with "Head sha can't be blank" right after a push (see SKILL.md gotcha).
 $prUrl = $null
 for ($attempt = 1; $attempt -le 3; $attempt++) {
-    $prUrl = gh pr create --base main --head $branch --title $title --body-file $bodyPath 2>&1 | Select-Object -Last 1
+    $prUrl = gh pr create -R microsoft/intelligent-terminal --base main --head $branch --title $title --body-file $bodyPath 2>&1 | Select-Object -Last 1
     if ($LASTEXITCODE -eq 0 -and $prUrl -match '^https://github.com/') { break }
     Write-Warning "gh pr create attempt $attempt failed: $prUrl"
     Start-Sleep -Seconds 5
@@ -101,7 +101,7 @@ Remove-Item -LiteralPath $bodyPath -Force -ErrorAction SilentlyContinue
 # it lands all N commits flatly on main once CI + approvals pass.
 if ($AutoMergeStrategy -ne 'none') {
     $strategyFlag = "--$AutoMergeStrategy"
-    gh pr merge $Ctx.PrUrl $strategyFlag --auto --delete-branch | Out-Host
+    gh pr merge -R microsoft/intelligent-terminal $Ctx.PrUrl $strategyFlag --auto --delete-branch | Out-Host
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "gh pr merge --auto failed. PR is open at $($Ctx.PrUrl); merge manually with '$AutoMergeStrategy' strategy (NOT squash)."
     } else {
