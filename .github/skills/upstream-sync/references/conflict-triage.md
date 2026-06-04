@@ -81,7 +81,7 @@ Tier 3. If it returns content, **verify with a second fresh agent**:
 > version. Does the resolution preserve all behavioral intent from both
 > sides? Respond `OK` or `NOT_OK: <reason>`.
 
-Stage only if both agents agree `high`/`OK`. Otherwise → Tier 3.
+Stage only if both agents agree `high`/`OK`. Otherwise, route to Tier 3.
 
 ## Tier 3 — Stop and escalate (cherry-pick conflict)
 

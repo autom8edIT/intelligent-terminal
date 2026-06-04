@@ -35,7 +35,7 @@ function Read-State {
 function Write-State {
     param([Parameter(Mandatory)] $State)
     $p = Get-StatePath
-    $json = $State | ConvertTo-Json -Depth 12
+    $json = ($State | ConvertTo-Json -Depth 12) + [Environment]::NewLine
     # Use UTF-8 *without* BOM to match git's default text handling on this repo.
     [System.IO.File]::WriteAllText($p, $json, (New-Object System.Text.UTF8Encoding($false)))
 }

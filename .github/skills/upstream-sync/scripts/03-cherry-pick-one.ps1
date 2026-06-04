@@ -67,7 +67,12 @@ $result = [ordered] @{
 # Note: this does NOT reproduce GPG signatures (we don't hold upstream's
 # keys). The fork doesn't enforce signed commits, so "committed by X but
 # unsigned" is acceptable.
-$info = (git log -1 --format='%an%x09%ae%x09%aI%x09%cn%x09%ce%x09%cI' $Sha) -split "`t"
+$fullSha = (git rev-parse $Sha).Trim()
+if ($LASTEXITCODE -ne 0) { throw "Could not resolve upstream commit $Sha." }
+$prePickHead = (git rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) { throw "Could not record pre-pick HEAD before cherry-picking $Sha." }
+
+$info = (git log -1 --format='%an%x09%ae%x09%aI%x09%cn%x09%ce%x09%cI' $fullSha) -split "`t"
 $env:GIT_AUTHOR_NAME     = $info[0]
 $env:GIT_AUTHOR_EMAIL    = $info[1]
 $env:GIT_AUTHOR_DATE     = $info[2]
@@ -78,22 +83,20 @@ $env:GIT_COMMITTER_DATE  = $info[5]
 try {
 
 # Attempt the pick.
-git cherry-pick --keep-redundant-commits -x $Sha 2>&1 | Out-Host
+git cherry-pick --keep-redundant-commits -x $fullSha 2>&1 | Out-Host
 $pickCode = $LASTEXITCODE
 
 if ($pickCode -eq 0) {
-    # Defensive: ensure HEAD is the commit we just picked before any reset.
-    # If a future hook ever inserts work between pick and check, HEAD~1
-    # would silently discard arbitrary commits.
-    $headTree = (git log -1 --format='%T' HEAD).Trim()
-    $pickedTree = (git log -1 --format='%T' $Sha).Trim()
     # Tier-1 check: did we just create an empty commit (allowed by --keep-redundant-commits)?
     $changed = git diff-tree --no-commit-id --name-only -r HEAD
     if (-not $changed) {
-        if ($headTree -ne $pickedTree) {
-            throw "Refusing to reset --hard HEAD~1: HEAD tree ($headTree) does not match picked commit's tree ($pickedTree). Investigate before retrying."
+        $commitMessage = (git log -1 --format='%B' HEAD) -join "`n"
+        $expectedFooter = "\(cherry picked from commit $([regex]::Escape($fullSha))\)"
+        if ($commitMessage -notmatch $expectedFooter) {
+            throw "Refusing to reset --hard ${prePickHead}: HEAD does not contain the cherry-pick footer for $fullSha. Investigate before retrying."
         }
-        git reset --hard HEAD~1 | Out-Null
+        git reset --hard $prePickHead | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Failed to reset empty cherry-pick back to $prePickHead." }
         $result.status = 'skipped-empty'
     } else {
         $result.status = 'picked'
@@ -128,8 +131,7 @@ if ($unhandled.Count -gt 0) {
 }
 
 # All conflicts handled by Tier-0; continue the pick (preserve original message).
-$env:GIT_EDITOR = 'true'
-git cherry-pick --continue 2>&1 | Out-Host
+git cherry-pick --continue --no-edit 2>&1 | Out-Host
 if ($LASTEXITCODE -ne 0) {
     # Could still be empty after Tier-0.
     $staged = git diff --cached --name-only

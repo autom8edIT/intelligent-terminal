@@ -43,9 +43,12 @@ if (-not ($tier3 -or $tier4)) {
 
 Ensure-UpstreamRemote
 git fetch upstream main --no-tags | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "git fetch upstream main failed; refusing to clear stuck-lock against stale refs." }
 
 git switch main | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "git switch main failed; refusing to clear stuck-lock from the wrong branch." }
 git pull --ff-only | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "git pull --ff-only failed; refusing to clear stuck-lock until main is current." }
 
 if ($tier3) {
     if (-not $ResolvedThroughSha) {

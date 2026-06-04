@@ -1,7 +1,7 @@
 ---
 name: upstream-sync
 description: 'Periodically sync new commits from microsoft/terminal into this manually-forked intelligent-terminal repo by cherry-picking commit-by-commit onto a dated sync branch, auto-skipping revert pairs and empty commits, auto-resolving known take-upstream files, and stopping cleanly on genuine conflicts with a written report and a GitHub issue. Use when the user asks to "sync upstream", "pull from microsoft/terminal", "run upstream sync", "catch up to upstream", or wires this into a scheduler (weekly/daily). Designed to be safe under repeated unattended runs.'
-license: Complete terms in LICENSE.txt
+license: MIT
 ---
 
 # Upstream Sync (microsoft/terminal → intelligent-terminal)
@@ -98,15 +98,15 @@ pwsh .github/skills/upstream-sync/scripts/04-run-batch.ps1 -BuildTimeoutMinutes 
 
 ### Finalize modes — what each preserves
 
-| Mode | Per-commit content | Order on main | Original author date | Reviewer checkpoint | Requires admin? |
+| Mode | Per-commit content | Order on main | Original author + committer dates | Reviewer checkpoint | Requires admin? |
 |---|---|---|---|---|---|
 | PR + **rebase-merge** | ✅ | ✅ | ✅ | ✅ | No |
 | PR + **merge commit** | ✅ | ✅ | ✅ | ✅ | No |
 | PR + **squash** | ❌ collapsed | ❌ | ⚠️ folded | ✅ | No |
 | **`-PushDirectToMain`** | ✅ | ✅ | ✅ | ❌ | Yes (push to main) |
 
-Committer date is "now" in every mode (git default for cherry-pick) —
-that's the semantically correct "when this fork landed it" timestamp.
+The cherry-pick loop pins both author and committer identity/dates to the
+upstream commit so audit timestamps match the original commit-by-commit history.
 
 Resumability is built into the state file — re-running after a successful
 run is a fast no-op (nothing pending), and re-running while the stuck-lock
@@ -129,10 +129,10 @@ is set exits early without touching the branch.
   [references/known-conflicts.md](./references/known-conflicts.md) handles
   this automatically — extend the list when you discover the next file
   with the same pattern.
-- **`gh pr create` on Windows fails with "Head sha can't be blank"** if the
-  branch is freshly pushed and not yet visible. The finalize script uses
-  `--head <owner>:<branch>` and a 5s retry to work around this — do not
-  "fix" it by removing the retry.
+- **`gh pr create` on Windows can fail with "Head sha can't be blank"** if the
+  branch is freshly pushed and not yet visible. The same-repo finalize script
+  intentionally uses `--head <branch>` plus a 5s retry — do not "fix" it to
+  `--head <owner>:<branch>`, which would point `gh` at a fork.
 - **Do not run the scheduler twice while stuck.** The lock in
   `state.json` makes the second run a no-op, but a human running the
   script manually with `-Force` will overwrite the stuck branch and lose
@@ -145,8 +145,9 @@ is set exits early without touching the branch.
 - **Always commit `state.json` and `reports/`** so the next scheduler
   invocation (possibly on a different machine) starts from the right
   checkpoint. The finalize PR includes the state update.
-- **Never push directly to `main`.** The skill always opens a PR. Direct
-  push bypasses CI and human review of the upstream batch.
+- **Prefer the PR path.** The default workflow always opens a PR so CI and
+  human review checkpoint the upstream batch. Use `-PushDirectToMain` only
+  for an explicit admin/bypass run where skipping PR latency is intentional.
 - **CRLF/LF on manifest files.** Cherry-picks normally preserve upstream
   line endings, but any in-flight resolution touched by an LLM may downgrade
   to LF. If a Tier-2 resolution touches a `.yml`/`.xml`/`.csproj`/winget

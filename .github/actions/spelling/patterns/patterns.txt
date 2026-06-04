@@ -320,3 +320,8 @@ env_remove\("[A-Z_]+"\)
 
 # GitHub GraphQL node ID prefix for PullRequestReviewThread
 \bPRRT_[A-Za-z0-9_-]+\b
+
+# upstream-sync skill: PowerShell variable names, git/config tokens, toolchain labels, and timestamp placeholders
+\b(?:ACMR|MFC)\b
+\b(?:u(?:sha|pid)|quotepath|forwardable|hashtables|[Tt]oolsets)\b
+\b(?:DDTH(?:mmss)?|Hmmss|sszzz)\b

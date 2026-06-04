@@ -25,14 +25,14 @@ Both were caught post-hoc by audit. This scan catches them pre-PR.
 For every `*.resw` file modified anywhere in the pick range, count
 duplicate `<data name="...">` entries in the **pre-pick** state vs the
 **post-pick** worktree. Gate on **newly-introduced** duplicates only —
-pre-existing duplicates are reported as `info`, not blocking.
+preexisting duplicates are reported as `info`, not blocking.
 
 Pre-pick state = the file content at `origin/main` (the orchestrator's
 base before the picks). Post-pick = the worktree on the sync branch.
 
 Severity:
 - `critical` — any new duplicate key introduced by the pick range.
-- `info`     — pre-existing duplicates carried forward.
+- `info`     — preexisting duplicates carried forward.
 
 > **Implementation note (PR #220 follow-up).** Both `Get-FileTextAtRef`
 > and `Get-FileTextOnDisk` MUST use absolute paths when calling
@@ -43,7 +43,7 @@ Severity:
 > broken because of this exact bug — the scan was reading the dup-free
 > `intelligent-terminal` main worktree instead of the dup-laden sync
 > worktree. Same caveat for `git show` — capture via `cmd /c "git show
-> ref:path > tmp 2>nul"` instead of PowerShell-pipeline join, otherwise
+> ref:path > tmp 2>nul"` instead of PowerShell-pipeline join; otherwise
 > high-Unicode (pseudo-locale) bytes get truncated by the PSObject
 > formatter.
 
@@ -130,6 +130,6 @@ To add a new check:
 2. Wire it into the main loop in `08-static-scan.ps1`.
 3. Document the check here.
 4. Add a baseline-aware test (compare pre-pick vs post-pick) **only
-   when** the check would otherwise gate on pre-existing issues.
+   when** the check would otherwise gate on preexisting issues.
 5. Wire its severities into the `blocking` calculation if it should
    block the run.

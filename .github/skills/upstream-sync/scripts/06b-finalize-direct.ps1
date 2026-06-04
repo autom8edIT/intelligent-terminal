@@ -4,9 +4,8 @@
   Use when you have admin/bypass perms on main and want zero PR latency.
 
 .DESCRIPTION
-  Preserves per-commit content, order, and original author dates.
-  Committer date becomes "now" (git default for cherry-pick) — that's
-  the semantically correct "when this fork landed it" timestamp.
+  Preserves per-commit content, order, and original author + committer
+  dates, because the cherry-pick loop pins both from each upstream commit.
 
   Assumes the caller is currently on the sync branch with all picks
   applied. Performs:

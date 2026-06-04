@@ -126,7 +126,7 @@ pwsh .github/skills/upstream-sync/scripts/08-static-scan.ps1 -BaseSha $preBase
 loop. The scan:
 
 - Baseline-diffs every changed `.resw` file for NEW duplicate `<data name>`
-  keys (pre-existing dups are reported as `info`, not blocking).
+  keys (preexisting dups are reported as `info`, not blocking).
 - Runs regex assertions from [`fork-invariants.json`](./fork-invariants.json)
   against the post-pick worktree.
 
