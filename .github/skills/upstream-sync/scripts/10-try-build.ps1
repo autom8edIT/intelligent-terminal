@@ -27,9 +27,16 @@
       "log_tail":     "<last ~200 lines of output>"
     }
 
-  Exit codes:
-    0  = wrapper ran (inspect JSON for build status)
-    20 = wrapper itself errored out (couldn't start the build at all)
+  Exit / error model:
+    Stdout JSON on success (orchestrator path).
+    Throws on wrapper error (couldn't start the build at all). The
+    orchestrator (`04-run-batch.ps1`) catches and routes through its
+    own exit-code mapping (0 ok / 10 stuck / 20 error). When the script
+    is run standalone for debugging, an uncaught throw exits with
+    PowerShell's default code (1) and prints the stack trace.
+    `exit 20` is intentionally NOT used here: the script is invoked via
+    `& "$PSScriptRoot/10-try-build.ps1"`, and `exit` in that context
+    would terminate the orchestrator mid-pipeline.
 #>
 [CmdletBinding()]
 param(

@@ -126,4 +126,12 @@ Label: `upstream-sync-stuck` (apply via `gh issue create --label`).
 - The "skipped-locked" report shows the lock did its job (no duplicate
   destruction).
 
-Retention: keep all reports indefinitely. They're small markdown.
+Retention: the **"ok"** and **"stuck"** reports are committed in-repo
+(by `06-finalize-pr.ps1` onto the sync branch, and by
+`07-open-stuck-issue.ps1` / `07b-open-validation-stuck-issue.ps1` onto
+`main` next to the lock). The **"no-op"** and **"skipped-locked"**
+reports are written **locally only** and intentionally NOT committed —
+they exist for "did the scheduler tick?" debugging on the host that ran
+the script, and committing them would churn `main` on every cadence
+even when nothing happened. They're small markdown either way; keep
+committed reports indefinitely.

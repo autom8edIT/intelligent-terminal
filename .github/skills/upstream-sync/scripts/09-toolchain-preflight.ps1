@@ -22,9 +22,14 @@
       "ok":                 true
     }
 
-  Exit codes:
-    0  = preflight ran (inspect JSON for ok=true/false)
-    20 = preflight itself errored out
+  Error model:
+    Throws on wrapper error. The orchestrator (`04-run-batch.ps1`)
+    catches and routes through its own exit-code mapping (0 ok / 10
+    stuck / 20 error). Run standalone, an uncaught throw exits with
+    PowerShell's default code (1) plus a stack trace. `exit 20` is
+    intentionally NOT used here because this script is invoked via
+    `&` from the orchestrator — `exit` in that context would terminate
+    the orchestrator mid-pipeline.
 #>
 [CmdletBinding()]
 param()
