@@ -82,6 +82,47 @@ only when:
 Otherwise, decide. Repeated confirmation prompts when the answer is
 already clear add no value and slow the loop down.
 
+## Conflicting Comments — Break Oscillation Before It Becomes a Loop
+
+A real failure mode (sometimes spanning rounds, sometimes between two
+findings in the same round): you "fix" what comment A asked for in round
+N, then in round N+1 a *new* comment B objects to that exact change and
+asks you to revert it. Or two findings in one round directly contradict
+each other. Blindly flip-flopping ships oscillation and burns rounds.
+
+**Detection**: before applying any fix, ask "does this directly undo or
+contradict a change I made in a prior round of this PR?" If yes, the
+comment is in conflict with a prior decision — do **not** treat it like
+a fresh finding.
+
+**Resolution rules** — apply in order, stop at the first that fires:
+
+1. **Re-derive from principles, not from the latest comment.** Look at
+   what the *code itself* should do given the function's contract, the
+   surrounding patterns, and the user's stated preferences. Pick the
+   side that wins on first principles.
+2. **Prefer the position with the explicit rationale.** Whichever
+   comment cites a concrete failure mode (security, correctness, data
+   loss, perf) wins over the one that's stylistic or aesthetic.
+3. **Prefer user/human comments over bot comments** when they directly
+   conflict. The user's PR review is authoritative; bot feedback is
+   advisory.
+4. **If still ambiguous, escalate to the user** with both positions
+   summarized side-by-side and your recommendation. Do not silently
+   pick one and proceed — that's how loops start.
+
+**When you decline the second comment**, your reply must reference the
+prior round and explain why the existing form is correct. Example:
+*"Declining — round 3 (commit `abc1234`) intentionally moved this to X
+for reason Y; reverting would re-introduce <concrete bug>. Open to
+alternative approaches that address Y differently."* This gives the
+next reviewer (human or bot) the context to not raise it a third time.
+
+**Hard stop**: if you find yourself about to make the same edit you
+*reverted* in an earlier round of this PR, **stop and escalate**. That
+is the unambiguous signature of an oscillation loop, and no amount of
+auto-reasoning will resolve it without human input.
+
 ## Sanity Check Before Pushing
 
 Before committing your decision for a round, briefly answer:
