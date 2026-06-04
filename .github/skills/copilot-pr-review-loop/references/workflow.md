@@ -3,13 +3,39 @@
 Detailed procedure for one round of the loop. Repeat until both convergence
 conditions in step 8 hold, then run step 9 once.
 
-## How to run this workflow
+## Per-round checklist
+
+Track progress through one round with this list (copy into your scratch
+notes or session todos):
+
+- [ ] **1.** Request review — `scripts/01-request-review.ps1 -PrNumber <n>`
+- [ ] **2.** Wait, then list open threads — `scripts/02-list-open-threads.ps1 -PrNumber <n>`
+- [ ] **3.** Triage each finding using [03-triage-criteria.md](03-triage-criteria.md)
+- [ ] **4.** Apply fixes — one sub-agent per independent change
+- [ ] **5.** Build + run affected tests (no unverified pushes)
+- [ ] **6.** Reply + resolve each thread using [06-reply-templates.md](06-reply-templates.md) → `scripts/06-reply-and-resolve.ps1`
+- [ ] **7.** Commit + push the round's changes (one focused commit per round)
+- [ ] **8.** Convergence check: latest review says *"no new comments"* **and** step 2 returns empty
+- [ ] **9.** (once at end of loop) Cleanup outdated — `scripts/09-cleanup-outdated.ps1 -PrNumber <n>`
+
+If step 8 fails, loop back to step 1. If step 8 passes, run step 9 once
+and you're done.
+
+## Sub-agent delegation map
 
 Most steps below are best executed by a **fresh sub-agent** (via the
-`task` tool), not directly by the parent agent. The mapping is in
-SKILL.md → "Delegate Each Step to a Fresh Sub-Agent". The parent owns
+`task` tool), not directly by the parent agent. The parent owns
 sequencing, the `git commit`/`git push`, and the final
 `reply-and-resolve` call after replies have been reviewed.
+
+| Step | Sub-agent role | Why |
+|------|----------------|-----|
+| 2 — List open threads | Categorize each finding by file/severity | One-shot, deterministic; useful as a fresh read of what's outstanding |
+| 3 — Triage | Apply the rubric in [03-triage-criteria.md](03-triage-criteria.md), return fix/decline per thread | Fresh judgment, not contaminated by the implementer's intent |
+| 4 — Fix | One sub-agent per independent fix; run in parallel where possible | Parallelism; isolated context per fix |
+| 5 — Build & test | Run the project's build + unit tests, return only failures | Keeps long build output out of the parent context |
+| 6 — Reply drafting | Draft replies using [06-reply-templates.md](06-reply-templates.md) | Consistency; avoids drift between replies on related threads |
+| 8 — Convergence check | Re-run step 2's script and re-list, compare to expected empty set | Independent verification of the convergence condition |
 
 ## 1. Request a Copilot review
 

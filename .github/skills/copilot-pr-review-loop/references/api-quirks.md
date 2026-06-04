@@ -94,7 +94,7 @@ filtering for `!isResolved && !isOutdated`) to be empty. Otherwise, an
 unresolved thread from an earlier round will keep the PR in review-pending
 state.
 
-## ⚠️ `git stash push` argument order pitfall
+## ⚠️ `git stash push` argument order gotcha
 
 This works:
 

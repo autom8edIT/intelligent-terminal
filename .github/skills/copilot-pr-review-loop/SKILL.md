@@ -34,8 +34,8 @@ open-threads list is empty.
 
 The loop has nine steps. Run steps 1–7 each round; check convergence at
 step 8; run step 9 once when the loop terminates. Full procedure, with
-commands and rationale for each step, is in
-[references/workflow.md](references/workflow.md).
+commands, rationale, the per-step sub-agent delegation table, and a
+resumable checklist, is in [references/workflow.md](references/workflow.md).
 
 ```
 Request review → Wait → List open threads → Triage → Fix → Build/test →
@@ -46,27 +46,14 @@ Terminate when a review returns "no new comments" **and** the open-threads
 list is empty. A single condition is not enough — a "no new comments"
 review can still coexist with a stale open thread you forgot to resolve.
 
-## Delegate Each Step to a Fresh Sub-Agent
+**Delegate substantive steps to a fresh sub-agent.** Each round's triage,
+fix-drafting, and reply-drafting benefit from a clean context (no
+implementer bias, parallelizable, less noise in the parent). The parent
+agent owns sequencing, commits, and the final mutating
+`reply-and-resolve` calls. The per-step delegation map is in
+[references/workflow.md](references/workflow.md#sub-agent-delegation-map).
 
-The loop is naturally decomposable. Dispatch a fresh sub-agent (via the
-`task` tool) for each step that produces substantive content. This keeps
-context clean, avoids self-confirmation bias on triage decisions, and
-parallelizes independent work.
-
-| Step | Sub-agent role | Why |
-|------|----------------|-----|
-| 2 — List open threads | Categorize each finding by file/severity | One-shot, deterministic; useful as a fresh read of what's outstanding |
-| 3 — Triage | Apply the rubric in [references/03-triage-criteria.md](references/03-triage-criteria.md), return fix/decline per thread | Fresh judgment, not contaminated by the implementer's intent |
-| 4 — Fix | One sub-agent per independent fix; run in parallel where possible | Parallelism; isolated context per fix |
-| 5 — Build & test | Run the project's build + unit tests, return only failures | Keeps long build output out of the parent context |
-| 6 — Reply drafting | Draft replies using [references/06-reply-templates.md](references/06-reply-templates.md) | Consistency; avoids drift between replies on related threads |
-| 8 — Convergence check | Re-run step 2's script and re-list, compare to expected empty set | Independent verification of the convergence condition |
-
-The parent agent owns sequencing, commit/push, and the final
-`reply-and-resolve` call (which mutates remote state and shouldn't be
-delegated until the reply text has been reviewed).
-
-## Pitfalls
+## Gotchas
 
 - **Use `gh pr edit --add-reviewer copilot-pull-request-reviewer`** to
   request a Copilot review. The GraphQL `requestReviews` mutation rejects

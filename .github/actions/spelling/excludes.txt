@@ -131,6 +131,7 @@ Resources/(?!en)
 ^\Qbuild/config/release.gdnbaselines\E$
 ^\Qdep/WinAppDriver/EULA.rtf\E$
 ^\Qdoc/reference/windows-terminal-logo.ans\E$
+^\Q.github/instructions/agent-skills.instructions.md\E$
 ^\Qsrc/cascadia/ut_app/FzfTests.cpp\E$
 ^\Qsrc/host/ft_host/chafa.txt\E$
 ^\Qsrc/host/ft_host/Host.Tests.Feature.rc\E$
