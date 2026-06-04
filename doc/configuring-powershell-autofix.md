@@ -62,7 +62,7 @@ __it_shellinteg_prompt() {
     printf '\033]133;D;%s\007\033]133;A\007\033]9;9;"%s"\007' "$__ec" "$PWD"
 }
 PROMPT_COMMAND=__it_shellinteg_prompt
-PS1="${PS1}\[$'\033]133;B\007'\]"
+PS1="${PS1}"$'\[\033]133;B\007\]'
 ```
 
 This produces the same `133;D` / `133;A` / `133;B` marks as the PowerShell snippet (plus OSC `9;9` to report the current working directory). The `\[ \]` brackets tell readline the embedded escape sequence is zero-width so line wrap stays correct.
@@ -111,11 +111,12 @@ Select-String -Path "$env:USERPROFILE\Documents\PowerShell\Microsoft.PowerShell_
                     "$env:USERPROFILE\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1" `
               -Pattern 'intelligent-terminal shell-integration' -ErrorAction SilentlyContinue
 
-# Bash (Git Bash + every WSL distro that shares your Windows %USERPROFILE%)
+# Bash on Git Bash (Git Bash uses %USERPROFILE% as $HOME, so its ~/.bashrc IS %USERPROFILE%\.bashrc)
 Get-Content "$env:USERPROFILE\.bashrc" -ErrorAction SilentlyContinue |
     Select-String 'intelligent-terminal shell-integration'
 
-# WSL distro with its own home (most distros)
+# Every WSL distro you have a Windows Terminal profile for — each distro has its OWN ~/.bashrc
+# inside the distro filesystem (NOT %USERPROFILE%\.bashrc), so check each one individually:
 wsl.exe -d <DistroName> -e bash -c "grep 'intelligent-terminal shell-integration' ~/.bashrc"
 ```
 
