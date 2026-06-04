@@ -316,4 +316,4 @@ equals_insensitive_ascii\("\w+", "\w+"
 env_remove\("[A-Z_]+"\)
 
 # Shell flag combos (e.g. set -euo pipefail) used in hooks.instructions.md
-\b(?:bash|(?<!\.)sh|set)(?:\s+[-+][abefimouxE]{1,2})*\s+[-+][abefimouxE]{3,}(?:\s+[-+][abefimouxE]+)*
+\b(?:bash|(?<!\.)sh|set)(?:\s+[-+][abefimouxE]{1,2})*\s+[-+][abefimouxE]{3,}(?:\s+[-+][abefimouxE]+)*(?:\s+pipefail\b)?
