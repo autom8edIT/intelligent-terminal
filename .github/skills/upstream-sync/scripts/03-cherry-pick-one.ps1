@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   Runs `git cherry-pick -x <sha>`. On conflict, attempts Tier-0 (known
-  take-{upstream,ours} files from known-conflicts.md), then Tier-1 (empty
+  take-{upstream,ours} files from 03-known-conflicts.md), then Tier-1 (empty
   after staging → skip). Anything else returns 'stuck' and leaves the
   cherry-pick aborted.
 
@@ -43,7 +43,7 @@ function Get-KnownConflicts {
 
 function Get-ConflictPaths {
     # core.quotepath=off keeps non-ASCII paths in raw UTF-8 so Tier-0
-    # path matching against known-conflicts.md works without C-quoting.
+    # path matching against 03-known-conflicts.md works without C-quoting.
     $u = git -c core.quotepath=off diff --name-only --diff-filter=U
     if (-not $u) { return @() }
     return @($u -split "`n" | Where-Object { $_ })

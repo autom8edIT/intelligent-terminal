@@ -35,6 +35,7 @@ the operator can audit in your transcript.
 ## Prerequisites
 
 - `git` 2.38+ (needed for `git cherry-pick --keep-redundant-commits`) and `gh` CLI authenticated against `microsoft/intelligent-terminal`. The credential needs **push to topic branches matching `upstream-sync/*`** and **issue + label create** on the same repo.
+- **`origin` MUST point at `microsoft/intelligent-terminal`.** All scripts push to `origin` and the PR / stuck-issue creation passes `-R microsoft/intelligent-terminal` explicitly. If `origin` is a personal fork, the push will land on the fork and the PR will fail to find its head. Use `git remote -v` to verify before running.
 - PowerShell 7+ (`pwsh`) on PATH.
 - Windows build host with Visual Studio 2022, Windows SDK, `vswhere`, and the repo's `tools\razzle.cmd`/`bz` build environment (build is a hard gate before finalize — see [step 7](#7-build)).
 - Remote named `upstream` — the scripts create it if missing.
@@ -50,7 +51,7 @@ Every persistent fact lives in the source that owns it:
 | Question | Source of truth |
 |---|---|
 | What's the last-synced upstream commit? | Newest `(cherry picked from commit <sha>)` trailer on `origin/main` whose target is reachable from `upstream/main`. Derived inline by [`scripts/02-compute-pending.ps1`](./scripts/02-compute-pending.ps1). |
-| What's pending? | `git log --cherry-pick --right-only --no-merges <watermark>...upstream/main`. Patch-id-based, so a picked-then-reverted commit correctly re-appears. |
+| What's pending? | `git log --cherry-pick --right-only --no-merges origin/main...upstream/main`, then drop SHAs older than (or equal to) the watermark above. Patch-id-based, so a picked-then-reverted commit correctly re-appears. |
 | Is the scheduler locked? | Any OPEN issue with the `upstream-sync-stuck` label on `microsoft/intelligent-terminal`. Closing the issue IS the lock-clear signal. |
 | What does the lock mean? | A fenced ```yaml # wta-state``` block in the issue body carries `tier`, `kind`, `stuck_on_sha`/`findings_hash`, etc. |
 | Where do build logs go? | `Generated Files/upstream-sync/<YYYY-MM-DD>/` — gitignored by the repo root's `**/Generated Files/` rule. Never committed. |
@@ -132,8 +133,8 @@ $pick     = $pickJson | ConvertFrom-Json
 
 Branch on `$pick.status`:
 
-- `"applied"` or `"auto-resolved"` — record `$sha` in `$picked`, continue.
-- `"empty"` — record `$sha` in `$skippedEmpty`, continue.
+- `"picked"` — record `$sha` in `$picked`, continue.
+- `"skipped-empty"` — record `$sha` in `$skippedEmpty`, continue.
 - `"stuck"` — **stop the loop** and go to step 5a.
 
 #### 5a. On stuck — open the Tier-3 issue and exit
@@ -389,7 +390,7 @@ deferred fixes.
 |---|---|
 | `02-compute-pending.ps1` throws "No 'cherry picked from commit' trailer ..." | The fork has never used `cherry-pick -x` for an upstream commit yet. Run the one-time seeding pick described in [First-time sync](#first-time-sync). |
 | Stuck issue prevents new run | Resolve the conflict on the stuck branch, open a PR, merge it (keep the `(cherry picked from commit <sha>)` trailer!), then **close the stuck issue**. The next scheduler tick proceeds. |
-| Cherry-pick reports "empty commit" | Expected for upstream no-op commits and for fork-already-applied patches; `03-cherry-pick-one.ps1` returns `"empty"` and the agent's loop skips it. No action needed. |
+| Cherry-pick reports "empty commit" | Expected for upstream no-op commits and for fork-already-applied patches; `03-cherry-pick-one.ps1` returns `"skipped-empty"` and the agent's loop skips it. No action needed. |
 | Same file conflicts every run | Add it to the Tier-0 list in [references/03-known-conflicts.md](./references/03-known-conflicts.md) with the correct resolution strategy (`take-upstream`, `take-ours`, or `union`). |
 | `gh pr create` returns "Head sha can't be blank" | `05-finalize-pr.ps1` retries 3× automatically. On slow networks may need a manual second run. |
 

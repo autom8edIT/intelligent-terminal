@@ -42,9 +42,9 @@ follow-up PR.
 
 ### Worktree setup
 
-Stay on the [primary-worktree-clean-main
-convention](./conflict-triage.md). Open a sibling worktree for the
-follow-up so the main worktree stays clean:
+Keep the primary worktree at `Q:\official\intelligent-terminal` on `main`
+and open a sibling worktree for the follow-up so the main worktree stays
+clean:
 
 ```pwsh
 $syncPr      = 220
@@ -148,4 +148,4 @@ gh pr edit <follow-up-pr> --repo microsoft/intelligent-terminal --base main
 
 - [SKILL.md § After-PR review handling](../SKILL.md#after-pr-review-handling--fix-in-pr-vs-follow-up-pr) — short version of this doc.
 - [`copilot-pr-review-loop`](../../copilot-pr-review-loop/SKILL.md) — the skill that drives the follow-up PR through its own review rounds.
-- [Branch + worktree convention](./conflict-triage.md) — keep `Q:\official\intelligent-terminal` on `main`; use sibling worktrees for PR work.
+- [`03-conflict-triage.md`](./03-conflict-triage.md) — Tier 0/1/2/3/4 conflict resolution rubric (referenced when deciding whether a build failure belongs on the sync PR or a follow-up).

@@ -45,9 +45,11 @@ param(
 git push -u origin $Branch 2>&1 | Out-Host
 if ($LASTEXITCODE -ne 0) { Write-Warning "Could not push stuck branch — issue still being filed for visibility." }
 
-$shortSha = $StuckSha.Substring(0,9)
-$subj = (git log -1 --format='%s' $StuckSha).Trim()
-$title = "Upstream sync stuck at ${shortSha}: $subj"
+$shortSha    = $StuckSha.Substring(0,9)
+$subj        = (git log -1 --format='%s' $StuckSha).Trim()
+$author      = (git log -1 --format='%an <%ae>' $StuckSha).Trim()
+$upstreamUrl = "https://github.com/microsoft/terminal/commit/$StuckSha"
+$title       = "Upstream sync stuck at ${shortSha}: $subj"
 
 $yamlBlock = Format-StuckYamlBlock @{
     tier           = '3'
@@ -74,6 +76,8 @@ $body = @"
 > Closing the issue IS the lock-clear signal — no separate script needed.
 
 **Stuck on:** ``$StuckSha`` — $subj
+**Upstream commit:** [$shortSha]($upstreamUrl)
+**Author:** $author
 **Sync branch:** ``$Branch`` (push attempted — run ``git ls-remote --heads origin $Branch`` to verify it landed)
 
 **Conflicting paths:**

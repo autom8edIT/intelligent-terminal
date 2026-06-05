@@ -9,13 +9,13 @@ Some files have a fixed correct resolution that never changes. Examples:
 
 - `.github/workflows/spelling2.yml` — always take upstream (verified on sister repo `agentic-terminal`).
 
-The list of these paths lives in [`known-conflicts.md`](./known-conflicts.md).
+The list of these paths lives in [`03-known-conflicts.md`](./03-known-conflicts.md).
 
 **Algorithm:**
 
 ```pwsh
 $conflictingPaths = git diff --name-only --diff-filter=U
-$tier0List = Get-KnownConflicts   # parses known-conflicts.md
+$tier0List = Get-KnownConflicts   # parses 03-known-conflicts.md
 foreach ($p in $conflictingPaths) {
     $entry = $tier0List | Where-Object { $_.Path -eq $p }
     if (-not $entry) { return $false }  # Tier 0 doesn't cover this commit
