@@ -25,6 +25,11 @@ namespace winrt::TerminalApp::implementation
     FreOverlay::FreOverlay()
     {
         InitializeComponent();
+
+        // Seed the overlay's status text from the existing localized
+        // resource (reused here rather than adding a new .Text key
+        // across every locale).
+        SavingStatusText().Text(RS_(L"FreOverlay_SettingUp"));
     }
 
     // ── Detection helpers ───────────────────────────────────────────────
@@ -297,6 +302,19 @@ namespace winrt::TerminalApp::implementation
             AgentComboBox(), RS_(L"FreOverlay_AgentLabel/Text"));
         Automation::AutomationProperties::SetName(
             PanePositionComboBox(), RS_(L"FreOverlay_PanePositionLabel/Text"));
+
+        // Give the SavingProgressRing a localized accessible Name so
+        // Narrator announces "Setting up Intelligent Terminal, busy"
+        // when focus lands on it during a save/install (and the same
+        // readout on Caps+Tab mid-install). _SetSavingState defers
+        // the ring.Focus() call via Dispatcher().RunAsync(Low) so it
+        // fires after IsActive(true) and the visibility change have
+        // been laid out — the announcement combines this Name with
+        // the "busy" state from the active spinner in a single
+        // readout. Without this Name, Narrator would just read
+        // "ProgressRing".
+        Automation::AutomationProperties::SetName(
+            SavingProgressRing(), RS_(L"FreOverlay_SettingUp"));
     }
 
     // ── Agent selection changed ─────────────────────────────────────────
@@ -600,8 +618,43 @@ namespace winrt::TerminalApp::implementation
         // so flip "(will install)" → "(installed)" for anything now on PATH.
         _PopulateAgentComboBox();
 
-        SaveButton().Content(winrt::box_value(RS_(L"FreOverlay_SaveButton/Content")));
-        SaveButton().IsEnabled(true);
+        // Narrator: order matters. Fire the error notification FIRST,
+        // BEFORE any focus transitions, so the assertive announcement
+        // is queued before the Save-button focus event that
+        // _SetSavingState(false) emits below. Without this ordering,
+        // some Narrator versions announce "Save button" first and the
+        // actual error message sounds like an afterthought.
+        //
+        // The ErrorText carries LiveSetting="Assertive" in XAML, but
+        // live regions don't fire reliably for Text changes that
+        // happen while the hosting element is still Collapsed (we set
+        // the text above before flipping Visibility). Uses SaveButton
+        // as the peer source (matches the FRE welcome pattern in
+        // TerminalPage::_ShowFreOverlay) because UserControl peers
+        // don't propagate notifications to Narrator reliably.
+        if (auto peer = Automation::Peers::FrameworkElementAutomationPeer::FromElement(SaveButton()))
+        {
+            peer.RaiseNotificationEvent(
+                Automation::Peers::AutomationNotificationKind::Other,
+                Automation::Peers::AutomationNotificationProcessing::ImportantMostRecent,
+                ErrorText().Text(),
+                L"FreInstallErrorAnnouncement");
+        }
+
+        // Re-enable editing so the user can adjust selections and retry.
+        // _SetSavingState(false) parks focus on SaveButton as its safe
+        // default — fine for the success path (where the overlay
+        // immediately collapses) but suboptimal here: a Narrator user
+        // would be told the error and then find their focus on the
+        // generic Save button, with no clear cue that they're "on the
+        // error" or what they can do about it. Override the focus to
+        // the help-link inside the ErrorPanel — it's the only
+        // actionable element in the error area, and pressing Enter
+        // there opens the manual-fix docs (the natural next action
+        // after hearing the error). The user can Shift+Tab back to
+        // SaveButton if they want to retry instead.
+        _SetSavingState(false);
+        ErrorHelpLink().Focus(FocusState::Programmatic);
     }
 
     IAsyncAction FreOverlay::_SaveAndInstallAsync()
@@ -636,9 +689,10 @@ namespace winrt::TerminalApp::implementation
             }
         }
 
-        // 2. Disable button, hide previous error
-        SaveButton().Content(winrt::box_value(RS_(L"FreOverlay_SettingUp")));
-        SaveButton().IsEnabled(false);
+        // 2. Enter the "saving" state: disable the form, raise the
+        // SavingOverlay (with spinner + "Setting up..."), disable the
+        // Save button. Hide any previous error.
+        _SetSavingState(true);
         ErrorPanel().Visibility(Visibility::Collapsed);
 
         // 3. Install prerequisites if needed (blocking — cannot proceed without these)
@@ -670,6 +724,14 @@ namespace winrt::TerminalApp::implementation
         {
             _agentPaneLog("[FRE] Installing GitHub.Copilot via winget");
             bool ok = co_await _WingetInstallAsync(L"GitHub.Copilot");
+            // Helper internally does co_await winrt::resume_background(),
+            // so the continuation may resume on a thread-pool thread.
+            // Hop back to the UI thread before any XAML access (the
+            // _ShowProblem call below touches ErrorText / ErrorPanel /
+            // toggles); without this, RPC_E_WRONG_THREAD is thrown and
+            // silently swallowed by IAsyncAction, leaving the
+            // SavingOverlay stuck.
+            co_await winrt::resume_foreground(Dispatcher());
             auto self = weak.get();
             if (!self) co_return;
             _agentPaneLog("[FRE] Copilot install: " + std::string(ok ? "ok" : "FAILED"));
@@ -683,6 +745,9 @@ namespace winrt::TerminalApp::implementation
         {
             _agentPaneLog("[FRE] Installing Node.js via winget");
             bool ok = co_await _WingetInstallAsync(L"OpenJS.NodeJS.LTS");
+            // See note above for the Copilot install — same threading
+            // concern applies here.
+            co_await winrt::resume_foreground(Dispatcher());
             auto self = weak.get();
             if (!self) co_return;
             _agentPaneLog("[FRE] Node.js install: " + std::string(ok ? "ok" : "FAILED"));
@@ -742,6 +807,15 @@ namespace winrt::TerminalApp::implementation
 
             _agentPaneLog("[FRE] Installing hooks for " + winrt::to_string(agentId));
             bool hooksOk = co_await _InstallHooksAsync(agentId);
+            // Helper internally does co_await winrt::resume_background(),
+            // so the continuation may resume on a thread-pool thread.
+            // Hop back to the UI thread before the subsequent
+            // AutoDetectToggle().IsOn() read and any later _ShowProblem
+            // call. Without this, XAML access from the thread pool
+            // throws RPC_E_WRONG_THREAD, which IAsyncAction swallows —
+            // the SavingOverlay would then be stuck with no error
+            // surfaced.
+            co_await winrt::resume_foreground(Dispatcher());
             self = weak.get();
             if (!self) co_return;
 
@@ -819,8 +893,10 @@ namespace winrt::TerminalApp::implementation
             _PopulateAgentComboBox();
 
             _agentPaneLog("[FRE] Completed — raising Completed event");
-            SaveButton().Content(winrt::box_value(RS_(L"FreOverlay_SaveButton/Content")));
-            SaveButton().IsEnabled(true);
+            // Restore the editable state before raising Completed so that
+            // if anything keeps the overlay alive a moment longer, it
+            // doesn't appear stuck in the "saving" visual.
+            _SetSavingState(false);
             Completed.raise(*this, nullptr);
         }
     }
@@ -843,5 +919,133 @@ namespace winrt::TerminalApp::implementation
 
     void FreOverlay::ResetDragOffset()
     {
+    }
+
+    // ── Saving state ────────────────────────────────────────────────────
+
+    // Toggle the overlay between "saving / installing" and "idle / editable".
+    //
+    // - The settings ScrollViewer is disabled as a group while saving.
+    //   IsEnabled on an ancestor propagates an "effectively disabled"
+    //   state to descendants (it ANDs with each child's own IsEnabled)
+    //   without clobbering the per-control IsEnabled values, so
+    //   policy-driven disables (locked toggles, etc.) survive when we
+    //   restore. Crucially, IsEnabled blocks keyboard input too —
+    //   unlike IsHitTestVisible, which is pointer-only and would leave
+    //   Tab / Space / arrows working on the form mid-install.
+    // - The SavingOverlay (a semi-opaque Border sitting in the same
+    //   Grid cell as the form, z-stacked on top) gives the visual: a
+    //   centered ProgressRing + "Setting up..." status text. Its
+    //   Background also catches any stray pointer input the disabled
+    //   form might still surface.
+    // - The Save button is gated separately so an Enter keypress can't
+    //   re-fire the click while we're already saving.
+    void FreOverlay::_SetSavingState(bool saving)
+    {
+        _agentPaneLog(std::string("[FRE] saving state: ") + (saving ? "ON" : "OFF"));
+
+        // Guard against being called before InitializeComponent has populated
+        // the named XAML elements — matches the pattern used elsewhere in
+        // this file (see _UpdateSuggestionEnabledState, _OnAutoDetectToggled).
+        auto scroller = SettingsFormScroller();
+        auto overlay = SavingOverlay();
+        auto ring = SavingProgressRing();
+        auto save = SaveButton();
+        if (!scroller || !overlay || !ring || !save)
+        {
+            return;
+        }
+
+        // Saving-state transition note. Order intentionally accepts
+        // two focus changes in close succession on entry:
+        //   (1) save.IsEnabled(false) below evicts focus from the
+        //       SaveButton (the user just clicked Save, so focus was
+        //       on it). XAML auto-moves focus to the next available
+        //       tab stop; with the form also disabled, that's
+        //       effectively "nowhere".
+        //   (2) The deferred Dispatcher().RunAsync(Low) further down
+        //       moves focus to the ProgressRing once layout settles
+        //       (~one frame later — calling Focus() inline right
+        //       after overlay.Visibility(Visible) silently fails
+        //       because the ring isn't in the live visual tree yet).
+        // The RaiseNotificationEvent ("Setting up...") fires
+        // synchronously with ImportantMostRecent priority and
+        // preempts the brief between-state focus eviction in
+        // Narrator, so the user hears the operation name rather
+        // than noise. We deliberately do NOT defer save.IsEnabled
+        // alongside the focus call: that would create a window
+        // where the user could re-click Save mid-install.
+        //
+        // On the way back (saving=false), we re-enable scroller and
+        // save before calling save.Focus, so the focus target is
+        // already enabled when XAML lands it.
+        if (saving)
+        {
+            overlay.Visibility(Visibility::Visible);
+            ring.IsActive(true);
+            scroller.IsEnabled(false);
+            save.IsEnabled(false);
+
+            // Move focus to the ProgressRing AFTER the synchronous
+            // layout work completes. Calling ring.Focus() right after
+            // overlay.Visibility(Visible) silently fails — the ring
+            // isn't in the live visual tree yet, Focus() returns false
+            // (we don't see it because the return value is discarded),
+            // and focus stays on the SaveButton the user just clicked.
+            // Mirror the deferred-focus pattern used in
+            // TerminalPage::_ShowFreOverlay (line ~955) for the FRE
+            // NextButton: dispatch at Low priority so the focus call
+            // runs after the visibility change has been laid out.
+            //
+            // Guard against the fast-success / fast-error race: on a
+            // very quick install the synchronous flow can call
+            // _SetSavingState(false) — collapsing the overlay — before
+            // this deferred lambda fires. Re-check Visibility inside
+            // the lambda so we don't pull focus back to a hidden ring.
+            Dispatcher().RunAsync(
+                winrt::Windows::UI::Core::CoreDispatcherPriority::Low,
+                [weak = get_weak()]() {
+                    auto self = weak.get();
+                    if (!self) { return; }
+                    auto o = self->SavingOverlay();
+                    if (!o || o.Visibility() != Visibility::Visible) { return; }
+                    if (auto r = self->SavingProgressRing())
+                    {
+                        r.Focus(FocusState::Programmatic);
+                    }
+                });
+
+            // Narrator: the deferred focus above will eventually fire a
+            // focus event with the ProgressRing's Name ("Setting up
+            // Intelligent Terminal", set in Initialize via SetName) +
+            // its "busy" state. RaiseNotificationEvent ensures the
+            // user hears something immediately, before that deferred
+            // focus lands. Together: an early notification on entry,
+            // and a meaningful Caps+Tab readout (or focus-changed
+            // announcement on re-entry) once focus is parked on the
+            // ring. Uses SaveButton as the peer source (matches the
+            // FRE welcome pattern in TerminalPage::_ShowFreOverlay)
+            // because UserControl peers don't propagate notifications
+            // to Narrator reliably; a concrete focusable Control does.
+            if (auto peer = Automation::Peers::FrameworkElementAutomationPeer::FromElement(SaveButton()))
+            {
+                peer.RaiseNotificationEvent(
+                    Automation::Peers::AutomationNotificationKind::Other,
+                    Automation::Peers::AutomationNotificationProcessing::ImportantMostRecent,
+                    RS_(L"FreOverlay_SettingUp"),
+                    L"FreSavingAnnouncement");
+            }
+        }
+        else
+        {
+            scroller.IsEnabled(true);
+            save.IsEnabled(true);
+            overlay.Visibility(Visibility::Collapsed);
+            ring.IsActive(false);
+            // Park focus on Save so a keyboard user (typically after an
+            // error, where the form is re-enabled but ErrorPanel now
+            // shows) can press Enter to retry without a mouse trip.
+            save.Focus(FocusState::Programmatic);
+        }
     }
 }

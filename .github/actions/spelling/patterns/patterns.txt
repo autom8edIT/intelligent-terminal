@@ -245,6 +245,9 @@ ROY\sG\.\sBIV
 # Win32 SDK LOCALE_* constants (locale-info field identifiers from winnls.h)
 \bLOCALE_[A-Z][A-Z0-9_]+\b
 
+# COM/RPC HRESULT constants from rpcerror.h (e.g. RPC_E_SERVERFAULT)
+\bRPC_E_[A-Z][A-Z0-9_]+\b
+
 # AppX package
 _\d[0-9a-z]{12}['\.]
 
@@ -311,3 +314,9 @@ equals_insensitive_ascii\("\w+", "\w+"
 
 # tools/wta/src/protocol/acp/spawn.rs - external env var name passed as string literal
 env_remove\("[A-Z_]+"\)
+
+# Shell flag combos (e.g. set -euo pipefail) used in hooks.instructions.md
+\b(?:bash|(?<!\.)sh|set)(?:\s+[-+][abefimouxE]{1,2})*\s+[-+][abefimouxE]{3,}(?:\s+[-+][abefimouxE]+)*(?:\s+pipefail\b)?
+
+# GitHub GraphQL node ID prefix for PullRequestReviewThread
+\bPRRT_[A-Za-z0-9_-]+\b

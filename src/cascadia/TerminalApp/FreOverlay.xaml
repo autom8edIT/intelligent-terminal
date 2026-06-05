@@ -194,8 +194,13 @@
                     </TextBlock>
                 </StackPanel>
 
-                <!--  Content: Settings Form  -->
-                <ScrollViewer Grid.Row="1"
+                <!--  Content: Settings Form. Named so we can disable it as
+                      a group while a save/install is in progress
+                      (keyboard input blocking — see
+                      FreOverlay::_SetSavingState). A SavingOverlay
+                      sibling sits on top for the visual + spinner.  -->
+                <ScrollViewer x:Name="SettingsFormScroller"
+                              Grid.Row="1"
                               HorizontalAlignment="Stretch"
                               VerticalScrollBarVisibility="Auto">
                     <StackPanel Spacing="4"
@@ -492,6 +497,49 @@
                     </StackPanel>
                 </ScrollViewer>
 
+                <!--  "Saving / installing in progress" overlay. Sits in
+                      the same Grid cell as SettingsFormScroller and is
+                      rendered after it, so it z-stacks on top. While
+                      visible:
+                        - The opaque-ish Background blocks pointer input
+                          to the form below.
+                        - SettingsFormScroller.IsEnabled is also set to
+                          false in code, which blocks keyboard input
+                          (overlays don't intercept keyboard on their
+                          own — focus would still tab into the form).
+                        - The centered ProgressRing + "Setting up..."
+                          label gives the user an unmissable signal that
+                          a long-running operation is happening.
+                      Collapsed when idle so it doesn't intercept input
+                      or paint pixels.  -->
+                <Border x:Name="SavingOverlay"
+                        Grid.Row="1"
+                        Background="#CC1E1E1E"
+                        Visibility="Collapsed">
+                    <!--  Background is the same RGB as RootGrid (#FF1E1E1E
+                          on line 31) with 80 % alpha, by design: the
+                          overlay reads as "FRE dims itself" rather than
+                          an independent panel. Keep these two in sync
+                          if the FRE backdrop ever changes — extracting
+                          both into shared SolidColorBrush resources is
+                          left for a broader FRE theming pass.  -->
+                    <StackPanel Orientation="Vertical"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Spacing="16">
+                        <mux:ProgressRing x:Name="SavingProgressRing"
+                                          Width="48" Height="48"
+                                          IsTabStop="True"
+                                          IsActive="False" />
+                        <TextBlock x:Name="SavingStatusText"
+                                   FontFamily="Segoe UI Variable Text, Segoe UI"
+                                   FontSize="14"
+                                   Foreground="White"
+                                   HorizontalAlignment="Center"
+                                   AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
+
                 <!--  Bottom: Error text + Save Button  -->
                 <Grid Grid.Row="2">
                     <Grid.ColumnDefinitions>
@@ -519,6 +567,12 @@
                             </Hyperlink>
                         </TextBlock>
                     </StackPanel>
+                    <!--  Save button. Disabled while a save/install is
+                          in progress; the SavingOverlay above the form
+                          carries the spinner + status text. Label
+                          stays "Save" (via x:Uid) — no in-button text
+                          swap is needed since the overlay communicates
+                          the in-progress state.  -->
                     <Button x:Uid="FreOverlay_SaveButton"
                             x:Name="SaveButton"
                             Grid.Column="1"
