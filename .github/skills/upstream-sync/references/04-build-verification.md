@@ -3,7 +3,8 @@
 Post-pick hard gate. Runs **after** the cherry-pick loop and **before**
 the PR is opened. If the build fails, the agent either lands one focused
 build-fix commit on the same branch (so it ships in the same PR) or — if
-the fix is too large / scope creep — opens a Tier-4 stuck issue and exits.
+the fix is too large / scope creep — surfaces the failure to the operator
+and exits without filing an issue.
 
 The full orchestration around try-build lives in
 [`SKILL.md` → Run a sync → step 7](../SKILL.md#7-build); this file is
@@ -20,8 +21,8 @@ catches that with zero false positives — `git` cannot.
 
 Toolchain provisioning (e.g. `PlatformToolset` v143/v145) is treated as
 the operator's problem, not the scheduler's: an under-provisioned host
-just keeps tripping the build gate and the human notices via the open
-stuck issue. We intentionally do **not** auto-bump toolset versions in
+just keeps tripping the build gate and the human notices on the next
+re-run. We intentionally do **not** auto-bump toolset versions in
 the repo on behalf of a single host.
 
 ## Try-build (`scripts/04-try-build.ps1`)
@@ -47,7 +48,7 @@ Output (returned as JSON on stdout):
 | `duration_ms` | Wall-clock ms |
 | `command` | The build command that was run |
 | `log_path` | Repo-relative path to the full log (under `Generated Files/upstream-sync/<date>/build-logs/`, gitignored) |
-| `log_tail` | Last ~200 lines for inline display in the stuck issue |
+| `log_tail` | Last ~200 lines for inline display to the operator |
 
 Timeout:
 
@@ -58,23 +59,23 @@ Timeout:
 
 The agent's decision tree is in [`SKILL.md` step 7](../SKILL.md#7-build).
 In short: try ONE focused fix commit when the cause is mechanical and
-clearly caused by the pick batch; otherwise open the Tier-4 issue and
-exit. Do **not** pile up multiple fix commits — the one-fix-per-PR rule
-exists so the cherry-pick PR stays auditable as "upstream batch + at
-most one mechanical fix".
+clearly caused by the pick batch; otherwise surface the failure to the
+operator and exit. Do **not** pile up multiple fix commits — the
+one-fix-per-PR rule exists so the cherry-pick PR stays auditable as
+"upstream batch + at most one mechanical fix".
 
 ## When the build fails for fork-unrelated reasons
 
 If a flaky build (transient toolchain glitch, env issue, missing
 PlatformToolset, ...) trips the gate:
 
-1. The Tier-4 stuck issue gives a clear log tail.
-2. A human can re-run the build locally, confirm it's transient or fix
-   the host, then **close the stuck issue** to clear the lock.
-3. The next scheduler tick re-attempts the same pick range from scratch.
+1. The operator sees the log tail surfaced from step 7a.
+2. They re-run the build locally, confirm it's transient or fix
+   the host, then re-run the sync. The next attempt re-picks the same
+   range from scratch and re-validates.
 
 Distinguishing transient-build from real-pick-broke-build is left to
-the human reviewing the issue — too noisy to automate, and the cost
+the human reviewing the failure — too noisy to automate, and the cost
 of a manual cross-check is small (~once per N runs).
 
 ## Build artifacts

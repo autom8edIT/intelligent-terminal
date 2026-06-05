@@ -91,20 +91,23 @@ Anything not resolved by Tier 0–2:
 
 ~~~pwsh
 git cherry-pick --abort
-# Open the labeled stuck issue (06-open-stuck-issue.ps1) — issue body
-# carries the fenced YAML "# wta-state" block with stuck_on_sha + branch.
-# Surface the issue URL + branch to the operator and exit.
+# Push the branch, ensure the 'upstream-sync-stuck' label exists, and
+# file a plain-markdown issue with the stuck SHA, upstream URL, author,
+# branch name, and conflicting paths. See SKILL.md step 5a for the
+# exact recipe. Surface the issue URL + branch to the operator and exit.
 ~~~
 
-The issue body (built by [`scripts/06-open-stuck-issue.ps1`](../scripts/06-open-stuck-issue.ps1)) **must** include:
+The issue body **must** include:
 
 - The conflicting commit SHA, subject, author, and upstream URL.
-- The list of conflicting paths with a one-line classification each
-  (`semantic-overlap`, `deleted-by-us`, `binary-merge`, etc.).
+- The list of conflicting paths.
 - The exact local branch name where the human picks up.
 - The exact resume action: resolve on the stuck branch, merge a PR
   that keeps the `(cherry picked from commit <sha>)` trailer, then
   CLOSE the stuck issue (that's the lock-clear signal — no script).
+
+No fenced YAML metadata block is needed. Closing the labeled issue IS
+the lock-clear signal; nothing parses the body back.
 
 ## Tier 4 — Post-pick build failed
 
@@ -115,20 +118,13 @@ build-then-finalize ordering and the one-focused-fix-commit rule.
 
 | Sub-kind | Trigger | Action |
 |---|---|---|
-| **build-failed** | `bz no_clean` exited non-zero within timeout | Try ONE focused build-fix commit per [SKILL.md step 7](../SKILL.md#7-build). If that fails or scope is too large → open [Tier-4 stuck issue](../scripts/06b-open-build-stuck-issue.ps1) and exit. |
-| **build-inconclusive** | Wall-clock cap (default 45 min) hit | Open Tier-4 stuck issue immediately (don't guess at fixing a hang). |
+| **build-failed** | `bz no_clean` exited non-zero within timeout | Try ONE focused build-fix commit per [SKILL.md step 7](../SKILL.md#7-build). If that fails or scope is too large → surface the failure to the operator and exit (no issue is filed). |
+| **build-inconclusive** | Wall-clock cap (default 45 min) hit | Surface the timeout to the operator and exit (don't guess at fixing a hang). |
 
-Tier-4 state lives in the body of an open `upstream-sync-stuck` labeled
-issue (separate per kind by `findings_hash`); any such open issue causes
-the scheduler to skip. Clear by **closing the issue** after the human
-resolves the validation failure — either by merging a fix PR (whose
-trailers will advance the watermark) or by fixing the underlying defect
-on `main` directly (the next run re-attempts the same range and
-re-validates). No script needed.
-
-The Tier-4 report includes a `findings_hash` (16-hex prefix). Re-runs
-that produce the same hash mean the underlying defect is unchanged;
-a changed hash means validation has moved to a new failure mode.
+No stuck issue is filed for build failures. The operator either fixes
+the underlying defect on `main` and re-runs (the next sync re-attempts
+the same range and re-validates), or pushes a manual fix commit on top
+of the sync branch and finishes step 8 by hand.
 
 ## Line endings
 

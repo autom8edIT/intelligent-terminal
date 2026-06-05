@@ -13,15 +13,20 @@
 
 .OUTPUTS
   JSON status object on stdout:
-  { "sha": "...", "status": "picked|skipped-empty|stuck",
-    "tier0_paths": ["..."], "conflict_paths": ["..."] }
+  { "sha":            "...",
+    "status":         "picked" | "skipped-empty" | "stuck",
+    "tier0_paths":    ["..."],     // files Tier-0 auto-resolved (may be empty)
+    "conflict_paths": ["..."],     // unmerged files when status = 'stuck'
+    "error":          "..."        // human-readable explanation when status = 'stuck'; empty otherwise
+  }
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string] $Sha
 )
 
-. "$PSScriptRoot/Common.ps1"
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
 
 function Get-KnownConflicts {
     $md = Join-Path (Split-Path $PSScriptRoot -Parent) 'references/03-known-conflicts.md'
@@ -54,6 +59,7 @@ $result = [ordered] @{
     status         = 'unknown'
     tier0_paths    = @()
     conflict_paths = @()
+    error          = ''
 }
 
 # Capture upstream's author AND committer identity + dates so the

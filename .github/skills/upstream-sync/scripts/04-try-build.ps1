@@ -39,9 +39,10 @@ param(
     [string] $LogDir
 )
 
-. "$PSScriptRoot/Common.ps1"
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
 
-# --- Inlined helpers (single-use; see Common.ps1 comment for why) ----------
+# --- Inlined helpers (single-use) ----------
 
 function Get-RepoRoot {
     $r = git rev-parse --show-toplevel 2>$null

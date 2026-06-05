@@ -9,7 +9,7 @@
   within the range and drops them, detects upstream-empty commits and drops
   them, and emits the final pending list as JSON.
 
-  `01-fetch-upstream.ps1` must have been run first (we need upstream/main
+  Step 3's inline recipe must have been run first (we need upstream/main
   in this clone).
 
 .OUTPUTS
@@ -25,9 +25,10 @@
 [CmdletBinding()]
 param()
 
-. "$PSScriptRoot/Common.ps1"
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
 
-# --- Inlined helpers (single-use; see Common.ps1 comment for why) ----------
+# --- Inlined helpers (single-use) ----------
 
 function Resolve-FullCommitSha {
     param([Parameter(Mandatory)] [string] $Sha)
@@ -60,7 +61,8 @@ function Get-LastSyncedUpstreamSha {
 function Get-PendingUpstreamShas {
     # Patch-id-aware oldest-first list of upstream/main commits not yet on
     # origin/main. `--cherry-pick` drops picked-then-reverted pairs by patch
-    # ID; -Since further trims by ancestry to keep the walk fast.
+    # ID. The optional ancestry filter drops any SHA already reachable from
+    # the watermark, so the walk stays bounded even on a long-untouched fork.
     param([string] $Since)
     $out = @(git log --cherry-pick --right-only --no-merges --format='%H' --reverse 'origin/main...upstream/main' 2>$null)
     if ($LASTEXITCODE -ne 0) { throw "git log --cherry-pick failed while computing pending list." }

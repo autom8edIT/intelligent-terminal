@@ -53,7 +53,7 @@ Every persistent fact lives in the source that owns it:
 | What's the last-synced upstream commit? | Newest `(cherry picked from commit <sha>)` trailer on `origin/main` whose target is reachable from `upstream/main`. Derived inline by [`scripts/02-compute-pending.ps1`](./scripts/02-compute-pending.ps1). |
 | What's pending? | `git log --cherry-pick --right-only --no-merges origin/main...upstream/main`, then drop SHAs older than (or equal to) the watermark above. Patch-id-based, so a picked-then-reverted commit correctly re-appears. |
 | Is the scheduler locked? | Any OPEN issue with the `upstream-sync-stuck` label on `microsoft/intelligent-terminal`. Closing the issue IS the lock-clear signal. |
-| What does the lock mean? | A fenced YAML block carrying `# wta-state` in the issue body holds `tier`, `kind`, `stuck_on_sha`/`findings_hash`, etc. |
+| What does the lock mean? | The issue body (plain markdown — no machine-parseable block) names the stuck commit, the branch, and the conflicting paths. Closing the issue clears the lock. |
 | Where do build logs go? | `Generated Files/upstream-sync/<YYYY-MM-DD>/` — gitignored by the repo root's `**/Generated Files/` rule. Never committed. |
 
 ### Why cherry-pick (and not rebase or merge)
@@ -102,10 +102,17 @@ The fresh suffix means re-runs never collide with stale local branches.
 ### 3. Fetch upstream
 
 ```pwsh
-$upstreamSha = pwsh -NoProfile -File .github/skills/upstream-sync/scripts/01-fetch-upstream.ps1
+if (-not (git remote get-url upstream 2>$null)) {
+    git remote add upstream https://github.com/microsoft/terminal.git
+}
+git fetch upstream main --no-tags 2>&1 | ForEach-Object { [Console]::Error.WriteLine($_) }
+if ($LASTEXITCODE -ne 0) { throw "git fetch upstream main failed." }
+$upstreamSha = (git rev-parse upstream/main).Trim()
 ```
 
-Returns the `upstream/main` SHA. Creates the `upstream` remote if missing.
+If `upstream` already exists with a different URL (someone configured it
+to a private mirror, etc.), surface that to the operator and exit — don't
+silently rewrite it.
 
 ### 4. Compute pending
 
@@ -139,12 +146,49 @@ Branch on `$pick.status`:
 
 #### 5a. On stuck — open the Tier-3 issue and exit
 
+Push the branch, ensure the lock label exists, and file the issue with a
+plain-markdown body. Closing the issue is the lock-clear signal — no
+machine-readable metadata is needed.
+
 ```pwsh
-$issueUrl = pwsh -NoProfile -File .github/skills/upstream-sync/scripts/06-open-stuck-issue.ps1 `
-    -Branch $branch `
-    -StuckSha $sha `
-    -ConflictPaths $pick.conflict_paths `
-    -StuckError $pick.error
+git push -u origin $branch 2>&1 | ForEach-Object { [Console]::Error.WriteLine($_) }
+if ($LASTEXITCODE -ne 0) { throw "git push of $branch failed." }
+
+# Idempotent — ignores "already exists" exit code.
+gh label create 'upstream-sync-stuck' `
+    --color B60205 `
+    --description 'Upstream sync paused — close to clear the lock' `
+    -R microsoft/intelligent-terminal 2>$null
+
+$author      = git log -1 --format='%an <%ae>' $sha
+$subject     = git log -1 --format='%s' $sha
+$shortSha    = $sha.Substring(0,9)
+$pathLines   = ($pick.conflict_paths | ForEach-Object { "- ``$_``" }) -join "`n"
+$body = @"
+> [!CAUTION]
+> Upstream sync stopped at a conflict that needs human judgment.
+> **Close this issue when resolved — that IS the lock-clear signal.**
+
+**Stuck on:** ``$sha`` — $subject
+**Upstream commit:** https://github.com/microsoft/terminal/commit/$sha
+**Author:** $author
+**Sync branch:** ``$branch``
+
+**Conflicting paths:**
+$pathLines
+
+$(if ($pick.error) { "**Error:** ``$($pick.error)``" })
+
+See [references/03-conflict-triage.md](https://github.com/microsoft/intelligent-terminal/blob/main/.github/skills/upstream-sync/references/03-conflict-triage.md) for the resolution rubric.
+"@
+
+$body | Set-Content -Encoding utf8 .issuebody
+$issueUrl = gh issue create -R microsoft/intelligent-terminal `
+    --title "Upstream sync stuck at $shortSha" `
+    --label upstream-sync-stuck `
+    --body-file .issuebody
+if ($LASTEXITCODE -ne 0) { throw "gh issue create failed." }
+Remove-Item .issuebody
 ```
 
 Surface `$issueUrl` and `$branch` to the operator. The human is expected to
@@ -190,20 +234,23 @@ Branch on `$build.kind`:
 - `"build-inconclusive"` — go to step 7a (timeout, treated as a real failure
   unless the operator explicitly opts out).
 
-#### 7a. On build failure — open the Tier-4 issue and exit
+#### 7a. On build failure — surface and exit
+
+The fix attempt didn't land or the failure is too big for a one-commit
+fix. Don't open an issue. Surface the failure to the operator and exit —
+they'll either fix the underlying defect on `main` and re-run, or push a
+manual fix commit on top of `$branch` and continue to step 8 by hand.
 
 ```pwsh
-$issueUrl = pwsh -NoProfile -File .github/skills/upstream-sync/scripts/06b-open-build-stuck-issue.ps1 `
-    -Branch $branch `
-    -Kind $build.kind `
-    -PickedCount $picked.Count `
-    -BuildExitCode $build.exit_code `
-    -BuildLogTail $build.log_tail `
-    -BuildLogPath $build.log_path
+[Console]::Error.WriteLine("Build failed after upstream sync:")
+[Console]::Error.WriteLine("  branch:    $branch")
+[Console]::Error.WriteLine("  kind:      $($build.kind)")
+[Console]::Error.WriteLine("  exit_code: $($build.exit_code)")
+[Console]::Error.WriteLine("  log_path:  $($build.log_path)")
+[Console]::Error.WriteLine("--- log tail ---")
+[Console]::Error.WriteLine($build.log_tail)
+exit 1
 ```
-
-The branch is pushed by the script. Surface `$issueUrl` to the operator
-and EXIT.
 
 ### 8. Finalize the PR
 
@@ -284,8 +331,6 @@ if ($prUrl -notmatch '^https://github.com/') { throw "gh pr create did not retur
 # Skip this if the operator wants to merge by hand.
 gh pr merge -R microsoft/intelligent-terminal $prUrl --rebase --auto --delete-branch
 ```
-
-Surface `$prUrl` to the operator. Done.
 
 Surface `$prUrl` to the operator. Done.
 
@@ -445,10 +490,6 @@ fixes.
 - [references/03-known-conflicts.md](./references/03-known-conflicts.md) — files that always need a fixed resolution.
 - [references/04-build-verification.md](./references/04-build-verification.md) — try-build pipeline expectations.
 - [references/follow-up-pr.md](./references/follow-up-pr.md) — fix-in-PR vs. follow-up PR rubric and worktree workflow.
-- [scripts/01-fetch-upstream.ps1](./scripts/01-fetch-upstream.ps1) — fetch microsoft/terminal main; return SHA.
 - [scripts/02-compute-pending.ps1](./scripts/02-compute-pending.ps1) — derive watermark + pending list (no state file).
 - [scripts/03-cherry-pick-one.ps1](./scripts/03-cherry-pick-one.ps1) — cherry-pick one SHA with author/date pinning + Tier-0/Tier-1.
 - [scripts/04-try-build.ps1](./scripts/04-try-build.ps1) — run `bz no_clean`; log to `Generated Files/...`.
-- [scripts/06-open-stuck-issue.ps1](./scripts/06-open-stuck-issue.ps1) — Tier-3 stuck issue (mid-pick conflict).
-- [scripts/06b-open-build-stuck-issue.ps1](./scripts/06b-open-build-stuck-issue.ps1) — Tier-4 stuck issue (build failed after clean batch).
-- [scripts/Common.ps1](./scripts/Common.ps1) — the only two helpers shared by 2+ scripts.
