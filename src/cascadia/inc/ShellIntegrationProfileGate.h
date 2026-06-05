@@ -92,7 +92,7 @@ namespace Microsoft::Terminal::ShellIntegration
         //     "pwsh"). Plain "any-token" matching would mis-classify
         //     this. Anchoring on the launch exe avoids that whole
         //     class of false positive.
-        //   * `mypwsh.exe` — launch leaf is mypwsh.exe, not pwsh or
+        //   * `pwshell.exe` — launch leaf is pwshell.exe, not pwsh or
         //     pwsh.exe, no match ✓.
         inline bool _CommandlineHasExeToken(std::wstring_view commandline, std::wstring_view leaf) noexcept
         {

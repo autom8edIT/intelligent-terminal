@@ -281,19 +281,34 @@ namespace Microsoft::Terminal::ShellIntegration
         const auto profileDir = profilePath.parent_path();
         const auto scriptPath = flavor.scriptDir / flavor.scriptFileName;
 
+        const auto formatFsError = [](std::wstring_view what,
+                                      const std::filesystem::path& path,
+                                      const std::error_code& ec) -> std::wstring {
+            // ec.message() returns ASCII narrow chars; widen by per-byte copy
+            // (system_category strings are ASCII on Windows).
+            const auto narrow = ec.message();
+            std::wstring out{ what };
+            out += L" '" + path.wstring() + L"': ";
+            out += std::to_wstring(ec.value()) + L' ';
+            out.append(narrow.begin(), narrow.end());
+            return out;
+        };
+
         std::error_code ec;
         if (!profileDir.empty())
         {
             std::filesystem::create_directories(profileDir, ec);
             if (ec)
             {
-                return { false, false, L"Failed to create profile directory" };
+                return { false, false,
+                         formatFsError(L"Failed to create profile directory", profileDir, ec) };
             }
         }
         std::filesystem::create_directories(flavor.scriptDir, ec);
         if (ec)
         {
-            return { false, false, L"Failed to create script directory" };
+            return { false, false,
+                     formatFsError(L"Failed to create script directory", flavor.scriptDir, ec) };
         }
 
         if (!std::filesystem::exists(profilePath))

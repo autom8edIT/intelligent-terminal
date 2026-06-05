@@ -1449,8 +1449,10 @@ void ShellIntegrationTests::ProfileGate_PwshCommandlineLeafExeMatches()
     VERIFY_IS_FALSE(_ProfileMatchesShell(Target::Pwsh,
                                          L"",
                                          L"cmd.exe /c echo pwsh"));
-    // Lookalike leaf must NOT match (anchor on the full leaf token).
-    VERIFY_IS_FALSE(_ProfileMatchesShell(Target::Pwsh, L"", L"mypwsh.exe"));
+    // Names whose leaf contains "pwsh" as a substring but doesn't
+    // equal "pwsh" or "pwsh.exe" must NOT match (the matcher anchors
+    // on the full leaf token, not any substring).
+    VERIFY_IS_FALSE(_ProfileMatchesShell(Target::Pwsh, L"", L"pwshell.exe"));
     VERIFY_IS_FALSE(_ProfileMatchesShell(Target::Pwsh, L"", L"pwsh-preview.exe"));
     // Unquoted path containing a space is malformed Windows commandline
     // (CommandLineToArgvW would split on the space). We don't match it
