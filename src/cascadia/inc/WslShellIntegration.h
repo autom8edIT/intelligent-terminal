@@ -197,14 +197,28 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
                         if (entry.size() >= 9 &&
                             _wcsnicmp(entry.data(), L"WSL_UTF8=", 9) == 0)
                         {
-                            wslUtf8Replaced = true;
-                            childEnv.append(L"WSL_UTF8=1");
+                            // Emit our canonical WSL_UTF8=1 exactly
+                            // ONCE, even if the parent env (rarely)
+                            // contains multiple WSL_UTF8 entries.
+                            // Subsequent duplicates are silently
+                            // dropped — the env block is now de-duped
+                            // and the child sees a single definition.
+                            if (!wslUtf8Replaced)
+                            {
+                                childEnv.append(L"WSL_UTF8=1");
+                                childEnv.push_back(L'\0');
+                                wslUtf8Replaced = true;
+                            }
+                            // Skip pushing anything for duplicate
+                            // entries (don't even emit a separator —
+                            // env entries are NUL-terminated, and a
+                            // skipped entry leaves no trace).
                         }
                         else
                         {
                             childEnv.append(entry);
+                            childEnv.push_back(L'\0');
                         }
-                        childEnv.push_back(L'\0');
                     }
                     FreeEnvironmentStringsW(origEnvBlock);
                     if (!wslUtf8Replaced)
@@ -295,8 +309,14 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
         // restarting Windows Terminal. Reconcile runs only on settings
         // changes, not in a tight loop, so this won't thrash on a
         // legitimately stopped distro.
-        // Mutex protects both the map AND each individual probe so two
-        // racing callers for the same distro don't both spawn wsl.exe.
+        // Mutex protects only the cache MAP read/write — the probe
+        // itself runs unlocked (see double-checked locking below).
+        // Two concurrent callers for the same distro can therefore
+        // both spawn wsl.exe; this is intentional. Serializing the
+        // probe would block all callers (including for OTHER distros)
+        // for up to 30s on a cold-start, which is worse than the rare
+        // duplicate spawn. The second writer's cache insert is
+        // dropped (it sees the first writer's entry on the re-check).
         inline std::string GetWslHomeCached(std::wstring_view distName)
         {
             static std::mutex cacheMu;
