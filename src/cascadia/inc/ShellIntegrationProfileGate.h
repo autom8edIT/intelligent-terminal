@@ -16,8 +16,9 @@
 // This header exposes two pure functions:
 //
 //   * _ProfileMatchesShell(target, source, commandline) — pure,
-//     trivially unit-testable. Substring-based shell detection rules
-//     documented at the function.
+//     trivially unit-testable. Launch-exe leaf token matching with
+//     a source discriminator for the Pwsh dynamic generator; see
+//     the rules table at the function body.
 //
 //   * AnyProfileUsesShell<ProfilesT>(target, profiles) — template
 //     iterator that calls _ProfileMatchesShell on every profile in
@@ -40,42 +41,6 @@ namespace Microsoft::Terminal::ShellIntegration
 {
     namespace details
     {
-        // Case-insensitive substring match on UTF-16 code units. ASCII
-        // fold only — sufficient for matching shell-leaf strings in
-        // commandlines (those are ASCII).
-        inline bool _CaseInsensitiveContains(std::wstring_view haystack, std::wstring_view needle) noexcept
-        {
-            if (needle.empty())
-            {
-                return true;
-            }
-            if (haystack.size() < needle.size())
-            {
-                return false;
-            }
-            const auto fold = [](wchar_t c) noexcept -> wchar_t {
-                return (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + (L'a' - L'A')) : c;
-            };
-            const auto limit = haystack.size() - needle.size();
-            for (size_t i = 0; i <= limit; ++i)
-            {
-                bool match = true;
-                for (size_t j = 0; j < needle.size(); ++j)
-                {
-                    if (fold(haystack[i + j]) != fold(needle[j]))
-                    {
-                        match = false;
-                        break;
-                    }
-                }
-                if (match)
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-
         // Returns true if the LAUNCH executable in `commandline` is
         // exactly `<leaf>` or `<leaf>.exe` (case-insensitive, leaf
         // compared after stripping the directory portion). The launch
