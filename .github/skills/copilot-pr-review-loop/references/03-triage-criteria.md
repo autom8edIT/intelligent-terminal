@@ -91,8 +91,9 @@ obvious fix may violate a project rule.
 
 Common cases:
 
-- **Spell-check / dictionary findings**: many projects (including
-  `microsoft/intelligent-terminal`) follow this priority order:
+- **Spell-check / dictionary findings**: when a project uses
+  `check-spelling` (or similar), prefer this priority order when the
+  policy isn't otherwise documented:
   1. **Reword the document** to use plain English when the finding is
      a genuine misspelling or an avoidable jargon term — this is the
      preferred fix.

@@ -181,11 +181,15 @@ try {
 
 $deadline = (Get-Date).AddSeconds($VerifySeconds)
 $afterTs = ''
+$lastErr = ''
 do {
     $r = Invoke-Gh -GhArgs @('api','--paginate',"repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100",'--jq','[.[] | select(.event=="copilot_work_started") | .created_at] | sort | .[-1] // ""')
     if ($r.ExitCode -eq 0) {
+        $lastErr = ''
         $now = (@($r.Stdout -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) | Sort-Object | Select-Object -Last 1)
         if ($now -and [string]::CompareOrdinal($now, $beforeTs) -gt 0) { $afterTs = $now; break }
+    } else {
+        $lastErr = $r.Stderr.Trim()
     }
     if ((Get-Date) -ge $deadline) { break }
     $remaining = [int]($deadline - (Get-Date)).TotalSeconds
@@ -193,10 +197,11 @@ do {
 } while ((Get-Date) -lt $deadline)
 
 if (-not $afterTs) {
+    $errTail = if ($lastErr) { "`n  Last events-query error: $lastErr" } else { '' }
     throw @"
-GraphQL mutation returned success but no copilot_work_started event landed within $VerifySeconds seconds. The server may have silently dropped the request.
+GraphQL mutation returned success but no copilot_work_started event landed within $VerifySeconds seconds. The server may have silently dropped the request, or the events query kept failing transiently.
   Latest copilot_work_started before: '$beforeTs'
-  HEAD: $headOid
+  HEAD: $headOid$errTail
 
 Push a substantive commit (auto-assign on synchronize is the most reliable trigger) and retry.
 "@
