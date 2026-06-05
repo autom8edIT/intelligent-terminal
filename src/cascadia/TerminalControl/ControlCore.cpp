@@ -1180,11 +1180,18 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - fontSizeDelta: The amount to increase or decrease the font size by.
     void ControlCore::AdjustFontSize(float fontSizeDelta)
     {
-        _accumulatedFontSizeDelta += fontSizeDelta;
+        // Clamp the requested size before recording the delta, so the
+        // accumulator never drifts past the floor that _setFontSizeUnderLock
+        // enforces. Otherwise, after hitting the minimum, the user would have
+        // to spend many opposite-direction presses to "burn off" the unused
+        // delta before the font size starts changing again.
+        const auto baseSize = _settings.FontSize();
+        const auto requestedSize = std::max(baseSize + _accumulatedFontSizeDelta + fontSizeDelta, 1.0f);
+        _accumulatedFontSizeDelta = requestedSize - baseSize;
 
         const auto lock = _terminal->LockForWriting();
 
-        if (_setFontSizeUnderLock(_settings.FontSize() + _accumulatedFontSizeDelta))
+        if (_setFontSizeUnderLock(requestedSize))
         {
             _refreshSizeUnderLock();
         }
