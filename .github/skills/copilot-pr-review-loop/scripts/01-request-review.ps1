@@ -66,15 +66,50 @@ $ErrorActionPreference = 'Stop'
 # stderr into ConvertFrom-Json on success.
 function Invoke-Gh {
     param([Parameter(Mandatory)][string[]]$GhArgs)
-    $errFile = [IO.Path]::GetTempFileName()
+
+    $psi = [System.Diagnostics.ProcessStartInfo]::new('gh')
+    foreach ($arg in $GhArgs) { $null = $psi.ArgumentList.Add($arg) }
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $proc = [System.Diagnostics.Process]::Start($psi)
     try {
-        $out = & gh @GhArgs 2>$errFile
-        $ec = $LASTEXITCODE
-        $err = (Get-Content -Raw -LiteralPath $errFile -ErrorAction SilentlyContinue) ?? ''
-        [pscustomobject]@{ ExitCode = $ec; Stdout = ($out | Out-String); Stderr = $err }
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        $proc.WaitForExit()
+        [pscustomobject]@{
+            ExitCode = $proc.ExitCode
+            Stdout   = $outTask.GetAwaiter().GetResult()
+            Stderr   = $errTask.GetAwaiter().GetResult()
+        }
     } finally {
-        Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue
+        $proc.Dispose()
     }
+}
+
+function Get-LatestCopilotWorkStartedEvent {
+    $eventsPath = "repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100"
+    $r = Invoke-Gh -GhArgs @('api','-i',$eventsPath)
+    if ($r.ExitCode -ne 0) { throw "events query failed: $($r.Stderr)" }
+
+    $m = [regex]::Match($r.Stdout, '(?s)\A(?<headers>.*?)\r?\n\r?\n(?<body>.*)\z')
+    if (-not $m.Success) { throw 'events query returned an unexpected header/body shape.' }
+    $headers = $m.Groups['headers'].Value
+    $body = $m.Groups['body'].Value
+
+    $lastPage = 1
+    $lastMatch = [regex]::Match($headers, 'page=(\d+)>; rel="last"')
+    if ($lastMatch.Success) { $lastPage = [int]$lastMatch.Groups[1].Value }
+    if ($lastPage -gt 1) {
+        $r = Invoke-Gh -GhArgs @('api',"repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100&page=$lastPage")
+        if ($r.ExitCode -ne 0) { throw "events last-page query failed: $($r.Stderr)" }
+        $body = $r.Stdout
+    }
+
+    $events = @($body | ConvertFrom-Json)
+    $latest = @($events | Where-Object { $_.event -eq 'copilot_work_started' } | Sort-Object id | Select-Object -Last 1)
+    if (-not $latest) { return [pscustomobject]@{ Id = 0L; CreatedAt = '' } }
+    [pscustomobject]@{ Id = [long]$latest.id; CreatedAt = [string]$latest.created_at }
 }
 
 # ---------- repo resolve ----------
@@ -95,6 +130,7 @@ $stateQuery = @'
 query($o:String!,$r:String!,$n:Int!){
   repository(owner:$o,name:$r){
     pullRequest(number:$n){
+      id
       headRefOid
       state
       reviewRequests(first:100){nodes{requestedReviewer{__typename ... on Bot{login} ... on User{login} ... on Mannequin{login}}} pageInfo{hasNextPage endCursor}}
@@ -115,6 +151,10 @@ if ($pr.state -ne 'OPEN') {
 }
 
 $headOid = $pr.headRefOid
+$prNodeId = [string]$pr.id
+if ([string]::IsNullOrWhiteSpace($prNodeId)) {
+    throw "Failed to resolve PR node id for $Owner/$Repo PR #$PrNumber from state query."
+}
 $reviewRequests = @($pr.reviewRequests.nodes)
 $after = $pr.reviewRequests.pageInfo.endCursor
 while ($pr.reviewRequests.pageInfo.hasNextPage) {
@@ -161,29 +201,10 @@ if ($copilotPending) {
 # Snapshot the latest copilot_work_started BEFORE triggering. Use the
 # event's numeric `id` (monotonic) — `created_at` is second-resolution
 # and would collide if a new event lands in the same second.
-$r = Invoke-Gh -GhArgs @('api','--paginate',"repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100",'--jq','[.[] | select(.event=="copilot_work_started") | {id, created_at}] | sort_by(.id) | .[-1] // null')
-if ($r.ExitCode -ne 0) { throw "events query failed: $($r.Stderr)" }
-$beforeId = 0L
-$beforeRaw = ($r.Stdout -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne 'null' } | Select-Object -Last 1)
-if ($beforeRaw) {
-    $beforeObj = $beforeRaw | ConvertFrom-Json
-    if ($beforeObj -and $beforeObj.id) { $beforeId = [long]$beforeObj.id }
-}
+$beforeEvent = Get-LatestCopilotWorkStartedEvent
+$beforeId = $beforeEvent.Id
 
 # ---------- trigger via GraphQL requestReviewsByLogin ----------
-
-$prIdQuery = "query{repository(owner:`"$Owner`",name:`"$Repo`"){pullRequest(number:$PrNumber){id}}}"
-$r = Invoke-Gh -GhArgs @('api','graphql','-f',"query=$prIdQuery")
-if ($r.ExitCode -ne 0) { throw "PR node id query failed: $($r.Stderr)" }
-$prIdJson = $r.Stdout | ConvertFrom-Json
-if ($prIdJson.errors) {
-    $msgs = ($prIdJson.errors | ForEach-Object { $_.message }) -join '; '
-    throw "PR node id query returned GraphQL errors: $msgs"
-}
-$prNodeId = [string]$prIdJson.data.repository.pullRequest.id
-if ([string]::IsNullOrWhiteSpace($prNodeId) -or $prNodeId -eq 'null') {
-    throw "Failed to resolve PR node id for $Owner/$Repo PR #$PrNumber. GraphQL returned '$prNodeId'."
-}
 
 $mut = 'mutation($p:ID!){requestReviewsByLogin(input:{pullRequestId:$p,botLogins:["copilot-pull-request-reviewer"]}){pullRequest{number}}}'
 $r = Invoke-Gh -GhArgs @('api','graphql','-f',"query=$mut",'-f',"p=$prNodeId")
@@ -215,20 +236,16 @@ $afterTs = ''
 $afterId = 0L
 $lastErr = ''
 do {
-    $r = Invoke-Gh -GhArgs @('api','--paginate',"repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100",'--jq','[.[] | select(.event=="copilot_work_started") | {id, created_at}] | sort_by(.id) | .[-1] // null')
-    if ($r.ExitCode -eq 0) {
+    try {
+        $nowEvent = Get-LatestCopilotWorkStartedEvent
         $lastErr = ''
-        $raw = ($r.Stdout -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne 'null' } | Select-Object -Last 1)
-        if ($raw) {
-            $obj = $raw | ConvertFrom-Json
-            if ($obj -and $obj.id -and [long]$obj.id -gt $beforeId) {
-                $afterId = [long]$obj.id
-                $afterTs = [string]$obj.created_at
-                break
-            }
+        if ($nowEvent.Id -gt $beforeId) {
+            $afterId = $nowEvent.Id
+            $afterTs = $nowEvent.CreatedAt
+            break
         }
-    } else {
-        $lastErr = $r.Stderr.Trim()
+    } catch {
+        $lastErr = $_.Exception.Message
     }
     if ((Get-Date) -ge $deadline) { break }
     $remaining = [int]($deadline - (Get-Date)).TotalSeconds
