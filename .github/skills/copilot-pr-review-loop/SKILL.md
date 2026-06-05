@@ -61,9 +61,9 @@ commands, rationale, the per-step sub-agent delegation table, and a
 resumable checklist, is in [references/workflow.md](references/workflow.md).
 
 ```
-Request review → Wait for trigger pickup → Wait for review submission →
-List open threads → Triage → Fix → Build/test → Reply + resolve → Loop →
-Cleanup outdated (final, once)
+Request review + verify pickup → Wait for review submission → List open
+threads → Triage → Fix → Build/test → Reply + resolve → Loop → Cleanup
+outdated (final, once)
 ```
 
 Terminate when a review with `commit.oid == current HEAD` returns "no new

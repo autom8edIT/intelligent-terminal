@@ -116,7 +116,7 @@ $threads = $all
 $open = $threads | Where-Object { -not $_.isResolved }
 
 if (-not $open) {
-    Write-Output 'No open threads.'
+    Write-Host 'No open threads.'
     return
 }
 

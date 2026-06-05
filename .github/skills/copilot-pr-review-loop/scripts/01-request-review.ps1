@@ -145,9 +145,9 @@ function ToUtcDt {
 # verification logic will spin / falsely report "no event".
 function Get-LatestCopilotWorkStarted {
     $json = gh api --paginate "repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100" `
-        --jq '[.[] | select(.event=="copilot_work_started") | .created_at] | sort | .[-1] // ""'
+        --jq '[.[] | select(.event=="copilot_work_started") | .created_at] | sort | .[-1] // ""' 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "gh api events failed (exit $LASTEXITCODE) while snapshotting copilot_work_started events."
+        throw "gh api events failed (exit $LASTEXITCODE) while snapshotting copilot_work_started events: $json"
     }
     # --paginate concatenates jq output from each page; take the last line which is the newest.
     $lines = $json -split "`n" | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() }
@@ -158,14 +158,14 @@ function Get-LatestCopilotWorkStarted {
 
 function Get-LatestReviewRequested {
     $json = gh api --paginate "repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100" `
-        --jq '[.[] | select(.event=="review_requested" and (.requested_reviewer.login // "" | test("^(?i)copilot"))) | .created_at] | sort | .[-1] // ""'
+        --jq '[.[] | select(.event=="review_requested" and (.requested_reviewer.login // "" | test("^(?i)copilot"))) | .created_at] | sort | .[-1] // ""' 2>&1
     if ($LASTEXITCODE -ne 0) {
         # Be consistent with Get-LatestCopilotWorkStarted: throw on API
         # failure rather than silently swallowing. Returning '' here used
         # to mask auth/rate-limit issues and could misclassify PR state
         # (a failed events fetch looked like "no request exists" and the
         # stuck-pending re-arm path would be silently skipped).
-        throw "gh api events failed (exit $LASTEXITCODE) while fetching review_requested events."
+        throw "gh api events failed (exit $LASTEXITCODE) while fetching review_requested events: $json"
     }
     $lines = $json -split "`n" | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() }
     if (-not $lines -or $lines.Count -eq 0) { return '' }
