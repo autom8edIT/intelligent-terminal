@@ -119,12 +119,18 @@ try {
         @(Get-Content -LiteralPath $logPath -Tail 200) -join "`n"
     } else { '' }
 
+    # Emit a repo-relative log_path when the log lives inside the repo
+    # (the common case). Absolute paths leak machine-specific details
+    # like username + drive letter into GitHub issues/reports. Fall back
+    # to the absolute path when the user passed a custom -LogDir that
+    # sits outside the repo root.
+    $logPathForReport = try { ConvertTo-RepoRelativePath $logPath } catch { $logPath }
     $doc = [ordered] @{
         kind        = $kind
         exit_code   = $exitCode
         duration_ms = $durationMs
         command     = $BuildCommand
-        log_path    = $logPath
+        log_path    = $logPathForReport
         log_tail    = $tailLines
     }
     $doc | ConvertTo-Json -Depth 4
