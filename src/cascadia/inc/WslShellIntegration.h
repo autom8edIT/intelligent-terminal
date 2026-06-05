@@ -282,8 +282,14 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
         // first access. Each distro pays the cold-start cost at most
         // once per process. Cache entry value:
         //   • non-empty string → cached home
-        //   • empty string → cached negative (probe failed) so a
-        //     reconcile loop doesn't keep retrying a stopped distro
+        //   • empty string → probe failed (distro stopped, transient
+        //     WSL startup race, or `$HOME` not readable). NOT cached:
+        //     a fresh Install/Uninstall call from the user (e.g. via
+        //     Settings UI or FRE retry) re-probes from scratch so the
+        //     user can recover from transient failures without
+        //     restarting Windows Terminal. Reconcile runs only on
+        //     settings changes, not in a tight loop, so this won't
+        //     thrash on a legitimately stopped distro.
         // Mutex protects both the map AND each individual probe so two
         // racing callers for the same distro don't both spawn wsl.exe.
         inline std::string GetWslHomeCached(std::wstring_view distName)
@@ -297,7 +303,13 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
                 return it->second;
             }
             auto home = QueryWslHomeRaw(distName);
-            cache.emplace(std::wstring{ distName }, home);
+            // Only cache successful probes. Failed probes (empty) are
+            // re-attempted on the next call — see the comment above for
+            // why this is the right trade-off.
+            if (!home.empty())
+            {
+                cache.emplace(std::wstring{ distName }, home);
+            }
             return home;
         }
     }

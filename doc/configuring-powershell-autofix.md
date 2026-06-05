@@ -23,7 +23,7 @@ The downstream pipeline (autofix detection, classification, VT-event forwarding)
 ## Requirements
 
 - **Windows Terminal** with the Intelligent Terminal build (handles event forwarding)
-- A supported shell with integration enabled (FRE / Settings UI installs both PowerShell flavors and Bash automatically)
+- A supported shell with integration enabled (FRE / Settings UI installs both PowerShell flavors, Bash, and per-distro WSL bash automatically)
 
 ## Enabling Shell Integration
 
@@ -59,10 +59,10 @@ Add the following to your `~/.bashrc`:
 ```bash
 __it_shellinteg_prompt() {
     local __ec=$?
-    printf '\033]133;D;%s\007\033]133;A\007\033]9;9;"%s"\007' "$__ec" "$PWD"
+    printf '\033]133;D;%s\007\033]133;A\007\033]9;9;"%s"\007' "$__ec" "${PWD:-}"
 }
 PROMPT_COMMAND=__it_shellinteg_prompt
-PS1="${PS1}"$'\[\033]133;B\007\]'
+PS1="${PS1:-}"$'\[\033]133;B\007\]'
 ```
 
 This produces the same `133;D` / `133;A` / `133;B` marks as the PowerShell snippet (plus OSC `9;9` to report the current working directory). The `\[ \]` brackets tell readline the embedded escape sequence is zero-width so line wrap stays correct.
