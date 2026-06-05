@@ -97,7 +97,7 @@ query($o:String!,$r:String!,$n:Int!){
     pullRequest(number:$n){
       headRefOid
       state
-      reviewRequests(first:50){nodes{requestedReviewer{__typename ... on Bot{login} ... on User{login} ... on Mannequin{login}}}}
+      reviewRequests(first:100){nodes{requestedReviewer{__typename ... on Bot{login} ... on User{login} ... on Mannequin{login}}}}
     }
   }
 }
@@ -115,7 +115,7 @@ if ($pr.state -ne 'OPEN') {
 }
 
 $headOid = $pr.headRefOid
-$copilotPending = ($pr.reviewRequests.nodes | Where-Object { $_.requestedReviewer.login -match '(?i)^(copilot-pull-request-reviewer(\[bot\])?|copilot(\[bot\])?)$' }).Count -gt 0
+$copilotPending = @($pr.reviewRequests.nodes | Where-Object { $_.requestedReviewer.login -match '(?i)^(copilot-pull-request-reviewer(\[bot\])?|copilot(\[bot\])?)$' }).Count -gt 0
 
 # If Copilot is currently in requested_reviewers, it's in-flight by definition.
 if ($copilotPending) {
