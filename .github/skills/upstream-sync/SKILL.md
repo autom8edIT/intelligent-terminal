@@ -154,11 +154,16 @@ machine-readable metadata is needed.
 git push -u origin $branch 2>&1 | ForEach-Object { [Console]::Error.WriteLine($_) }
 if ($LASTEXITCODE -ne 0) { throw "git push of $branch failed." }
 
-# Idempotent — ignores "already exists" exit code.
-gh label create 'upstream-sync-stuck' `
+# Idempotent — `gh label create` returns non-zero when the label already
+# exists. We swallow that specific case but surface everything else so an
+# auth/repo-typo failure doesn't get silently absorbed.
+$labelOut = gh label create 'upstream-sync-stuck' `
     --color B60205 `
     --description 'Upstream sync paused — close to clear the lock' `
-    -R microsoft/intelligent-terminal 2>$null
+    -R microsoft/intelligent-terminal 2>&1
+if ($LASTEXITCODE -ne 0 -and ($labelOut -notmatch 'already exists')) {
+    throw "gh label create failed: $labelOut"
+}
 
 $author      = git log -1 --format='%an <%ae>' $sha
 $subject     = git log -1 --format='%s' $sha
@@ -310,7 +315,8 @@ with "Head sha can't be blank" right after a push — retry up to 3× with
 a short delay:
 
 ```pwsh
-git push -u origin $branch
+git push -u origin $branch 2>&1 | ForEach-Object { [Console]::Error.WriteLine($_) }
+if ($LASTEXITCODE -ne 0) { throw "git push of $branch failed." }
 
 $short = $upstreamSha.Substring(0,9)
 $title = "chore(upstream): sync microsoft/terminal up to $short"

@@ -22,13 +22,15 @@ foreach ($p in $conflictingPaths) {
     switch ($entry.Strategy) {
         'take-upstream' { git checkout --theirs -- $p; git add -- $p }
         'take-ours'     { git checkout --ours    -- $p; git add -- $p }
-        'union'         { git merge-file --union  ... }
+        'union'         { <# escalates — Tier-3 #> }
     }
 }
 git cherry-pick --continue --no-edit
 ```
 
 If `git status` is now clean and the cherry-pick continued, **Tier 0 fully resolved** — record the file(s) auto-resolved and move on.
+
+> **Note:** `union` is recognized by [`03-known-conflicts.md`](./03-known-conflicts.md) parsing for forward compatibility but is **not implemented** in [`scripts/03-cherry-pick-one.ps1`](../scripts/03-cherry-pick-one.ps1) — a `union` entry currently falls through to Tier-3 with the path listed under `conflict_paths`. Author Tier-0 entries with `take-upstream` or `take-ours` only.
 
 ## Tier 1 — Empty after staging
 

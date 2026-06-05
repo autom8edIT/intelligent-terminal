@@ -189,6 +189,7 @@ if ($unhandled.Count -gt 0) {
     if ($LASTEXITCODE -ne 0) { throw "git cherry-pick --abort failed after unhandled conflicts; repository may still be mid-cherry-pick." }
     $result.status = 'stuck'
     $result.conflict_paths = $unhandled
+    $result.error = "Cherry-pick of $Sha hit conflicts not covered by Tier-0 known-conflicts rules in $($unhandled.Count) path(s)."
     $result | ConvertTo-Json -Compress
     return
 }
@@ -208,6 +209,11 @@ if ($LASTEXITCODE -ne 0) {
     git cherry-pick --abort | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "git cherry-pick --abort failed after Tier-0 continuation failed; repository may still be mid-cherry-pick." }
     $result.status = 'stuck'
+    # Capture any unmerged files left after the failed --continue so the
+    # Tier-3 issue body lists *something* concrete.
+    $stillUnmerged = @(git diff --name-only --diff-filter=U 2>$null)
+    if ($stillUnmerged.Count -gt 0) { $result.conflict_paths = $stillUnmerged }
+    $result.error = "git cherry-pick --continue failed after Tier-0 auto-resolution for $Sha; the residual conflict is not mechanically resolvable."
     $result | ConvertTo-Json -Compress
     return
 }

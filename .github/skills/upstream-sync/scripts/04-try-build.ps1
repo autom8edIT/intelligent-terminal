@@ -4,9 +4,10 @@
   captures the result. Default: `cmd /c "tools\razzle.cmd && bz no_clean"`.
 
 .DESCRIPTION
-  Run AFTER cherry-picking (03) and BEFORE finalizing the PR (05). If the
-  build fails, the agent commits a fix on the same sync branch so it lands
-  in the same PR — that is why try-build is step 04, not step 99.
+  Run AFTER cherry-picking (03) and BEFORE finalizing the PR (SKILL.md
+  step 8). If the build fails, the agent commits a fix on the same sync
+  branch so it lands in the same PR — that is why try-build is step 04,
+  not the last step.
 
 .PARAMETER BuildCommand
   Override the default build command. Must be a string the cmd.exe shell
