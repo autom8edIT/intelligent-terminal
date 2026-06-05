@@ -102,7 +102,19 @@ __IT_SHELLINTEG_INSTALLED=1
 
 # Snapshot the user's PROMPT_COMMAND once; we re-run it from our wrapper
 # so we don't clobber any existing hook (starship, oh-my-bash, etc).
-__IT_SHELLINTEG_USER_PC="${PROMPT_COMMAND:-}"
+# Bash 5.1+ allows PROMPT_COMMAND to be an array (each element runs
+# before the prompt). Reading `${PROMPT_COMMAND:-}` as a scalar would
+# silently capture only the first array element and drop the rest, so
+# we use `${PROMPT_COMMAND[*]:-}` with IFS=';' to join every entry into
+# a single ;-separated string that eval can re-run in sequence. On a
+# scalar PROMPT_COMMAND `${VAR[*]}` is equivalent to `${VAR}`, so this
+# also works unchanged on bash 3.2+.
+__it_pc_oldifs="${IFS- 	
+}"
+IFS=';'
+__IT_SHELLINTEG_USER_PC="${PROMPT_COMMAND[*]:-}"
+IFS="$__it_pc_oldifs"
+unset __it_pc_oldifs
 
 __it_shellinteg_prompt() {
     local __ec=$?
