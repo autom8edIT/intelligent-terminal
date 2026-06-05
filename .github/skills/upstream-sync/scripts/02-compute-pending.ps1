@@ -95,7 +95,12 @@ function Get-PendingUpstreamShas {
         }
         $shas = @($filtered)
     }
-    return ,$shas
+    # PowerShell streams arrays. Use `,$shas` would wrap into a single
+    # pipeline object; the caller's `@(...)` then receives a 1-element
+    # array containing the nested array, breaking the subsequent
+    # foreach. Just emit the array — `@(Get-PendingUpstreamShas …)`
+    # rebuilds a flat string[] from the stream.
+    return $shas
 }
 
 # --- Main logic ------------------------------------------------------------

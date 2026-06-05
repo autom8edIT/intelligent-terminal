@@ -109,9 +109,14 @@ $env:GIT_COMMITTER_DATE  = $info[5]
 
 try {
 
-# Attempt the pick.
-git cherry-pick --keep-redundant-commits -x $fullSha 2>&1 | ForEach-Object { [Console]::Error.WriteLine($_) }
-$pickCode = $LASTEXITCODE
+# Attempt the pick. Capture the stream so we can both forward it to our
+# own stderr (for live operator visibility) AND surface the trailing
+# context in the stuck result for non-conflict failures (e.g. merge
+# commit without -m, hook failures, unsupported git version).
+$pickOutput = git cherry-pick --keep-redundant-commits -x $fullSha 2>&1
+$pickCode   = $LASTEXITCODE
+$pickOutput | ForEach-Object { [Console]::Error.WriteLine($_) }
+$pickTail   = (@($pickOutput) | Select-Object -Last 20 | Out-String).Trim()
 
 if ($pickCode -eq 0) {
     # Tier-1 check: did we just create an empty commit (allowed by --keep-redundant-commits)?
@@ -140,12 +145,12 @@ if ($pickCode -eq 0) {
 # mid-cherry-pick. Abort and surface a controlled stuck result.
 $conflicts = Get-ConflictPaths
 if (-not $conflicts -or $conflicts.Count -eq 0) {
-    Write-Warning "git cherry-pick exited $pickCode with no conflict paths — likely a non-conflict failure (e.g. merge commit without -m). Aborting and marking stuck."
+    Write-Warning "git cherry-pick exited $pickCode with no conflict paths — likely a non-conflict failure (e.g. merge commit without -m). Aborting and marking stuck.`nLast git output:`n$pickTail"
     git cherry-pick --abort 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "git cherry-pick --abort failed after a non-conflict failure; repository may still be mid-cherry-pick." }
     $result.status = 'stuck'
     $result.conflict_paths = @()
-    $result.error = "git cherry-pick exited $pickCode with no conflict paths"
+    $result.error = "git cherry-pick exited $pickCode with no conflict paths. Last output: $pickTail"
     $result | ConvertTo-Json -Compress
     return
 }
