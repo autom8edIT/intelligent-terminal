@@ -60,7 +60,13 @@ namespace winrt::TerminalApp::implementation
                     return cmd.substr(tokStart, tokEnd - tokStart);
                 }
             }
-            return std::wstring{ profile.Name() };
+            // Commandline parse failed. Do NOT fall back to profile.Name() —
+            // that's user-editable display text (see
+            // doc/cascadia/profiles.schema.json), so using it as a distro
+            // identifier would write integration to the wrong distro or
+            // produce a wsl.exe spawn failure. Return empty; the caller
+            // (_SnapshotWslDistroNames) drops empty results.
+            return {};
         }
 
         // Snapshot the user's WSL distros from the live settings model.
@@ -91,6 +97,16 @@ namespace winrt::TerminalApp::implementation
                 if (profile.Source() == L"Windows.Terminal.Wsl")
                 {
                     auto name = _ExtractWslDistroName(profile);
+                    if (name.empty())
+                    {
+                        // _ExtractWslDistroName couldn't parse the
+                        // commandline. Skipping rather than attempting
+                        // an InstallWslBash("") that's guaranteed to
+                        // fail (and produces a noisy error in the FRE
+                        // / Settings UI). User's malformed WSL profile
+                        // simply doesn't get integration; the rest do.
+                        continue;
+                    }
                     if (seen.insert(name).second)
                     {
                         out.emplace_back(std::move(name));

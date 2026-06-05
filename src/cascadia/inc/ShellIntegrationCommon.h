@@ -29,6 +29,9 @@
 #include <string_view>
 #include <utility>
 #include <ShlObj.h>
+#include <fmt/compile.h>
+#include <fmt/format.h>
+#include <fmt/xchar.h>
 #include <wil/resource.h>
 
 namespace Microsoft::Terminal::ShellIntegration
