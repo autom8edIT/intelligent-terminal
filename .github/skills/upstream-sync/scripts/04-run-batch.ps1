@@ -106,8 +106,22 @@ function Invoke-Tier4Stuck {
 }
 
 try {
-    $state = Read-State
     $ctx = New-RunContext
+
+    # Fast-forward local main from origin BEFORE reading state.json. The
+    # single-active-lock and last_synced_upstream_sha invariants live on
+    # origin/main; a stale local clone would let this scheduler proceed
+    # past a stuck-lock set by a concurrent run on another host or by
+    # the operator's `clear-stuck.ps1` reverse (defeating the whole
+    # safety model). Worktree cleanliness is checked first so that an
+    # unrelated dirty file can't block the FF unexpectedly mid-script.
+    Assert-CleanWorktree
+    git switch main 2>&1 | Out-Host
+    if ($LASTEXITCODE -ne 0) { Exit-Hard "git switch main failed." }
+    git pull --ff-only origin main 2>&1 | Out-Host
+    if ($LASTEXITCODE -ne 0) { Exit-Hard "git pull --ff-only origin main failed." }
+
+    $state = Read-State
 
     # --- Stuck-lock gate (Tier-3 OR Tier-4) ---
     $stuckTier3 = [bool] $state.stuck_on_sha
@@ -180,10 +194,9 @@ try {
     }
 
     Assert-CleanWorktree
-    git switch main 2>&1 | Out-Host
-    if ($LASTEXITCODE -ne 0) { Exit-Hard "git switch main failed." }
-    git pull --ff-only origin main 2>&1 | Out-Host
-    if ($LASTEXITCODE -ne 0) { Exit-Hard "git pull --ff-only origin main failed." }
+    # main is already FF'd from origin above (before the stuck-lock + existing-PR
+    # gates); no need to re-pull here. Re-assert clean state in case the gates
+    # produced ephemeral artifacts on disk.
 
     # --- 1. Fetch upstream ---
     $toSha = (& "$PSScriptRoot/01-fetch-upstream.ps1").Trim()

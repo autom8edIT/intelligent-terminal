@@ -33,14 +33,13 @@ param(
 
 . "$PSScriptRoot/Common.ps1"
 
-$state = Read-State
-$tier3 = [bool] $state.stuck_on_sha
-$tier4 = [bool] $state.stuck_validation
-if (-not ($tier3 -or $tier4)) {
-    Write-Warning "No stuck-lock is set. Nothing to clear."
-    return
-}
-
+# Fast-forward local main from origin BEFORE reading state.json so the
+# stuck-lock decision (and any subsequent mutations) operates on the
+# authoritative state from origin/main rather than a stale local copy.
+# A stale local main would otherwise let the script falsely conclude
+# "no stuck-lock is set" (early-return) when origin/main actually has
+# one, or — worse — overwrite a newer state.json from origin/main when
+# the clear-stuck commit lands.
 Assert-CleanWorktree
 Ensure-UpstreamRemote
 git fetch upstream main --no-tags | Out-Null
@@ -50,6 +49,14 @@ git switch main | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "git switch main failed; refusing to clear stuck-lock from the wrong branch." }
 git pull --ff-only origin main | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "git pull --ff-only origin main failed; refusing to clear stuck-lock until main is current." }
+
+$state = Read-State
+$tier3 = [bool] $state.stuck_on_sha
+$tier4 = [bool] $state.stuck_validation
+if (-not ($tier3 -or $tier4)) {
+    Write-Warning "No stuck-lock is set on origin/main. Nothing to clear."
+    return
+}
 
 $resolvedFullSha = if ($ResolvedThroughSha) { Resolve-FullCommitSha $ResolvedThroughSha } else { $null }
 
