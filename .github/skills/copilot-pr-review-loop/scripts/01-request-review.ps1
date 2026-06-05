@@ -4,45 +4,50 @@
     request actually landed.
 
 .DESCRIPTION
-    Tries each known best-effort mechanism in turn — none is guaranteed
-    to land server-side, so success is judged solely by observing a new
-    `copilot_work_started` event within ~30 seconds (not by HTTP/exit
-    status, and not by the upstream `review_requested` event which can
-    land without the bot actually picking up the work). Without this
-    verification, a no-op succeeds silently and the loop spins forever
-    on `02-list-open-threads.ps1` waiting for a review that was never
-    queued.
+    Triggers a Copilot review safely and verifies the trigger landed.
+    Safety is the primary design constraint — the previous version of
+    this script cancelled in-flight reviews via a blanket DELETE+POST
+    fallback. This version protects in-flight work.
 
-    The mechanisms (in order — see ../references/api-quirks.md for the
-    inconsistencies that motivate trying multiple):
+    Flow:
+      1. SNAPSHOT current state: PR head SHA, latest Copilot
+         `copilot_work_started` event, latest Copilot
+         `review_requested` event, whether Copilot is currently in
+         `requested_reviewers`, latest Copilot review's commit OID.
+      2. EARLY RETURN if Copilot has already submitted a review at the
+         current HEAD (nothing to trigger).
+      3. EARLY RETURN if a recent `copilot_work_started` exists at the
+         current HEAD without a follow-up review — that means a review
+         is in flight. Triggering again would cancel it.
+      4. RE-ARM if Copilot is in `requested_reviewers` but stuck (no
+         work_started after the request for >5 min) — DELETE+POST the
+         reviewer. This is the ONLY path that ever deletes; it never
+         runs while a review is in flight.
+      5. FRESH TRIGGER otherwise:
+         a. REST POST `requested_reviewers[]=Copilot`. Verified by
+            reading the POST response body's `requested_reviewers` and
+            polling `requested_reviewers` for ~10s (the POST can return
+            HTTP 201 while silently dropping Copilot — cooldown after
+            dismissal, Copilot not enabled on repo, bot not a
+            collaborator).
+         b. `gh pr edit --add-reviewer Copilot` as best-effort
+            fallback. Known to return "not found" in many gh CLI
+            versions but occasionally succeeds.
+         The `copilot_work_started` event in the issue timeline is the
+         authoritative success signal — HTTP / exit status alone is
+         insufficient.
 
-    1. `gh pr edit --add-reviewer copilot-pull-request-reviewer` —
-       documented in api-quirks.md as the preferred path. Fails with
-       "not found" in some gh-cli versions / accounts because the bot
-       is not a regular collaborator. Returns exit 1 on those failures.
-
-    2. REST `POST /pulls/{n}/requested_reviewers` with
-       `reviewers[]=Copilot`. Best-effort fallback — api-quirks.md notes
-       it is inconsistent across orgs (some return HTTP 201 even when
-       the request is silently dropped server-side). Success here is
-       determined exclusively by the `copilot_work_started` event check
-       below.
-
-    3. REST DELETE-then-POST cycle. Best-effort fallback that sometimes
-       re-arms a bot GitHub considers "already requested" or "recently
-       reviewed". Same event-based success determination.
-
-    If none of the mechanisms produce a verified event, throw with
-    diagnostics on the likely cause: Copilot suppression for unchanged
-    HEAD / trivial diff, draft/closed/conflicted PR, or auth-scope
-    issues. Pushing a substantive new commit and retrying is usually
-    the right next step.
+    If nothing triggers a `copilot_work_started` event, the script
+    throws with actionable diagnostics. The canonical remedy when
+    triggers are silently dropped is to push a substantive new commit
+    (not whitespace / not comment-only) and retry — repo-level
+    auto-assignment fires on `synchronize` and is generally reliable.
 
     DO NOT post `@copilot please review` (or any @copilot mention) as a
     PR comment as a workaround. That summons the Copilot **Coding
     Agent** (which makes commits), not the reviewer bot — it is a
     confirmed waste of time and has been observed across multiple
-    Copilot CLI sessions. The only valid triggers are the three
+    Copilot CLI sessions. The only valid triggers are the API
     mechanisms above.
 
 .PARAMETER Owner
@@ -95,6 +100,43 @@ function Get-LatestCopilotWorkStarted {
     return $json.Trim()
 }
 
+function Get-LatestReviewRequested {
+    $json = gh api "repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100" `
+        --jq '[.[] | select(.event=="review_requested" and (.requested_reviewer.login // "" | test("^(?i)copilot"))) | .created_at] | sort | .[-1] // ""'
+    if ($LASTEXITCODE -ne 0) { return '' }
+    return $json.Trim()
+}
+
+function Get-PrStateSnapshot {
+    # Returns a hashtable with: HeadOid, CopilotPending, LatestReviewAtHead, LatestReviewAt
+    $q = @'
+query($o:String!,$r:String!,$n:Int!){
+  repository(owner:$o,name:$r){
+    pullRequest(number:$n){
+      headRefOid
+      reviewRequests(first:50){nodes{requestedReviewer{__typename ... on User{login} ... on Bot{login}}}}
+      latestReviews(first:50){nodes{author{login} submittedAt commit{oid}}}
+    }
+  }
+}
+'@
+    $j = gh api graphql -f "query=$q" -f "o=$Owner" -f "r=$Repo" -F "n=$PrNumber" 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "GraphQL snapshot failed: $j" }
+    $d = $j | ConvertFrom-Json
+    $pr = $d.data.repository.pullRequest
+    $copilotPending = $false
+    foreach ($n in $pr.reviewRequests.nodes) {
+        if ($n.requestedReviewer.login -match '^(?i)copilot') { $copilotPending = $true; break }
+    }
+    $copilotReviews = @($pr.latestReviews.nodes | Where-Object { $_.author.login -match '^(?i)copilot' })
+    $latest = if ($copilotReviews.Count -gt 0) { $copilotReviews | Sort-Object submittedAt -Descending | Select-Object -First 1 } else { $null }
+    @{
+        HeadOid              = $pr.headRefOid
+        CopilotPending       = $copilotPending
+        LatestCopilotReview  = $latest
+    }
+}
+
 function Wait-ForCopilotWorkStarted {
     param([string]$BeforeTs, [int]$TimeoutSeconds = 30)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -108,22 +150,128 @@ function Wait-ForCopilotWorkStarted {
     return ''
 }
 
-$beforeTs = Get-LatestCopilotWorkStarted
-$tried = @()
-$mech1Stderr = ''
-
-# Mechanism 1: gh pr edit
-$mech1Stderr = (gh pr edit $PrNumber --repo $repoArg --add-reviewer copilot-pull-request-reviewer 2>&1 | Out-String)
-$tried += "gh pr edit (exit=$LASTEXITCODE)"
-
-# Specific failure: Copilot Code Review is not enabled on this repo at all.
-# Detect this so we fail fast with a clear diagnostic instead of churning
-# through the REST fallbacks and emitting a confusing "suppression"
-# message for a problem that has nothing to do with suppression.
-if ($mech1Stderr -match "'copilot-pull-request-reviewer'\s+not\s+found" -or
-    $mech1Stderr -match "could not resolve to a User") {
-    throw "Copilot Code Review is not enabled on $repoArg (gh reported: $($mech1Stderr.Trim())). Enable it under repo Settings -> Code & automation -> Copilot, OR run the loop against a repo where Copilot review is already on. None of the trigger mechanisms can work until this is fixed."
+function Wait-ForCopilotInReviewRequests {
+    param([int]$TimeoutSeconds = 15)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 3
+        $snap = Get-PrStateSnapshot
+        if ($snap.CopilotPending) { return $true }
+    }
+    return $false
 }
+
+# === PRE-CHECKS ===
+# Before triggering anything, snapshot the current state. We need to handle:
+#   (a) Copilot has ALREADY reviewed the current HEAD — nothing to do.
+#   (b) Copilot is mid-review of the current HEAD (work_started landed but
+#       no review submitted yet) — do NOT trigger again; the in-flight
+#       review will land. Triggering again risks cancellation (e.g. via
+#       the DELETE+POST fallback) which kills the in-flight review and
+#       costs another full review cycle.
+#   (c) Copilot is queued but stuck (in requested_reviewers without a
+#       follow-up work_started for >5 min) — re-trigger via DELETE+POST.
+#   (d) Copilot is not in requested_reviewers at all — try fresh triggers.
+
+$snapshot = Get-PrStateSnapshot
+$beforeTs = Get-LatestCopilotWorkStarted
+$lastReqAt = Get-LatestReviewRequested
+$headOid = $snapshot.HeadOid
+
+# Case (a): already reviewed current HEAD
+if ($snapshot.LatestCopilotReview -and $snapshot.LatestCopilotReview.commit.oid -eq $headOid) {
+    Write-Host "Copilot has already submitted a review at the current HEAD ($($headOid.Substring(0,7))) on $($snapshot.LatestCopilotReview.submittedAt). Nothing to trigger. Run scripts/02-list-open-threads.ps1 to see open threads."
+    exit 0
+}
+
+# Case (b): in-flight review against current HEAD
+# Heuristic: a work_started event happened recently AND it's newer than (or
+# equal to) the latest review_requested AND no Copilot review exists at the
+# current HEAD yet. Treat as in-flight — DO NOT TRIGGER.
+$workStartedRecent = $false
+if ($beforeTs) {
+    $workStartedAge = (Get-Date) - [datetime]$beforeTs
+    $workStartedRecent = $workStartedAge.TotalMinutes -lt 12
+}
+if ($workStartedRecent) {
+    Write-Host "Copilot is already reviewing the current HEAD ($($headOid.Substring(0,7))). Last copilot_work_started: $beforeTs (~$([int]$workStartedAge.TotalSeconds)s ago). NOT re-triggering — in-flight reviews must not be cancelled. Run scripts/02-wait-for-review.ps1 to wait for the submission."
+    exit 0
+}
+
+$tried = @()
+
+# Case (c): Copilot is pending but stuck (no work_started after a recent request).
+# Use DELETE+POST to re-arm. This is the only path that should ever delete.
+$stuckPending = $false
+if ($snapshot.CopilotPending -and $lastReqAt) {
+    $pendingAge = (Get-Date) - [datetime]$lastReqAt
+    if ($pendingAge.TotalMinutes -gt 5 -and (-not $beforeTs -or [datetime]$lastReqAt -gt [datetime]$beforeTs)) {
+        $stuckPending = $true
+    }
+}
+
+if ($stuckPending) {
+    Write-Host "Copilot is in requested_reviewers but stuck (no work_started after a review_requested $([int]$pendingAge.TotalMinutes)m ago). Re-arming via DELETE+POST."
+    gh api -X DELETE "repos/$Owner/$Repo/pulls/$PrNumber/requested_reviewers" `
+        -f "reviewers[]=Copilot" --silent 2>&1 | Out-Null
+    $delExit = $LASTEXITCODE
+    Start-Sleep -Seconds 2
+    gh api -X POST "repos/$Owner/$Repo/pulls/$PrNumber/requested_reviewers" `
+        -f "reviewers[]=Copilot" --silent 2>&1 | Out-Null
+    $postExit = $LASTEXITCODE
+    $tried += "DELETE+POST (re-arm stuck: DEL=$delExit POST=$postExit)"
+
+    $afterTs = Wait-ForCopilotWorkStarted -BeforeTs $beforeTs -TimeoutSeconds 30
+    if ($afterTs) {
+        Write-Host "Copilot review re-armed (work started at $afterTs)."
+        exit 0
+    }
+}
+
+# Case (d): no Copilot reviewer yet — try fresh triggers.
+# We try REST POST first because `gh pr edit --add-reviewer` returns
+# "not found" for the Copilot bot in current gh CLI versions regardless
+# of whether Copilot is enabled on the repo — it's a `gh` limitation,
+# not a repo-config signal. Don't conflate it with "not enabled".
+
+# Mechanism 1: REST POST reviewers[]=Copilot
+# Verify by reading the response body's requested_reviewers AND by
+# polling. The POST can return HTTP 201 while silently dropping
+# Copilot (cooldown after recent dismissal, Copilot not enabled on
+# repo, bot not a collaborator, etc.).
+$postBody = gh api -X POST "repos/$Owner/$Repo/pulls/$PrNumber/requested_reviewers" -f "reviewers[]=Copilot" 2>&1
+$postExit = $LASTEXITCODE
+$tried += "REST POST (exit=$postExit)"
+$postAccepted = $false
+if ($postExit -eq 0) {
+    try {
+        $bodyJson = $postBody | ConvertFrom-Json
+        foreach ($u in @($bodyJson.requested_reviewers)) {
+            if ($u.login -match '^(?i)copilot') { $postAccepted = $true; break }
+        }
+    } catch { }
+    if (-not $postAccepted) {
+        # Fall back: poll requested_reviewers for ~10s in case the response body lagged.
+        $postAccepted = Wait-ForCopilotInReviewRequests -TimeoutSeconds 10
+    }
+}
+
+if ($postAccepted) {
+    $afterTs = Wait-ForCopilotWorkStarted -BeforeTs $beforeTs -TimeoutSeconds 30
+    if ($afterTs) {
+        Write-Host "Copilot review requested on PR #$PrNumber via REST POST (work started at $afterTs)."
+        exit 0
+    }
+    Write-Host "Copilot was added to requested_reviewers but did not emit copilot_work_started within 30s. Run scripts/02-wait-for-review.ps1 — it will still wait."
+    exit 0
+}
+
+# Mechanism 2: gh pr edit --add-reviewer Copilot
+# Best-effort fallback. Known to return "not found" in many gh CLI
+# versions (the bot is not a regular collaborator), but it occasionally
+# succeeds on accounts where the REST path is silently dropped.
+$mech2Stderr = (gh pr edit $PrNumber --repo $repoArg --add-reviewer Copilot 2>&1 | Out-String)
+$tried += "gh pr edit --add-reviewer Copilot (exit=$LASTEXITCODE)"
 
 $afterTs = Wait-ForCopilotWorkStarted -BeforeTs $beforeTs -TimeoutSeconds 20
 if ($afterTs) {
@@ -131,45 +279,24 @@ if ($afterTs) {
     exit 0
 }
 
-# Mechanism 2: REST POST
-gh api -X POST "repos/$Owner/$Repo/pulls/$PrNumber/requested_reviewers" `
-    -f "reviewers[]=Copilot" --silent 2>&1 | Out-Null
-$tried += "REST POST (exit=$LASTEXITCODE)"
-
-$afterTs = Wait-ForCopilotWorkStarted -BeforeTs $beforeTs -TimeoutSeconds 30
-if ($afterTs) {
-    Write-Host "Copilot review requested on PR #$PrNumber via REST POST (work started at $afterTs)."
-    exit 0
-}
-
-# Mechanism 3: DELETE then POST
-gh api -X DELETE "repos/$Owner/$Repo/pulls/$PrNumber/requested_reviewers" `
-    -f "reviewers[]=Copilot" --silent 2>&1 | Out-Null
-$deleteExit = $LASTEXITCODE
-Start-Sleep -Seconds 2
-gh api -X POST "repos/$Owner/$Repo/pulls/$PrNumber/requested_reviewers" `
-    -f "reviewers[]=Copilot" --silent 2>&1 | Out-Null
-$postExit = $LASTEXITCODE
-$tried += "DELETE+POST cycle (DELETE exit=$deleteExit, POST exit=$postExit)"
-
-$afterTs = Wait-ForCopilotWorkStarted -BeforeTs $beforeTs -TimeoutSeconds 30
-if ($afterTs) {
-    Write-Host "Copilot review requested on PR #$PrNumber via DELETE+POST (work started at $afterTs)."
-    exit 0
-}
-
 throw @'
-Copilot review re-request: tried all 3 mechanisms, none produced a
+Copilot review trigger: all mechanisms attempted, none produced a
 copilot_work_started event within the timeout.
-'@ + "`n  Tried: $($tried -join ', ')" + "`n  Latest copilot_work_started timestamp before: '$beforeTs'" + "`n  Latest copilot_work_started timestamp after:  '$(Get-LatestCopilotWorkStarted)'" + @'
+'@ + "`n  Tried: $($tried -join ', ')" + "`n  Latest copilot_work_started before: '$beforeTs'" + "`n  Latest copilot_work_started after:  '$(Get-LatestCopilotWorkStarted)'" + "`n  Head SHA: $headOid" + @'
 
 
-Likely causes (in order of frequency):
-  * Trivial / small initial diff suppressed by Copilot before any review
-    has run. Push a substantive (non-whitespace, non-comment-only)
-    commit and retry.
-  * Copilot has already reviewed the current HEAD and is suppressing a
-    redundant re-review. Push a substantive new commit and retry.
+Most likely causes (in order of frequency):
+  * Cooldown after a recent dismissal of Copilot from this PR. After
+    a `review_request_removed` event, GitHub typically suppresses
+    re-adds for several minutes. Wait 5-10 min and rerun; or push a
+    substantive new commit to bypass the cooldown.
+  * Trivial / small diff suppressed by Copilot before any review has
+    run. Push a substantive (non-whitespace, non-comment-only) commit
+    and retry — this is also the canonical remedy on initial PR
+    suppression.
+  * Copilot Code Review is not enabled on the repo. Verify in
+    repo Settings -> Code & automation -> Copilot, OR account-level
+    Copilot Pro/Pro+ for personal repos.
   * The PR is in a state that blocks bot review (draft, closed, merge
     conflict, branch protection requiring approvals first).
   * Auth-scope issue — confirm "gh auth status" shows the repo scope.
@@ -178,7 +305,7 @@ ANTI-PATTERN — DO NOT DO THIS: posting "@copilot please review" (or any
 @copilot mention) as a PR comment summons the Copilot **Coding Agent**
 (which makes commits), NOT the reviewer bot. It will not produce a
 review. This has been observed across multiple Copilot CLI sessions and
-is a confirmed waste of time. The three mechanisms tried above are the
-only valid triggers — if all three fail, push a substantive commit and
-retry; do not fall back to @-mentions.
+is a confirmed waste of time. The valid triggers are the API mechanisms
+above — if they fail, push a substantive commit and retry; do not fall
+back to @-mentions.
 '@

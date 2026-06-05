@@ -92,13 +92,18 @@ obvious fix may violate a project rule.
 Common cases:
 
 - **Spell-check / dictionary findings**: many projects (including
-  `microsoft/intelligent-terminal`) require **rewording the document
-  for English words** and adding a regex to
-  `.github/actions/spelling/patterns/patterns.txt` (e.g.
-  `\bLOCALE_[A-Z][A-Z0-9_]+\b`) for OS API constants and code
-  identifiers — **never** add individual words to `expect.txt`. Check
-  the spell-check config conventions before adding any allowlist
-  entry. Auto-adding to `expect.txt` will be rejected on review.
+    `microsoft/intelligent-terminal`) follow this order: (1) **reword
+    the document** for genuine English misspellings; (2) add a regex
+    to `.github/actions/spelling/patterns/patterns.txt` (e.g.
+    `\bLOCALE_[A-Z][A-Z0-9_]+\b`) for OS API constants and code
+    identifier families — preferred because one regex covers all
+    future identifiers in the family; (3) add real dictionary words
+    (names, APIs) to `allow/` files; (4) use `expect/expect.txt`
+    sparingly for one-off project-specific terms that no reasonable
+    regex covers. Adding everything to `expect.txt` unboundedly is
+    the anti-pattern — it hides real typos. Check the project's
+    spelling config conventions and recent commits to patterns.txt /
+    expect.txt before adding any allowlist entry.
 - **Lint suppressions / `// NOLINT` / `# noqa`**: most projects only
   accept suppressions with an inline rationale comment. Bare
   suppressions get pushed back.

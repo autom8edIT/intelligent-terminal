@@ -9,7 +9,7 @@ Track progress through one round with this list (copy into your scratch
 notes or session todos):
 
 - [ ] **1.** Request review — `scripts/01-request-review.ps1 -PrNumber <n>` (verifies `copilot_work_started` event landed; will throw if all 3 mechanisms fail)
-- [ ] **2.** Wait for review submission — `scripts/02-wait-for-review.ps1 -PrNumber <n>` (default 35-min timeout; blocks until a Copilot review against current HEAD is submitted, or returns `TimedOut` / `HeadAdvanced`)
+- [ ] **2.** Wait for review submission — `scripts/02-wait-for-review.ps1 -PrNumber <n>` (default 35-min timeout; blocks until a Copilot review against current HEAD is submitted, or returns `ReviewCompleted` / `HeadAdvanced` / `TimedOut` / `Error`)
 - [ ] **3.** List open threads — `scripts/02-list-open-threads.ps1 -PrNumber <n>` (outdated threads included by default — reply + resolve them too)
 - [ ] **4.** Triage each finding using [03-triage-criteria.md](03-triage-criteria.md)
 - [ ] **5.** Apply fixes — one sub-agent per independent change
@@ -109,7 +109,7 @@ current lines" view; never use that flag to declare convergence.
 
 `-Owner` / `-Repo` default to the current repo via `gh repo view`.
 
-## 3. Triage each finding
+## 4. Triage each finding
 
 Apply the decision rubric in [03-triage-criteria.md](03-triage-criteria.md). The
 short version:
@@ -126,7 +126,7 @@ Always **state your reasoning** in the reply, whether you fix or decline.
 This makes the PR self-documenting and gives the next Copilot review
 visible context.
 
-## 4. Implement fixes — one focused commit per round
+## 5. Implement fixes — one focused commit per round
 
 Keep commits granular: one commit per review round (or per finding if a
 round has multiple unrelated findings). This makes the PR history narrate
@@ -148,13 +148,13 @@ git stash pop
 Always include the Copilot `Co-authored-by` trailer when the fix came from
 a Copilot finding.
 
-## 5. Build and test before pushing
+## 6. Build and test before pushing
 
 Never push a fix you haven't compiled. If the project has unit tests for
 the changed code, re-run them. A fix that breaks the build wastes another
 full review cycle.
 
-## 6. Reply to and resolve each thread
+## 7. Reply to and resolve each thread
 
 Reply first (explain what you did, cite the commit SHA), then resolve. Use
 the templates in [06-reply-templates.md](06-reply-templates.md).
@@ -169,29 +169,39 @@ For **declined** findings, the reply explains why you're not fixing it —
 then still resolve the thread. Leaving threads open without explanation
 clutters the PR and signals you're avoiding the feedback.
 
-## 7. Request the next round and loop
+## 8. Commit + push the round's changes
 
-Go back to step 1. Each round, Copilot sees:
+One focused commit per round. Include the `Co-authored-by: Copilot`
+trailer when fixes came from Copilot findings.
 
-- the new diff,
-- your replies on prior threads,
-- the updated PR description.
+## 9. Convergence check (all THREE must hold)
 
-Your replies actively shape what the next round will surface — declining a
-finding with strong reasoning typically prevents Copilot from re-raising it.
+You are done ONLY when all three conditions hold simultaneously:
 
-## 8. Convergence
+1. **The latest Copilot review's `commit.oid` equals the current PR
+   HEAD SHA.** A "no new comments" review against an earlier commit is
+   stale — it did not see your most recent fix. Verify with:
 
-You are done when **both** conditions hold:
+   ```powershell
+   gh pr view <n> --json headRefOid,latestReviews --jq '{head:.headRefOid, latest:(.latestReviews[] | select(.author.login|test("^(?i)copilot")) | {submittedAt,state,commit:.commit.oid})}'
+   ```
 
-- A review returns: *"Copilot reviewed N out of N changed files in this
-  pull request and generated no new comments."*
-- The open-threads list (step 2) is empty.
+   Or re-read the `LatestReview` field from the `ReviewCompleted` JSON
+   that `02-wait-for-review.ps1` returned in step 2 — it already proves
+   `commit.oid == HEAD`. Do **not** re-invoke `02-wait-for-review.ps1`
+   to verify convergence; it will time out waiting for a NEWER review.
 
-A single condition is not enough. A "no new comments" review can still
-coexist with an open thread from a prior round if you forgot to resolve it.
+2. **The review body is the "generated no new comments" form.** Quote
+   the body in your task-complete message.
 
-## 9. Cleanup outdated Copilot threads (final, once)
+3. **`02-list-open-threads.ps1` returns empty** (with no
+   `-ExcludeOutdated` — outdated-but-unresolved threads count).
+
+If any one is false, the loop is not done. Print the
+`commit.oid` + `submittedAt` in your completion message — proof, not
+assertion.
+
+## 10. Cleanup outdated Copilot threads (final, once)
 
 Even after convergence, the PR may show old `isOutdated: true` Copilot
 threads still listed as open. They are already addressed by later commits,

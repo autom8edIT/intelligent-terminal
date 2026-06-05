@@ -84,9 +84,11 @@ agent owns sequencing, commits, and the final mutating
   not weaken it.
 - **A "no new comments" review is necessary but not sufficient for
   convergence.** Also check the review's `commit.oid` equals the
-  current HEAD (run [scripts/02-wait-for-review.ps1](scripts/02-wait-for-review.ps1)
-  before declaring done) AND the open-threads list is empty. A stale
-  review on an earlier commit lets a regression slip through unreviewed.
+  current HEAD (re-read the `LatestReview` field from the
+  `ReviewCompleted` JSON that `02-wait-for-review.ps1` returned in
+  step 2 — do NOT re-invoke that script for convergence, it will time
+  out) AND the open-threads list is empty. A stale review on an
+  earlier commit lets a regression slip through unreviewed.
 - **Use `gh pr edit --add-reviewer copilot-pull-request-reviewer`** as
   the first trigger mechanism. The GraphQL `requestReviews` mutation
   rejects the Copilot bot login, and REST `requested_reviewers` returns
@@ -134,7 +136,7 @@ agent owns sequencing, commits, and the final mutating
 
 ## References
 
-- [references/workflow.md](references/workflow.md) — full nine-step
+- [references/workflow.md](references/workflow.md) — full ten-step
   procedure with commands and rationale.
 - [references/03-triage-criteria.md](references/03-triage-criteria.md) —
   fix-vs-decline decision rubric.
