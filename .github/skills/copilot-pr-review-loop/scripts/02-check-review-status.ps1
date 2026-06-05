@@ -61,24 +61,14 @@ $ErrorActionPreference = 'Stop'
 # into ConvertFrom-Json on success.
 function Invoke-Gh {
     param([Parameter(Mandatory)][string[]]$GhArgs)
-
-    $psi = [System.Diagnostics.ProcessStartInfo]::new('gh')
-    foreach ($arg in $GhArgs) { $null = $psi.ArgumentList.Add($arg) }
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.UseShellExecute = $false
-    $proc = [System.Diagnostics.Process]::Start($psi)
+    $errFile = [IO.Path]::GetTempFileName()
     try {
-        $outTask = $proc.StandardOutput.ReadToEndAsync()
-        $errTask = $proc.StandardError.ReadToEndAsync()
-        $proc.WaitForExit()
-        [pscustomobject]@{
-            ExitCode = $proc.ExitCode
-            Stdout   = $outTask.GetAwaiter().GetResult()
-            Stderr   = $errTask.GetAwaiter().GetResult()
-        }
+        $out = & gh @GhArgs 2>$errFile
+        $ec = $LASTEXITCODE
+        $err = (Get-Content -Raw -LiteralPath $errFile -ErrorAction SilentlyContinue) ?? ''
+        [pscustomobject]@{ ExitCode = $ec; Stdout = ($out | Out-String); Stderr = $err }
     } finally {
-        $proc.Dispose()
+        Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue
     }
 }
 
@@ -190,4 +180,4 @@ $result = [ordered]@{
     OpenThreadCount = $openCount
     Converged       = ($reviewAtHead -and $noNewComments -and $openCount -eq 0)
 }
-$result | ConvertTo-Json -Depth 5
+$result | ConvertTo-Json -Depth 5 -Compress

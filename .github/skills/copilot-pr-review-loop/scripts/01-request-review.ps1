@@ -66,24 +66,14 @@ $ErrorActionPreference = 'Stop'
 # stderr into ConvertFrom-Json on success.
 function Invoke-Gh {
     param([Parameter(Mandatory)][string[]]$GhArgs)
-
-    $psi = [System.Diagnostics.ProcessStartInfo]::new('gh')
-    foreach ($arg in $GhArgs) { $null = $psi.ArgumentList.Add($arg) }
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.UseShellExecute = $false
-    $proc = [System.Diagnostics.Process]::Start($psi)
+    $errFile = [IO.Path]::GetTempFileName()
     try {
-        $outTask = $proc.StandardOutput.ReadToEndAsync()
-        $errTask = $proc.StandardError.ReadToEndAsync()
-        $proc.WaitForExit()
-        [pscustomobject]@{
-            ExitCode = $proc.ExitCode
-            Stdout   = $outTask.GetAwaiter().GetResult()
-            Stderr   = $errTask.GetAwaiter().GetResult()
-        }
+        $out = & gh @GhArgs 2>$errFile
+        $ec = $LASTEXITCODE
+        $err = (Get-Content -Raw -LiteralPath $errFile -ErrorAction SilentlyContinue) ?? ''
+        [pscustomobject]@{ ExitCode = $ec; Stdout = ($out | Out-String); Stderr = $err }
     } finally {
-        $proc.Dispose()
+        Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue
     }
 }
 
@@ -168,10 +158,17 @@ if ($copilotPending) {
 
 # ---------- snapshot copilot_work_started before triggering ----------
 
-$r = Invoke-Gh -GhArgs @('api','--paginate',"repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100",'--jq','[.[] | select(.event=="copilot_work_started") | .created_at] | sort | .[-1] // ""')
+# Snapshot the latest copilot_work_started BEFORE triggering. Use the
+# event's numeric `id` (monotonic) — `created_at` is second-resolution
+# and would collide if a new event lands in the same second.
+$r = Invoke-Gh -GhArgs @('api','--paginate',"repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100",'--jq','[.[] | select(.event=="copilot_work_started") | {id, created_at}] | sort_by(.id) | .[-1] // null')
 if ($r.ExitCode -ne 0) { throw "events query failed: $($r.Stderr)" }
-$beforeTs = (@($r.Stdout -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) | Sort-Object | Select-Object -Last 1)
-if (-not $beforeTs) { $beforeTs = '' }
+$beforeId = 0L
+$beforeRaw = ($r.Stdout -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne 'null' } | Select-Object -Last 1)
+if ($beforeRaw) {
+    $beforeObj = $beforeRaw | ConvertFrom-Json
+    if ($beforeObj -and $beforeObj.id) { $beforeId = [long]$beforeObj.id }
+}
 
 # ---------- trigger via GraphQL requestReviewsByLogin ----------
 
@@ -215,13 +212,21 @@ try {
 
 $deadline = (Get-Date).AddSeconds($VerifySeconds)
 $afterTs = ''
+$afterId = 0L
 $lastErr = ''
 do {
-    $r = Invoke-Gh -GhArgs @('api','--paginate',"repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100",'--jq','[.[] | select(.event=="copilot_work_started") | .created_at] | sort | .[-1] // ""')
+    $r = Invoke-Gh -GhArgs @('api','--paginate',"repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100",'--jq','[.[] | select(.event=="copilot_work_started") | {id, created_at}] | sort_by(.id) | .[-1] // null')
     if ($r.ExitCode -eq 0) {
         $lastErr = ''
-        $now = (@($r.Stdout -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) | Sort-Object | Select-Object -Last 1)
-        if ($now -and [string]::CompareOrdinal($now, $beforeTs) -gt 0) { $afterTs = $now; break }
+        $raw = ($r.Stdout -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne 'null' } | Select-Object -Last 1)
+        if ($raw) {
+            $obj = $raw | ConvertFrom-Json
+            if ($obj -and $obj.id -and [long]$obj.id -gt $beforeId) {
+                $afterId = [long]$obj.id
+                $afterTs = [string]$obj.created_at
+                break
+            }
+        }
     } else {
         $lastErr = $r.Stderr.Trim()
     }
@@ -230,11 +235,11 @@ do {
     Start-Sleep -Seconds ([Math]::Min(5, [Math]::Max(1, $remaining)))
 } while ((Get-Date) -lt $deadline)
 
-if (-not $afterTs) {
+if (-not $afterId) {
     $errTail = if ($lastErr) { "`n  Last events-query error: $lastErr" } else { '' }
     throw @"
-GraphQL mutation returned success but no copilot_work_started event landed within $VerifySeconds seconds. The server may have silently dropped the request, or the events query kept failing transiently.
-  Latest copilot_work_started before: '$beforeTs'
+GraphQL mutation returned success but no new copilot_work_started event landed within $VerifySeconds seconds. The server may have silently dropped the request, or the events query kept failing transiently.
+  Latest copilot_work_started event id before trigger: $beforeId
   HEAD: $headOid$errTail
 
 Push a substantive commit (auto-assign on synchronize is the most reliable trigger) and retry.
