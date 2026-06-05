@@ -13,8 +13,8 @@
         request (verified by a copilot_work_started event newer than
         the snapshot taken before the trigger), OR
       - JSON with Status = "InFlight" — Copilot is already actively
-        reviewing the current HEAD (recent copilot_work_started, no
-        submitted review yet at HEAD). No re-trigger needed.
+        reviewing (recent copilot_work_started newer than the latest
+        submitted review). No re-trigger needed.
 
     Failure contract (throw, exit 1):
       - All trigger mechanisms attempted, no verifiable
@@ -33,10 +33,11 @@
     `botLogins` not `userLogins`, `copilot-pull-request-reviewer` slug
     not `Copilot` display login.
 
-    In-flight protection: if a copilot_work_started event already
-    exists for current HEAD that's newer than the latest submitted
-    review, return Status="InFlight" without re-triggering.
-    Re-triggering would risk cancelling the in-flight review.
+    In-flight protection: GitHub does not expose the head SHA on
+    copilot_work_started events, so this script treats a recent event
+    that is newer than the latest submitted review as in-flight and
+    returns Status="InFlight" without re-triggering. Re-triggering would
+    risk cancelling the in-flight review.
 
     DO NOT post `@copilot` PR comments as a trigger — that summons the
     Copilot Coding Agent, not the reviewer bot.

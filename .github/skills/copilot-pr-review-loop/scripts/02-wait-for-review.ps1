@@ -60,7 +60,7 @@ function ToUtcDt {
 
 function Get-ReviewStatus {
     $script = Join-Path $PSScriptRoot '02-check-review-status.ps1'
-    $args = @($script, '-PrNumber', $PrNumber)
+    $args = @('-NoProfile', '-NonInteractive', '-File', $script, '-PrNumber', $PrNumber)
     if ($Owner) { $args += @('-Owner', $Owner) }
     if ($Repo) { $args += @('-Repo', $Repo) }
     $json = pwsh @args
