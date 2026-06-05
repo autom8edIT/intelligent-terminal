@@ -112,8 +112,10 @@ Findings hash: ``$findingsHash`` (re-runs of the same broken batch will match).
     $tmp  = New-TemporaryFile
     [System.IO.File]::WriteAllText($tmp, $body, (New-Object System.Text.UTF8Encoding($false)))
 
-    # Ensure label exists (best-effort).
-    gh label create 'upstream-sync-stuck' --color 'B60205' --description 'Upstream sync blocked on a manual issue' 2>$null | Out-Null
+    # Ensure label exists (best-effort). -R pinned for the same reason as the
+    # issue-create call below (avoid the `upstream` remote tricking gh into
+    # microsoft/terminal).
+    gh label create 'upstream-sync-stuck' --color 'B60205' --description 'Upstream sync blocked on a manual issue' -R microsoft/intelligent-terminal 2>$null | Out-Null
 
     $issueUrl = gh issue create -R microsoft/intelligent-terminal --title $title --label 'upstream-sync-stuck' --body-file $tmp 2>&1 | Select-Object -Last 1
     Remove-Item $tmp -Force

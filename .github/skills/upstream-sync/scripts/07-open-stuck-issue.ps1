@@ -48,7 +48,10 @@ $tmp  = New-TemporaryFile
 [System.IO.File]::WriteAllText($tmp, $body, (New-Object System.Text.UTF8Encoding($false)))
 
 # Ensure label exists (best-effort; ignore if already present).
-gh label create 'upstream-sync-stuck' --color 'B60205' --description 'Upstream sync blocked on a manual conflict' 2>$null | Out-Null
+# -R is pinned for the same reason as the issue-create call below: an `upstream`
+# remote makes `gh` default to microsoft/terminal, where this account does not
+# have label-create permission.
+gh label create 'upstream-sync-stuck' --color 'B60205' --description 'Upstream sync blocked on a manual conflict' -R microsoft/intelligent-terminal 2>$null | Out-Null
 
 # -R is explicit because the `upstream` remote can make gh default to microsoft/terminal.
 $issueUrl = gh issue create -R microsoft/intelligent-terminal --title $title --label 'upstream-sync-stuck' --body-file $tmp 2>&1 | Select-Object -Last 1

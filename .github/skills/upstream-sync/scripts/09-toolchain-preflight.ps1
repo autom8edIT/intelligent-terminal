@@ -66,8 +66,8 @@ function Get-RequiredToolsets {
         }
     }
     return [pscustomobject] @{
-        Toolsets     = ,@($found)
-        ProbedFiles  = ,@($probed)
+        Toolsets     = @($found)
+        ProbedFiles  = @($probed)
     }
 }
 
