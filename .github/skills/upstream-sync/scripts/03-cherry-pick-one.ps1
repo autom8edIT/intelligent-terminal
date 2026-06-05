@@ -120,9 +120,13 @@ $pickTail   = (@($pickOutput) | Select-Object -Last 20 | Out-String).Trim()
 
 if ($pickCode -eq 0) {
     # Tier-1 check: did we just create an empty commit (allowed by --keep-redundant-commits)?
-    $changed = git diff-tree --no-commit-id --name-only -r HEAD
+    $changedOut = git diff-tree --no-commit-id --name-only -r HEAD 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "git diff-tree failed after cherry-pick: $(($changedOut | Out-String).Trim())" }
+    $changed = @($changedOut | Where-Object { $_ -and $_.Trim() })
     if (-not $changed) {
-        $commitMessage = @(git log -1 --format='%B' HEAD) -join "`n"
+        $msgOut = git log -1 --format='%B' HEAD 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "git log --format='%B' HEAD failed after cherry-pick: $(($msgOut | Out-String).Trim())" }
+        $commitMessage = @($msgOut) -join "`n"
         $expectedFooter = "\(cherry picked from commit $([regex]::Escape($fullSha))\)"
         if ($commitMessage -notmatch $expectedFooter) {
             throw "Refusing to reset --hard ${prePickHead}: HEAD does not contain the cherry-pick footer for $fullSha. Investigate before retrying."

@@ -116,8 +116,13 @@ $expectedOwnerRepo = 'microsoft/terminal'
 $existing = git remote get-url upstream 2>$null
 function Get-OwnerRepo([string] $url) {
     if (-not $url) { return $null }
-    $u = $url.Trim().TrimEnd('/')
-    if ($u -match '^(?:https?://[^/]+/|git@[^:]+:)([^/]+/[^/]+?)(?:\.git)?$') { return $Matches[1].ToLowerInvariant() }
+    $u = $url.Trim()
+    # https://host/owner/repo[.git]
+    if ($u -match '^https?://[^/]+/([^/]+/[^/]+?)(?:\.git)?/?$') { return $Matches[1].ToLowerInvariant() }
+    # ssh://[user@]host[:port]/owner/repo[.git]
+    if ($u -match '^ssh://(?:[^@/]+@)?[^/:]+(?::\d+)?/([^/]+/[^/]+?)(?:\.git)?/?$') { return $Matches[1].ToLowerInvariant() }
+    # scp-style: [user@]host:owner/repo[.git]
+    if ($u -match '^(?:[^@:/]+@)?[^:/]+:([^/]+/[^/]+?)(?:\.git)?/?$') { return $Matches[1].ToLowerInvariant() }
     return $null
 }
 if (-not $existing) {
