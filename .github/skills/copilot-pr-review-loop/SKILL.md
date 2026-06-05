@@ -95,12 +95,10 @@ agent owns sequencing, commits, and the final mutating
   **Coding Agent** (which makes commits), not the reviewer bot. It will
   not produce a review. The valid triggers are the API mechanisms in
   [scripts/01-request-review.ps1](scripts/01-request-review.ps1):
-  **(1) GraphQL `requestReviewsByLogin` with `botLogins:["copilot-pull-request-reviewer"]`
-  (primary)** — empirically the most reliable across personal/org repos;
-  **(2) REST POST `requested_reviewers[]=Copilot`** (fallback);
-  **(3) `gh pr edit --add-reviewer Copilot`** (last-ditch fallback).
-  All trigger attempts are verified via the `copilot_work_started` event
-  in the issue timeline.
+  GraphQL `requestReviewsByLogin` with
+  `botLogins:["copilot-pull-request-reviewer"]` — empirically the most
+  reliable across personal/org repos. The trigger is verified via the
+  `copilot_work_started` event in the issue timeline.
   If none works, push a substantive commit and retry — do not fall
   back to @-mentions.
 - **The most reliable trigger is pushing a substantive commit.** Most
@@ -156,7 +154,7 @@ agent owns sequencing, commits, and the final mutating
 
 | Issue | Solution |
 |-------|----------|
-| Trigger fails with `'Copilot' not found` (gh pr edit) or POST returns 201 but Copilot disappears from `requested_reviewers` | Push a substantive (non-whitespace) commit — repo auto-assign on `synchronize` is the most reliable trigger. Persistent failure across both mechanisms after a substantive commit indicates Copilot Code Review is not enabled on the repo or account (Settings → Code & automation → Copilot, or account-level Copilot Pro/Pro+). |
+| Trigger fails or no `copilot_work_started` event lands | Push a substantive (non-whitespace) commit — repo auto-assign on `synchronize` is the most reliable trigger. Persistent failure after a substantive commit indicates Copilot Code Review may not be enabled on the repo or account (Settings → Code & automation → Copilot, or account-level Copilot Pro/Pro+). |
 | No new review after waiting ~10 min between snapshots | Quiet-period after recent dismissal or trivial-diff suppression. Push a substantive commit (auto-assign on `synchronize` is the most reliable trigger). Do not blindly re-run `01-request-review.ps1` — it reports `InFlight` only while a recent `copilot_work_started` event is still unconsumed; after that window it may attempt triggers again. |
 | Outdated-but-unresolved threads appear in the open-threads list | This is expected: current unresolved state is the source of truth. Reply + resolve them like any other open thread. `09-cleanup-outdated.ps1` is only a final safety net, not the primary mechanism. |
 | Unsure whether to fix or decline a finding | Apply the rubric in [references/03-triage-criteria.md](references/03-triage-criteria.md) |

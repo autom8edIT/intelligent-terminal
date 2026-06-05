@@ -71,8 +71,8 @@ if (-not $Owner -or -not $Repo) {
     if (-not $Repo)  { $Repo  = $repoInfo.name }
 }
 
-# ---------- state: is Copilot currently reviewing? ----------
-# Single GraphQL query: requested reviewers + last 100 reviews + head SHA.
+# ---------- state: is Copilot currently requested? ----------
+# Single GraphQL query: requested reviewers + head SHA.
 
 $stateQuery = @'
 query($o:String!,$r:String!,$n:Int!){
@@ -81,7 +81,6 @@ query($o:String!,$r:String!,$n:Int!){
       headRefOid
       state
       reviewRequests(first:50){nodes{requestedReviewer{__typename ... on Bot{login}}}}
-      reviews(last:100){nodes{author{login} submittedAt commit{oid}}}
     }
   }
 }
@@ -95,12 +94,11 @@ if ($stateData.errors) {
 $pr = $stateData.data.repository.pullRequest
 if (-not $pr) { throw "PR #$PrNumber not found in $Owner/$Repo." }
 if ($pr.state -ne 'OPEN') {
-    @{Status='Error'; Detail="PR is not OPEN (state=$($pr.state))"; PrNumber=$PrNumber} | ConvertTo-Json -Compress
-    exit 1
+    throw "PR #$PrNumber is not OPEN (state=$($pr.state))."
 }
 
 $headOid = $pr.headRefOid
-$copilotPending = ($pr.reviewRequests.nodes | Where-Object { $_.requestedReviewer.login -match '^(?i)copilot' }).Count -gt 0
+$copilotPending = ($pr.reviewRequests.nodes | Where-Object { $_.requestedReviewer.login -match '^(?i)(copilot-pull-request-reviewer|copilot)$' }).Count -gt 0
 
 # If Copilot is currently in requested_reviewers, it's in-flight by definition.
 if ($copilotPending) {
@@ -112,12 +110,6 @@ if ($copilotPending) {
     } | ConvertTo-Json -Compress
     exit 0
 }
-
-# Check if the LATEST Copilot review is at the current HEAD already.
-# If so, no need to trigger — the agent can call 02-check-review-status.ps1
-# to confirm "no new comments" + 0 open threads for convergence.
-$copilotReviews = @($pr.reviews.nodes | Where-Object { $_.author.login -match '^(?i)copilot' })
-$latestReview = if ($copilotReviews.Count -gt 0) { $copilotReviews | Sort-Object submittedAt -Descending | Select-Object -First 1 } else { $null }
 
 # We do NOT short-circuit on AlreadyReviewed — the user wants re-request
 # as a first-class flow. Re-trigger; the GraphQL mutation handles both
@@ -136,6 +128,9 @@ $prIdQuery = "query{repository(owner:`"$Owner`",name:`"$Repo`"){pullRequest(numb
 $prNodeId = gh api graphql -f "query=$prIdQuery" --jq '.data.repository.pullRequest.id' 2>&1
 if ($LASTEXITCODE -ne 0) { throw "PR node id query failed: $prNodeId" }
 $prNodeId = ($prNodeId | Out-String).Trim()
+if ([string]::IsNullOrWhiteSpace($prNodeId) -or $prNodeId -eq 'null') {
+    throw "Failed to resolve PR node id for $Owner/$Repo PR #$PrNumber. GraphQL returned '$prNodeId'."
+}
 
 $mut = 'mutation($p:ID!){requestReviewsByLogin(input:{pullRequestId:$p,botLogins:["copilot-pull-request-reviewer"]}){pullRequest{number}}}'
 $mutResp = gh api graphql -f "query=$mut" -f "p=$prNodeId" 2>&1
@@ -150,6 +145,14 @@ Most likely causes:
 
 DO NOT post @copilot comments as a workaround — that summons the Coding Agent.
 "@
+}
+try {
+    $mutJson = $mutResp | ConvertFrom-Json
+    if ($mutJson.errors) {
+        throw (($mutJson.errors | ForEach-Object { $_.message }) -join '; ')
+    }
+} catch {
+    throw "GraphQL requestReviewsByLogin returned errors: $_"
 }
 
 # ---------- verify copilot_work_started event landed ----------

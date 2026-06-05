@@ -122,8 +122,9 @@ convergence verification causes the script to operate against an
 obsolete commit OID — either falsely declaring convergence on the
 wrong commit or timing out waiting for a review that already exists.
 
-Both `01-request-review.ps1` and `02-check-review-status.ps1` use
-`reviews(last:100)` filtered to Copilot, never `latestReviews`.
+`02-check-review-status.ps1` uses `reviews(last:100)` filtered to Copilot,
+never `latestReviews`. `01-request-review.ps1` does not need reviews for its
+trigger-only contract.
 
 ## ✅ GraphQL `addPullRequestReviewThreadReply` + `resolveReviewThread` — WORKS
 

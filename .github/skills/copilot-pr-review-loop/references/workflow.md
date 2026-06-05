@@ -45,27 +45,15 @@ sequencing, the `git commit`/`git push`, and the final
 ## 1. Request a Copilot review
 
 Run [scripts/01-request-review.ps1](../scripts/01-request-review.ps1). It snapshots
-state via the GraphQL `reviews(last:100)` connection (NOT `latestReviews` —
-that field has stale-cache behavior), then returns one of these outcomes:
+the PR head and requested reviewers, then returns one of these outcomes:
 
-- **InFlight (exit 0, no trigger)** — a recent `copilot_work_started`
-  event exists and is newer than the latest Copilot review's
-  submittedAt. Triggering again would risk cancelling the in-flight
-  review. Move to step 2 to wait for the submission.
+- **InFlight (exit 0, no trigger)** — Copilot is currently in
+  `requested_reviewers`, so the caller should wait for the submission.
 - **TriggerLanded** (default success path, returned when the in-flight
   protection didn't fire and a trigger attempt produced a
-  `copilot_work_started` event). The script attempts three mechanisms in
-  order:
-  1. **PRIMARY: GraphQL `requestReviewsByLogin`** with
-     `botLogins:["copilot-pull-request-reviewer"]`. Empirically the
-     most reliable. Three traps: use `requestReviewsByLogin` (not
-     `requestReviews`), `botLogins` (not `userLogins`), and the
-     `copilot-pull-request-reviewer` slug (not `Copilot`).
-  2. **FALLBACK: REST POST** `requested_reviewers[]=Copilot`,
-     verified by polling for a `copilot_work_started` event.
-  3. **FALLBACK: `gh pr edit --add-reviewer Copilot`**. Known to
-     return "not found" on current gh CLI for many accounts; kept
-     as last-ditch.
+  `copilot_work_started` event). The script uses the single verified
+  trigger: GraphQL `requestReviewsByLogin` with
+  `botLogins:["copilot-pull-request-reviewer"]`.
 
 Re-request is supported as a first-class flow — the script does NOT
 silently skip when Copilot has already reviewed; it issues the same
