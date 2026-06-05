@@ -45,7 +45,7 @@ sequencing, the `git commit`/`git push`, and the final
 ## 1. Request a Copilot review
 
 Run [scripts/01-request-review.ps1](../scripts/01-request-review.ps1). It snapshots
-state via the GraphQL `reviews(last:50)` connection (NOT `latestReviews` —
+state via the GraphQL `reviews(last:100)` connection (NOT `latestReviews` —
 that field has stale-cache behavior), then returns one of these outcomes:
 
 - **InFlight (exit 0, no trigger)** — a recent `copilot_work_started`
@@ -211,7 +211,7 @@ You are done ONLY when all three conditions hold simultaneously:
    ```powershell
    gh api graphql `
      -f owner=<owner> -f repo=<repo> -F pr=<n> `
-     -f query='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){headRefOid reviews(last:50){nodes{author{login} submittedAt state commit{oid}}}}}}' `
+     -f query='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){headRefOid reviews(last:100){nodes{author{login} submittedAt state commit{oid}}}}}}' `
      --jq '{head:.data.repository.pullRequest.headRefOid, latest:(.data.repository.pullRequest.reviews.nodes | map(select(.author.login|test("^(?i)copilot"))) | sort_by(.submittedAt) | last | {submittedAt,state,commit:.commit.oid})}'
    ```
 

@@ -110,7 +110,7 @@ primary path.
 pullRequest(number:$pr){ latestReviews(first:50){ nodes{ ... } } }
 
 # USE INSTEAD — always current:
-pullRequest(number:$pr){ reviews(last:50){ nodes{ ... } } }
+pullRequest(number:$pr){ reviews(last:100){ nodes{ ... } } }
 ```
 
 Empirically (2026-06-05), `latestReviews` is a "latest per user"
@@ -123,7 +123,7 @@ obsolete commit OID — either falsely declaring convergence on the
 wrong commit or timing out waiting for a review that already exists.
 
 Both `01-request-review.ps1` and `02-check-review-status.ps1` use
-`reviews(last:50)` filtered to Copilot, never `latestReviews`.
+`reviews(last:100)` filtered to Copilot, never `latestReviews`.
 
 ## ✅ GraphQL `addPullRequestReviewThreadReply` + `resolveReviewThread` — WORKS
 

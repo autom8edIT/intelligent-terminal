@@ -65,14 +65,14 @@ if (-not $Owner -or -not $Repo) {
 }
 
 # GraphQL call: head SHA + state + reviews + paginated thread counts.
-# Uses `reviews(last:50)` not `latestReviews` (stale-cache behavior).
+# Uses `reviews(last:100)` not `latestReviews` (stale-cache behavior).
 $q = @'
 query($o:String!,$r:String!,$n:Int!,$after:String){
   repository(owner:$o,name:$r){
     pullRequest(number:$n){
       headRefOid
       state
-      reviews(last:50){nodes{author{login} state submittedAt body commit{oid}}}
+      reviews(last:100){nodes{author{login} state submittedAt body commit{oid}}}
       reviewThreads(first:100, after:$after){
         pageInfo{endCursor hasNextPage}
         nodes{isResolved}
