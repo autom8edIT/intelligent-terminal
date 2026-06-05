@@ -90,14 +90,16 @@ try {
     $root = Get-RepoRoot
     if (-not (Test-Path -LiteralPath $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 
-    $stamp   = (Get-Date).ToString('yyyy-MM-ddTHHmmss')
-    $logPath = Join-Path $LogDir "$stamp.log"
+    $stamp   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHHmmss.fff')
+    $suffix  = [guid]::NewGuid().ToString('N').Substring(0,4)
+    $logPath = Join-Path $LogDir "$stamp-$suffix.log"
 
     $cmdLine = "/c `"cd /d `"$root`" && $BuildCommand`""
     $started = Get-Date
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName               = $env:ComSpec
+    $shell = if ($env:ComSpec) { $env:ComSpec } else { 'cmd.exe' }
+    $psi.FileName               = $shell
     $psi.Arguments              = $cmdLine
     $psi.WorkingDirectory       = $root
     $psi.RedirectStandardOutput = $true

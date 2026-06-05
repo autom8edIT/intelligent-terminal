@@ -119,6 +119,7 @@ $upstreamSha = (git rev-parse upstream/main).Trim()
 
 ```pwsh
 $pendingJson = pwsh -NoProfile -File .github/skills/upstream-sync/scripts/02-compute-pending.ps1
+if ($LASTEXITCODE -ne 0) { throw "02-compute-pending.ps1 exited $LASTEXITCODE." }
 $pending     = $pendingJson | ConvertFrom-Json
 # $pending.from           = last-synced watermark SHA
 # $pending.to             = upstream/main SHA
@@ -136,6 +137,7 @@ For each SHA in `$pending.pending`:
 
 ```pwsh
 $pickJson = pwsh -NoProfile -File .github/skills/upstream-sync/scripts/03-cherry-pick-one.ps1 -Sha $sha
+if ($LASTEXITCODE -ne 0) { throw "03-cherry-pick-one.ps1 exited $LASTEXITCODE for $sha." }
 $pick     = $pickJson | ConvertFrom-Json
 ```
 
@@ -162,8 +164,9 @@ $labelOut = gh label create 'upstream-sync-stuck' `
     --color B60205 `
     --description 'Upstream sync paused — close to clear the lock' `
     -R microsoft/intelligent-terminal 2>&1
-if ($LASTEXITCODE -ne 0 -and ($labelOut -notmatch 'already exists')) {
-    throw "gh label create failed: $labelOut"
+$labelOutText = ($labelOut | Out-String)
+if ($LASTEXITCODE -ne 0 -and $labelOutText -notmatch 'already exists') {
+    throw "gh label create failed: $labelOutText"
 }
 
 $author      = git log -1 --format='%an <%ae>' $sha
@@ -219,6 +222,7 @@ a no-op) there is nothing to build or finalize. Delete the branch, report
 
 ```pwsh
 $buildJson = pwsh -NoProfile -File .github/skills/upstream-sync/scripts/04-try-build.ps1
+if ($LASTEXITCODE -ne 0) { throw "04-try-build.ps1 exited $LASTEXITCODE before producing a JSON result." }
 $build     = $buildJson | ConvertFrom-Json
 ```
 
