@@ -120,7 +120,7 @@ agent owns sequencing, commits, and the final mutating
 - **Do not improvise alternate trigger APIs.** Use
   [scripts/01-request-review.ps1](scripts/01-request-review.ps1) and see
   [references/api-quirks.md](references/api-quirks.md) for the verified
-  primary/fallback trigger details.
+  trigger details.
 - **`git stash push -m` must come before `--`.** The form
   `git stash push -- <paths> -m <msg>` parses `<msg>` as a path and
   silently produces a stash with no message.
@@ -155,7 +155,7 @@ agent owns sequencing, commits, and the final mutating
 | Issue | Solution |
 |-------|----------|
 | Trigger fails or no `copilot_work_started` event lands | Push a substantive (non-whitespace) commit — repo auto-assign on `synchronize` is the most reliable trigger. Persistent failure after a substantive commit indicates Copilot Code Review may not be enabled on the repo or account (Settings → Code & automation → Copilot, or account-level Copilot Pro/Pro+). |
-| No new review after waiting ~10 min between snapshots | Quiet-period after recent dismissal or trivial-diff suppression. Push a substantive commit (auto-assign on `synchronize` is the most reliable trigger). Do not blindly re-run `01-request-review.ps1` — it reports `InFlight` only while a recent `copilot_work_started` event is still unconsumed; after that window it may attempt triggers again. |
+| No new review after waiting ~10 min between snapshots | Quiet-period after recent dismissal or trivial-diff suppression. Push a substantive commit (auto-assign on `synchronize` is the most reliable trigger). Do not blindly re-run `01-request-review.ps1` — it reports `InFlight` only while Copilot is still in `requested_reviewers`; otherwise it may attempt the GraphQL trigger again. |
 | Outdated-but-unresolved threads appear in the open-threads list | This is expected: current unresolved state is the source of truth. Reply + resolve them like any other open thread. `09-cleanup-outdated.ps1` is only a final safety net, not the primary mechanism. |
 | Unsure whether to fix or decline a finding | Apply the rubric in [references/03-triage-criteria.md](references/03-triage-criteria.md) |
 | Need a reply that conveys "fixed", "declined", or "drift" | Use a template from [references/06-reply-templates.md](references/06-reply-templates.md) |

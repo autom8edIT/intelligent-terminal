@@ -55,17 +55,18 @@ HTTP success / exit 0 alone is not sufficient — GraphQL can return
 HTTP 200 with a non-error response while the bot is silently dropped
 in some edge cases.
 
-## ⚠️ REST `requested_reviewers` with `reviewers[]=Copilot` — FALLBACK only
+## ⚠️ REST `requested_reviewers` with `reviewers[]=Copilot` — historical fallback only
 
 ```bash
 gh api -X POST /repos/<owner>/<repo>/pulls/<n>/requested_reviewers \
     -f 'reviewers[]=Copilot'
 ```
 
-Kept as a fallback after the GraphQL primary. Use `-f` (not `-F`) so
-`Copilot` is sent as a string. Capital "C" is required; the bot
-login `copilot-pull-request-reviewer` returns HTTP 422 here because
-bots are not collaborators of this endpoint's view.
+Not used by the current `01-request-review.ps1` supported path, which stays
+GraphQL-only for reliability. If manually experimenting, use `-f` (not `-F`)
+so `Copilot` is sent as a string. Capital "C" is required; the bot login
+`copilot-pull-request-reviewer` returns HTTP 422 here because bots are not
+collaborators of this endpoint's view.
 
 Caveats:
 
@@ -82,10 +83,10 @@ Caveats:
   the work. That is the only authoritative signal.
 
 (Previous editions called this "currently the most reliable trigger".
-That changed with the discovery of `requestReviewsByLogin` — REST
-POST is now a fallback only.)
+That changed with the discovery of `requestReviewsByLogin` — REST POST is
+now only a documented historical fallback, not the supported script path.)
 
-## ⚠️ `gh pr edit --add-reviewer Copilot` — last-ditch fallback
+## ⚠️ `gh pr edit --add-reviewer Copilot` — historical last-ditch fallback
 
 ```bash
 gh pr edit <pr-number> --add-reviewer Copilot
@@ -99,9 +100,9 @@ repos), this returns:
 > exit 1
 
 for both `Copilot` and `copilot-pull-request-reviewer`. Older versions
-and some account configurations may succeed. Keep this as a fallback
-attempted AFTER the GraphQL primary and REST POST, never as the
-primary path.
+and some account configurations may succeed. The current supported script path
+does not call this; keep it only as historical context for manual debugging,
+never as the primary path.
 
 ## ⚠️ GraphQL `latestReviews` — stale cache, do NOT use for convergence
 

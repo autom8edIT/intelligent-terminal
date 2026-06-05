@@ -200,7 +200,7 @@ You are done ONLY when all three conditions hold simultaneously:
    gh api graphql `
      -f owner=<owner> -f repo=<repo> -F pr=<n> `
      -f query='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){headRefOid reviews(last:100){nodes{author{login} submittedAt state commit{oid}}}}}}' `
-     --jq '{head:.data.repository.pullRequest.headRefOid, latest:(.data.repository.pullRequest.reviews.nodes | map(select(.author.login|test("^(?i)copilot"))) | sort_by(.submittedAt) | last | {submittedAt,state,commit:.commit.oid})}'
+     --jq '{head:.data.repository.pullRequest.headRefOid, latest:(.data.repository.pullRequest.reviews.nodes | map(select(.author.login|test("(?i)^(copilot-pull-request-reviewer(\\[bot\\])?|copilot(\\[bot\\])?)$"))) | sort_by(.submittedAt) | last | {submittedAt,state,commit:.commit.oid})}'
    ```
 
    Or just call `02-check-review-status.ps1` — it returns

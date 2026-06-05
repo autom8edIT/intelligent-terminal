@@ -14,8 +14,7 @@
 
     Success contract (exit 0, JSON):
       - Status="InFlight" — Copilot is currently a requested reviewer
-        OR has a recent copilot_work_started event with no follow-up
-        review yet. Nothing to do; caller waits.
+        on the PR. Nothing to do; caller waits.
       - Status="TriggerLanded" — the script just triggered and
         verified the copilot_work_started event landed.
 
@@ -98,7 +97,7 @@ if ($pr.state -ne 'OPEN') {
 }
 
 $headOid = $pr.headRefOid
-$copilotPending = ($pr.reviewRequests.nodes | Where-Object { $_.requestedReviewer.login -match '^(?i)(copilot-pull-request-reviewer|copilot)$' }).Count -gt 0
+$copilotPending = ($pr.reviewRequests.nodes | Where-Object { $_.requestedReviewer.login -match '(?i)^(copilot-pull-request-reviewer(\[bot\])?|copilot(\[bot\])?)$' }).Count -gt 0
 
 # If Copilot is currently in requested_reviewers, it's in-flight by definition.
 if ($copilotPending) {
@@ -120,7 +119,8 @@ if ($copilotPending) {
 $beforeTs = gh api --paginate "repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100" `
     --jq '[.[] | select(.event=="copilot_work_started") | .created_at] | sort | .[-1] // ""' 2>&1
 if ($LASTEXITCODE -ne 0) { throw "events query failed: $beforeTs" }
-$beforeTs = ($beforeTs -split "`n" | Where-Object { $_.Trim() } | Sort-Object | Select-Object -Last 1).Trim()
+$beforeTs = (@($beforeTs -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) | Sort-Object | Select-Object -Last 1)
+if (-not $beforeTs) { $beforeTs = '' }
 
 # ---------- trigger via GraphQL requestReviewsByLogin ----------
 
