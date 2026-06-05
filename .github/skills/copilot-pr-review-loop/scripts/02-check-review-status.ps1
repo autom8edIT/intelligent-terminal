@@ -9,6 +9,7 @@
     new review to land. THIS SCRIPT DOES NOT WAIT.
 
     Output JSON fields:
+      - PrNumber, Owner, Repo
       - HeadOid           : current PR HEAD SHA
       - State             : PR state (OPEN/CLOSED/MERGED)
       - LatestCopilotReview: {state, submittedAt, commitOid, bodyHead}
@@ -17,6 +18,7 @@
       - NoNewComments      : true iff the latest review body matches
                              "generated no new comments" / "generated 0 comments"
       - OpenThreadCount    : number of unresolved review threads (from all reviewers)
+      - Converged          : true iff ReviewAtHead && NoNewComments && OpenThreadCount==0
 
     Typical agent loop:
       1. Call 01-request-review.ps1 → get TriggerLanded
@@ -143,7 +145,6 @@ $result = [ordered]@{
     ReviewAtHead    = $reviewAtHead
     NoNewComments   = $noNewComments
     OpenThreadCount = $openCount
-    ReviewThreadsComplete = $true
     Converged       = ($reviewAtHead -and $noNewComments -and $openCount -eq 0)
 }
 $result | ConvertTo-Json -Depth 5

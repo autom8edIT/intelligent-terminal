@@ -63,8 +63,11 @@ $ErrorActionPreference = 'Stop'
 # ---------- repo resolve ----------
 
 if (-not $Owner -or -not $Repo) {
-    $repoJson = gh repo view --json owner,name 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "gh repo view failed: $repoJson" }
+    $repoJson = gh repo view --json owner,name
+    if ($LASTEXITCODE -ne 0) {
+        $repoErr = gh repo view --json owner,name 2>&1
+        throw "gh repo view failed: $repoErr"
+    }
     $repoInfo = $repoJson | ConvertFrom-Json
     if (-not $Owner) { $Owner = $repoInfo.owner.login }
     if (-not $Repo)  { $Repo  = $repoInfo.name }
