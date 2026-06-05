@@ -90,8 +90,9 @@ gh issue list -R microsoft/intelligent-terminal --label upstream-sync-stuck --st
 ### 2. Build a branch name
 
 ```pwsh
-$date   = (Get-Date).ToString('yyyy-MM-dd')
-$tstamp = (Get-Date).ToUniversalTime().ToString('HHmmss')
+$utc    = (Get-Date).ToUniversalTime()
+$date   = $utc.ToString('yyyy-MM-dd')
+$tstamp = $utc.ToString('HHmmss')
 $rand   = [guid]::NewGuid().ToString('N').Substring(0,4)
 $branch = "upstream-sync/$date-$tstamp-$rand"
 git switch -c $branch
