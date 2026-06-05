@@ -89,7 +89,8 @@ if (-not $Owner -or -not $Repo) {
 }
 
 # ---------- state: is Copilot currently requested? ----------
-# Single GraphQL query: requested reviewers + head SHA.
+# Single GraphQL query: requested reviewers + head SHA, followed by
+# pagination for the full requested-reviewer set.
 
 $stateQuery = @'
 query($o:String!,$r:String!,$n:Int!){
@@ -97,7 +98,7 @@ query($o:String!,$r:String!,$n:Int!){
     pullRequest(number:$n){
       headRefOid
       state
-      reviewRequests(first:100){nodes{requestedReviewer{__typename ... on Bot{login} ... on User{login} ... on Mannequin{login}}}}
+      reviewRequests(first:100){nodes{requestedReviewer{__typename ... on Bot{login} ... on User{login} ... on Mannequin{login}}} pageInfo{hasNextPage endCursor}}
     }
   }
 }
@@ -115,7 +116,31 @@ if ($pr.state -ne 'OPEN') {
 }
 
 $headOid = $pr.headRefOid
-$copilotPending = @($pr.reviewRequests.nodes | Where-Object { $_.requestedReviewer.login -match '(?i)^(copilot-pull-request-reviewer(\[bot\])?|copilot(\[bot\])?)$' }).Count -gt 0
+$reviewRequests = @($pr.reviewRequests.nodes)
+$after = $pr.reviewRequests.pageInfo.endCursor
+while ($pr.reviewRequests.pageInfo.hasNextPage) {
+    $pageQuery = @'
+query($o:String!,$r:String!,$n:Int!,$after:String!){
+  repository(owner:$o,name:$r){
+    pullRequest(number:$n){
+      reviewRequests(first:100,after:$after){nodes{requestedReviewer{__typename ... on Bot{login} ... on User{login} ... on Mannequin{login}}} pageInfo{hasNextPage endCursor}}
+    }
+  }
+}
+'@
+    $r = Invoke-Gh -GhArgs @('api','graphql','-f',"query=$pageQuery",'-f',"o=$Owner",'-f',"r=$Repo",'-F',"n=$PrNumber",'-f',"after=$after")
+    if ($r.ExitCode -ne 0) { throw "reviewRequests page query failed: $($r.Stderr)" }
+    $pageData = $r.Stdout | ConvertFrom-Json
+    if ($pageData.errors) {
+        throw "reviewRequests page query GraphQL errors: $(($pageData.errors | ForEach-Object {$_.message}) -join '; ')"
+    }
+    $page = $pageData.data.repository.pullRequest.reviewRequests
+    $reviewRequests += @($page.nodes)
+    $pr.reviewRequests.pageInfo = $page.pageInfo
+    $after = $page.pageInfo.endCursor
+}
+$copilotPendingRequests = @($reviewRequests | Where-Object { $_.requestedReviewer.login -match '(?i)^(copilot-pull-request-reviewer(\[bot\])?|copilot(\[bot\])?)$' })
+$copilotPending = $copilotPendingRequests.Count -gt 0
 
 # If Copilot is currently in requested_reviewers, it's in-flight by definition.
 if ($copilotPending) {

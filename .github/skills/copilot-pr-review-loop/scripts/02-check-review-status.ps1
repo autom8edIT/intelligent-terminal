@@ -142,7 +142,8 @@ if ($latest) {
     $bodyHead = if ($bodyText.Length -gt 300) { $bodyText.Substring(0, 300) } else { $bodyText }
 }
 
-$openCount = @($allThreads | Where-Object { -not $_.isResolved }).Count
+$openThreads = @($allThreads | Where-Object { -not $_.isResolved })
+$openCount = $openThreads.Count
 
 $result = [ordered]@{
     PrNumber            = $PrNumber
