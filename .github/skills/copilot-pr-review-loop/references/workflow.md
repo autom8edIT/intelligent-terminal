@@ -44,7 +44,7 @@ sequencing, the `git commit`/`git push`, and the final
 
 Run [scripts/01-request-review.ps1](../scripts/01-request-review.ps1). It snapshots
 state via the GraphQL `reviews(last:50)` connection (NOT `latestReviews` —
-that field has stale-cache behavior), then takes one of two paths:
+that field has stale-cache behavior), then returns one of three outcomes:
 
 - **AlreadyInFlight (exit 0, no trigger)** — a recent `copilot_work_started`
   event exists AND it's newer than the latest review_requested AND

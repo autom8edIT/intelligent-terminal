@@ -61,9 +61,9 @@ commands, rationale, the per-step sub-agent delegation table, and a
 resumable checklist, is in [references/workflow.md](references/workflow.md).
 
 ```
-Request review + verify pickup → Wait for review submission → List open
-threads → Triage → Fix → Build/test → Reply + resolve → Loop → Cleanup
-outdated (final, once)
+Request review + verify pickup → Agent-level wait + status check → List
+open threads → Triage → Fix → Build/test → Reply + resolve → Commit +
+push → Convergence check → Loop → Cleanup outdated (final, once)
 ```
 
 Terminate when a review with `commit.oid == current HEAD` returns "no new
@@ -121,7 +121,10 @@ agent owns sequencing, commits, and the final mutating
   `commit.oid == HEAD`, body matches "no new comments", open thread
   count is 0. A stale review on an earlier commit lets a regression
   slip through unreviewed.
-- **Use the trigger flow in [scripts/01-request-review.ps1](scripts/01-request-review.ps1).** GraphQL `requestReviewsByLogin` with `botLogins:["copilot-pull-request-reviewer"]` is primary; REST POST `requested_reviewers[]=Copilot` and `gh pr edit --add-reviewer Copilot` are fallbacks. Any trigger can return success while the bot is silently dropped — `copilot_work_started` event in the issue timeline is the only authoritative success signal. See [references/api-quirks.md](references/api-quirks.md).
+- **Do not improvise alternate trigger APIs.** Use
+  [scripts/01-request-review.ps1](scripts/01-request-review.ps1) and see
+  [references/api-quirks.md](references/api-quirks.md) for the verified
+  primary/fallback trigger details.
 - **`git stash push -m` must come before `--`.** The form
   `git stash push -- <paths> -m <msg>` parses `<msg>` as a path and
   silently produces a stash with no message.
