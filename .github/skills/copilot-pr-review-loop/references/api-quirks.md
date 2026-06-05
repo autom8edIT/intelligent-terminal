@@ -44,7 +44,9 @@ Enterprise (2026-06-05). Works for both initial-add and re-request
 
 Three traps that cost us ~2 hours of session time before discovery:
 1. Mutation is `requestReviewsByLogin`, NOT `requestReviews`. The
-   latter no longer accepts bots (the `botLogins` field was removed).
+   latter's `RequestReviewsInput` no longer exposes a `botLogins`
+   field, so it can't request a bot reviewer — `botLogins` lives
+   only on `requestReviewsByLogin`, where it's the whole point.
 2. Field is `botLogins`, NOT `userLogins`. The userLogins field
    returns `Could not resolve user with login 'Copilot'` for the bot.
 3. Slug is `copilot-pull-request-reviewer` (the App slug). The
