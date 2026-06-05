@@ -103,7 +103,7 @@ if ($pickCode -eq 0) {
     # Tier-1 check: did we just create an empty commit (allowed by --keep-redundant-commits)?
     $changed = git diff-tree --no-commit-id --name-only -r HEAD
     if (-not $changed) {
-        $commitMessage = (git log -1 --format='%B' HEAD) -join "`n"
+        $commitMessage = @(git log -1 --format='%B' HEAD) -join "`n"
         $expectedFooter = "\(cherry picked from commit $([regex]::Escape($fullSha))\)"
         if ($commitMessage -notmatch $expectedFooter) {
             throw "Refusing to reset --hard ${prePickHead}: HEAD does not contain the cherry-pick footer for $fullSha. Investigate before retrying."
