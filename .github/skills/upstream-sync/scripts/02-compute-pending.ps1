@@ -4,17 +4,20 @@
 
 .DESCRIPTION
   Reads the last-synced upstream watermark from origin/main's
-  `cherry picked from commit <sha>` trailers, lists commits in
-  watermark..upstream/main (oldest first), detects revert pairs within the
-  range and drops them, detects upstream-empty commits and drops them, and
-  emits the final pending list as JSON.
+  `cherry picked from commit <sha>` trailers, lists commits patch-id-aware
+  between watermark and upstream/main (oldest first), detects revert pairs
+  within the range and drops them, detects upstream-empty commits and drops
+  them, and emits the final pending list as JSON.
+
+  `01-fetch-upstream.ps1` must have been run first (we need upstream/main
+  in this clone).
 
 .OUTPUTS
   JSON object on stdout:
   {
     "from": "<old_sha>",
     "to":   "<new_sha>",
-    "pending":       [ "<sha>", ... ],          # in pick order
+    "pending":       [ "<sha>", ... ],
     "dropped_pairs": [ ["<orig>", "<revert>"], ... ],
     "skipped_empty": [ "<sha>", ... ]
   }
@@ -24,10 +27,57 @@ param()
 
 . "$PSScriptRoot/Common.ps1"
 
-# `git fetch upstream main` must have been run already (orchestrator calls
-# 01-fetch-upstream.ps1 before us). Get-LastSyncedUpstreamSha walks the
-# `cherry picked from commit <sha>` trailers on origin/main back to the most
-# recent one that resolves to a commit on upstream/main — no state.json.
+# --- Inlined helpers (single-use; see Common.ps1 comment for why) ----------
+
+function Resolve-FullCommitSha {
+    param([Parameter(Mandatory)] [string] $Sha)
+    $full = (git rev-parse "$Sha^{commit}" 2>$null)
+    if ($LASTEXITCODE -ne 0 -or -not $full) { throw "Could not resolve commit SHA '$Sha'." }
+    return $full.Trim()
+}
+
+function Get-LastSyncedUpstreamSha {
+    # Walks origin/main newest-first, returns the first `(cherry picked from
+    # commit <sha>)` trailer whose target is reachable from upstream/main.
+    # Capped at 5000 most-recent commits — well beyond any realistic
+    # weekly-sync deployment. Resolves the trailer SHA to its full 40-char
+    # form before the ancestry check so an abbreviated/ambiguous trailer
+    # doesn't silently skip an otherwise-valid watermark candidate.
+    $commits = @(git log origin/main --max-count=5000 --grep='cherry picked from commit' --format='%H' 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw "git log on origin/main failed while deriving last-synced SHA." }
+    foreach ($c in $commits) {
+        $body = git log -1 --format='%B' $c 2>$null
+        if ($body -match '\(cherry picked from commit ([0-9a-f]{7,40})\)') {
+            $fullSha = $null
+            try { $fullSha = Resolve-FullCommitSha $matches[1] } catch { continue }
+            $null = git merge-base --is-ancestor $fullSha upstream/main 2>$null
+            if ($LASTEXITCODE -eq 0) { return $fullSha }
+        }
+    }
+    throw "No 'cherry picked from commit' trailer pointing at upstream/main was found on origin/main (scanned the most recent 5000 commits). The very first sync needs an operator to seed the watermark commit (see SKILL.md - 'First-time sync')."
+}
+
+function Get-PendingUpstreamShas {
+    # Patch-id-aware oldest-first list of upstream/main commits not yet on
+    # origin/main. `--cherry-pick` drops picked-then-reverted pairs by patch
+    # ID; -Since further trims by ancestry to keep the walk fast.
+    param([string] $Since)
+    $out = @(git log --cherry-pick --right-only --no-merges --format='%H' --reverse 'origin/main...upstream/main' 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw "git log --cherry-pick failed while computing pending list." }
+    $shas = @($out | Where-Object { $_ -match '^[0-9a-f]{40}$' })
+    if ($Since) {
+        $filtered = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($sha in $shas) {
+            $null = git merge-base --is-ancestor $sha $Since 2>$null
+            if ($LASTEXITCODE -ne 0) { [void] $filtered.Add($sha) }
+        }
+        $shas = @($filtered)
+    }
+    return ,$shas
+}
+
+# --- Main logic ------------------------------------------------------------
+
 $from = Get-LastSyncedUpstreamSha
 $to = (git rev-parse upstream/main).Trim()
 if ($LASTEXITCODE -ne 0) { throw "git rev-parse upstream/main failed." }
@@ -37,18 +87,10 @@ if ($from -eq $to) {
     return
 }
 
-# Patch-id-aware list of full SHAs (oldest-first). Uses Get-PendingUpstreamShas
-# from Common.ps1, which wraps `git log --cherry-pick --right-only --no-merges`:
-# any upstream commit whose patch ID matches a commit already on origin/main is
-# excluded (so picked-then-reverted commits stay out unless their patch is no
-# longer on origin/main, in which case they correctly re-appear as pending).
-# The revert-pair detection below stays as defense-in-depth and as the source
-# of the `dropped_pairs` report field; in practice --cherry-pick already drops
-# most pairs, but a same-batch original+revert that wasn't yet on origin/main
-# at the time of computation is still useful to surface.
 $all = @(Get-PendingUpstreamShas -Since $from)
 
-# Build sha -> first line and body map (single git invocation per commit is fine for typical batch sizes).
+# Build sha -> first-line / body lookup (one git invocation per commit is
+# fine at typical batch sizes).
 $info = @{}
 foreach ($sha in $all) {
     $subj = git log -1 --format='%s' $sha
@@ -56,11 +98,9 @@ foreach ($sha in $all) {
     $info[$sha] = @{ subject = $subj; body = $body }
 }
 
-# Detect revert pairs. Note: when a revert body lists multiple SHAs
-# (e.g. "This reverts commit A. This also undoes parts of B"), the first
-# match wins — that is, the SHA following the canonical "This reverts
-# commit <sha>" line introduced by `git revert`. Bodies that list a
-# secondary SHA outside the canonical form are ignored on purpose.
+# Detect revert pairs WITHIN the range. `--cherry-pick` already handled
+# pairs that crossed the watermark boundary; this catches same-batch
+# original+revert that wasn't on origin/main yet at computation time.
 $dropped = New-Object 'System.Collections.Generic.HashSet[string]'
 $pairs   = @()
 foreach ($sha in $all) {
@@ -72,14 +112,10 @@ foreach ($sha in $all) {
     if ($body -match 'This reverts commit ([0-9a-f]{40})\b') {
         $targetSha = $Matches[1]
     } elseif ($subj -match '^Revert "') {
-        # Best-effort fallback: match the quoted original subject. To
-        # avoid pairing the revert with a *later* unrelated commit
-        # that happens to share the subject, search only the prefix of
-        # $all up to (but not including) the current revert — the
-        # original must precede its revert in oldest-first order.
-        # Also require exactly one match; if subjects repeat, fall
-        # through and let the revert land as a normal pick (safer
-        # than dropping the wrong commit).
+        # Fallback: match by quoted subject, but only against commits
+        # earlier in the oldest-first range, and only when the match is
+        # unique (otherwise leave the revert as a normal pick rather
+        # than risk dropping the wrong commit).
         $origSubject = $subj -replace '^Revert "', '' -replace '"\s*$', '' -replace '"\.?\s*$',''
         $prefix = @()
         foreach ($candidateSha in $all) {
@@ -112,11 +148,10 @@ foreach ($sha in $all) {
 
 $pending = $all | Where-Object { -not $dropped.Contains($_) }
 
-$result = [ordered] @{
+[ordered] @{
     from          = $from
     to            = $to
     pending       = @($pending)
     dropped_pairs = @($pairs)
     skipped_empty = @($empty)
-}
-$result | ConvertTo-Json -Depth 5
+} | ConvertTo-Json -Depth 5

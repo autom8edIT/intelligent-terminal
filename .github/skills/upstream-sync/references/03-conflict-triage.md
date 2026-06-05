@@ -45,8 +45,10 @@ if ((git diff --cached --quiet; $LASTEXITCODE) -eq 0) {
 
 ## Tier 2 — LLM-assisted trivial textual (opt-in)
 
-Disabled by default; enable with `04-run-batch.ps1 -TryTier2`. Even when
-enabled, this tier only fires when **all** of the following hold:
+Disabled by default. The orchestrator in [`SKILL.md`](../SKILL.md) does
+not invoke Tier-2 — if you want it, an agent walking the cherry-pick loop
+can opt in per-conflict using the rubric below. Even when invoked, this
+tier only fires when **all** of the following hold:
 
 - No more than 3 conflicting files.
 - Each file has fewer than 5 conflict hunks.
@@ -89,13 +91,12 @@ Anything not resolved by Tier 0–2:
 
 ```pwsh
 git cherry-pick --abort
-# Open the labeled stuck issue (07-open-stuck-issue.ps1) — issue body
-# carries the ```yaml # wta-state``` block with stuck_on_sha + branch
-# Write the report with the conflict diagnostics
-# Exit with code 10
+# Open the labeled stuck issue (06-open-stuck-issue.ps1) — issue body
+# carries the ```yaml # wta-state``` block with stuck_on_sha + branch.
+# Surface the issue URL + branch to the operator and exit.
 ```
 
-The report **must** include:
+The issue body (built by [`scripts/06-open-stuck-issue.ps1`](../scripts/06-open-stuck-issue.ps1)) **must** include:
 
 - The conflicting commit SHA, subject, author, and upstream URL.
 - The list of conflicting paths with a one-line classification each
@@ -105,32 +106,17 @@ The report **must** include:
   that keeps the `(cherry picked from commit <sha>)` trailer, then
   CLOSE the stuck issue (that's the lock-clear signal — no script).
 
-## Tier 4 — Post-pick validation failed
+## Tier 4 — Post-pick build failed
 
-The cherry-picks all applied cleanly, but a hard gate after the loop
-said NO before any push or PR. This catches the class of bug missed by
-git-level conflict detection: clean-merge-but-broken-content (PR #220
-audit found duplicate `.resw` keys + a dropped fork-specific `C4459`
-suppression — both committed without git ever printing a conflict).
+The cherry-picks all applied cleanly, but [`scripts/04-try-build.ps1`](../scripts/04-try-build.ps1)
+said NO before the PR could be finalized. The build runs before finalize
+on purpose — see [`SKILL.md` step 7](../SKILL.md#7-build) for the
+build-then-finalize ordering and the one-focused-fix-commit rule.
 
-The orchestrator runs three gates after the cherry-pick loop, in order:
-
-| Sub-tier | Gate | Symptom | Action |
-|---|---|---|---|
-| **4a** | Static breakage scan ([`scripts/08-static-scan.ps1`](../scripts/08-static-scan.ps1)) | New duplicate `.resw` keys vs base, or a missing fork invariant from [`fork-invariants.json`](./fork-invariants.json) | Lock + issue + exit 10 |
-| **4b** | Try-build ([`scripts/10-try-build.ps1`](../scripts/10-try-build.ps1)) | Build exited non-zero within timeout | Lock + issue + exit 10 |
-| **4c** | Try-build timeout | Wall-clock cap (default 45m) hit | Lock + issue + exit 10 — unless `-AllowInconclusiveBuild` (dev opt-in) |
-| **4d** | Toolchain preflight ([`scripts/09-toolchain-preflight.ps1`](../scripts/09-toolchain-preflight.ps1)) | Required `PlatformToolset` (e.g. v143) not present on host | Lock + **NO issue** — provisioning problem, not code |
-
-**Why these three gates and not more.** They were sized to catch the
-historical real-world failures with zero false positives:
-- 4a covers content-level pattern breakage where git is happy but the
-  resulting file violates a fork-specific invariant.
-- 4b is the broadest possible "did this even compile" check.
-- 4c distinguishes "build hung — needs investigation" from "build
-  failed for a discoverable reason".
-- 4d distinguishes "this code is broken" from "this host can't even
-  try to build it" — the latter must never open a GitHub issue.
+| Sub-kind | Trigger | Action |
+|---|---|---|
+| **build-failed** | `bz no_clean` exited non-zero within timeout | Try ONE focused build-fix commit per [SKILL.md step 7](../SKILL.md#7-build). If that fails or scope is too large → open [Tier-4 stuck issue](../scripts/06b-open-build-stuck-issue.ps1) and exit. |
+| **build-inconclusive** | Wall-clock cap (default 45 min) hit | Open Tier-4 stuck issue immediately (don't guess at fixing a hang). |
 
 Tier-4 state lives in the body of an open `upstream-sync-stuck` labeled
 issue (separate per kind by `findings_hash`); any such open issue causes

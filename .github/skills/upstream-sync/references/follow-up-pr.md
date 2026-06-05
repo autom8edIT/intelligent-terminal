@@ -26,7 +26,7 @@ follow-up PR.
 | Comment / failure | Fix where | Why |
 |---|---|---|
 | Build error introduced by the cherry-pick batch | **Sync PR** — one focused commit | The sync PR is broken; the sync PR must be made buildable before merge. |
-| Duplicate `.resw` keys / manifest collisions surfaced by `bz` but missed by the static-scan baseline | **Sync PR** — one focused commit | Same reason — without it the sync PR can't merge. |
+| Duplicate `.resw` keys / manifest collisions surfaced by `bz` only at build time | **Sync PR** — one focused commit | Same reason — without it the sync PR can't merge. |
 | CI gate failure on the sync PR (check-spelling, lint, format) that is genuinely caused by the cherry-picked content | **Sync PR** — one focused commit | Same reason. |
 | Copilot reviewer correctness finding (e.g. accumulator drift past clamp floor, missing cleanup on exception path) | **Follow-up PR** | Reviewer added value but the change is a *refactor* of upstream code, not a build fix. Cherry-pick PR stays faithful. |
 | Translation error (`zh-TW` 工作模式 vs 工作階段) | **Follow-up PR** | The cherry-pick faithfully imported what upstream shipped. Correcting it is fork-local improvement. |

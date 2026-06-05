@@ -24,7 +24,7 @@ param(
 . "$PSScriptRoot/Common.ps1"
 
 function Get-KnownConflicts {
-    $md = Join-Path (Split-Path $PSScriptRoot -Parent) 'references/known-conflicts.md'
+    $md = Join-Path (Split-Path $PSScriptRoot -Parent) 'references/03-known-conflicts.md'
     if (-not (Test-Path $md)) { return @() }
     $lines = Get-Content -LiteralPath $md
     $entries = @()

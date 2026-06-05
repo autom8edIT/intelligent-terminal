@@ -1,12 +1,17 @@
 <#
 .SYNOPSIS
-  Try build. Runs the configured build command in a razzle environment
-  and captures the result. Default: `cmd /c "tools\razzle.cmd && bz no_clean"`.
+  Try-build. Runs the configured build command in a razzle environment and
+  captures the result. Default: `cmd /c "tools\razzle.cmd && bz no_clean"`.
+
+.DESCRIPTION
+  Run AFTER cherry-picking (03) and BEFORE finalizing the PR (05). If the
+  build fails, the agent commits a fix on the same sync branch so it lands
+  in the same PR — that is why try-build is step 04, not step 99.
 
 .PARAMETER BuildCommand
-  Override the default build command. Must be a string the cmd.exe
-  shell can execute (razzle is cmd-based; PowerShell-keyword chaining
-  like 'if' won't work — keep it cmd-shell-friendly with &&).
+  Override the default build command. Must be a string the cmd.exe shell
+  can execute (razzle is cmd-based; PowerShell-keyword chaining like 'if'
+  won't work — keep it cmd-shell-friendly with &&).
 
 .PARAMETER TimeoutMinutes
   Wall-clock cap. Default 45. On timeout, the build is killed and the
@@ -23,36 +28,63 @@
       "exit_code":    <int>,
       "duration_ms":  <int>,
       "command":      "<the command that ran>",
-      "log_path":     "<path to full log>",
+      "log_path":     "<repo-relative path to full log>",
       "log_tail":     "<last ~200 lines of output>"
     }
-
-  Exit / error model:
-    Stdout JSON on success (orchestrator path).
-    Throws on wrapper error (couldn't start the build at all). The
-    orchestrator (`04-run-batch.ps1`) catches and routes through its
-    own exit-code mapping (0 ok / 10 stuck / 20 error). When the script
-    is run standalone for debugging, an uncaught throw exits with
-    PowerShell's default code (1) and prints the stack trace.
-    `exit 20` is intentionally NOT used here: the script is invoked via
-    `& "$PSScriptRoot/10-try-build.ps1"`, and `exit` in that context
-    would terminate the orchestrator mid-pipeline.
 #>
 [CmdletBinding()]
 param(
-    [string] $BuildCommand = 'tools\razzle.cmd && bz no_clean',
+    [string] $BuildCommand   = 'tools\razzle.cmd && bz no_clean',
     [int]    $TimeoutMinutes = 45,
     [string] $LogDir
 )
 
 . "$PSScriptRoot/Common.ps1"
 
-try {
-    if (-not $LogDir) {
-        # Default: per-day, per-skill artifact dir under the gitignored
-        # `Generated Files/` root. Get-GeneratedDir creates it on demand.
-        $LogDir = Get-GeneratedDir -Sub 'build-logs'
+# --- Inlined helpers (single-use; see Common.ps1 comment for why) ----------
+
+function Get-RepoRoot {
+    $r = git rev-parse --show-toplevel 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "Not inside a git repo." }
+    return $r.Trim()
+}
+
+function Get-GeneratedDir {
+    # Per-skill, per-day artifact dir under the repo's gitignored
+    # `Generated Files/` root (matches the workspace convention; the repo's
+    # top-level .gitignore has `**/Generated Files/`).
+    param([string] $Sub)
+    $root = Get-RepoRoot
+    $date = (Get-Date).ToString('yyyy-MM-dd')
+    $path = Join-Path $root "Generated Files/upstream-sync/$date"
+    if ($Sub) { $path = Join-Path $path $Sub }
+    if (-not (Test-Path -LiteralPath $path)) {
+        New-Item -ItemType Directory -Path $path -Force | Out-Null
     }
+    return $path
+}
+
+function ConvertTo-RepoRelativePath {
+    # Normalize to forward-slash, repo-relative form so callers can safely
+    # embed it in committed text without leaking machine-specific drive
+    # letters / user dirs.
+    param([Parameter(Mandatory)] [string] $Path)
+    $root = ((Get-RepoRoot) -replace '\\','/').TrimEnd('/')
+    $abs  = $Path -replace '\\','/'
+    if ($abs.Equals($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "ConvertTo-RepoRelativePath: refusing to return empty (path == repo root): $Path"
+    }
+    $prefix = "$root/"
+    if ($abs.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $abs.Substring($prefix.Length)
+    }
+    throw "ConvertTo-RepoRelativePath: '$Path' is not under repo root '$root'."
+}
+
+# --- Main logic ------------------------------------------------------------
+
+try {
+    if (-not $LogDir) { $LogDir = Get-GeneratedDir -Sub 'build-logs' }
     $root = Get-RepoRoot
     if (-not (Test-Path -LiteralPath $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 
@@ -62,7 +94,6 @@ try {
     $cmdLine = "/c `"cd /d `"$root`" && $BuildCommand`""
     $started = Get-Date
 
-    # Use Start-Process with redirection so we can both tail and tee.
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName               = $env:ComSpec
     $psi.Arguments              = $cmdLine
@@ -72,12 +103,12 @@ try {
     $psi.UseShellExecute        = $false
     $psi.CreateNoWindow         = $true
 
-    $proc = [System.Diagnostics.Process]::Start($psi)
+    $proc       = [System.Diagnostics.Process]::Start($psi)
     $baseWriter = $null
     $writer     = $null
 
     try {
-        # Tee stdout/stderr into the log file as the build runs. The synchronized
+        # Tee stdout/stderr to the log file as the build runs. The synchronized
         # wrapper serializes concurrent stdout/stderr DataReceived callbacks.
         $baseWriter = [System.IO.StreamWriter]::new($logPath, $false, [System.Text.UTF8Encoding]::new($false))
         $writer = [System.IO.TextWriter]::Synchronized($baseWriter)
@@ -105,8 +136,6 @@ try {
         }
     }
     finally {
-        # Always release the log file handle and process — scheduler runs are
-        # unattended and a leaked handle would jam the next run's log write.
         if ($writer)     { try { $writer.Flush() }      catch {}
                            try { $writer.Close() }      catch {} }
         if ($baseWriter) { try { $baseWriter.Dispose() } catch {} }
@@ -116,26 +145,20 @@ try {
     $ended      = Get-Date
     $durationMs = [int]($ended - $started).TotalMilliseconds
 
-    # Capture the last ~200 lines for the report / stuck issue.
     $tailLines = if (Test-Path -LiteralPath $logPath) {
         @(Get-Content -LiteralPath $logPath -Tail 200) -join "`n"
     } else { '' }
 
-    # Emit a repo-relative log_path when the log lives inside the repo
-    # (the common case). Absolute paths leak machine-specific details
-    # like username + drive letter into GitHub issues/reports. Fall back
-    # to the absolute path when the user passed a custom -LogDir that
-    # sits outside the repo root.
     $logPathForReport = try { ConvertTo-RepoRelativePath $logPath } catch { $logPath }
-    $doc = [ordered] @{
+
+    [ordered] @{
         kind        = $kind
         exit_code   = $exitCode
         duration_ms = $durationMs
         command     = $BuildCommand
         log_path    = $logPathForReport
         log_tail    = $tailLines
-    }
-    $doc | ConvertTo-Json -Depth 4
+    } | ConvertTo-Json -Depth 4
 }
 catch {
     Write-Error $_.Exception.Message
