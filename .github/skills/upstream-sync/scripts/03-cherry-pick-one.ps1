@@ -118,8 +118,23 @@ if ($pickCode -eq 0) {
     return
 }
 
-# Conflict. Try Tier-0.
+# Conflict — or some other non-zero exit (e.g. trying to cherry-pick a
+# merge commit without -m, hook failures, etc.). For *real* conflicts
+# Get-ConflictPaths returns the unmerged paths and we try Tier-0; for
+# non-conflict failures the list is empty and we must NOT fall through
+# to `cherry-pick --continue` (which would explode), nor leave the repo
+# mid-cherry-pick. Abort and surface a controlled stuck result.
 $conflicts = Get-ConflictPaths
+if (-not $conflicts -or $conflicts.Count -eq 0) {
+    Write-Warning "git cherry-pick exited $pickCode with no conflict paths — likely a non-conflict failure (e.g. merge commit without -m). Aborting and marking stuck."
+    git cherry-pick --abort 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "git cherry-pick --abort failed after a non-conflict failure; repository may still be mid-cherry-pick." }
+    $result.status = 'stuck'
+    $result.conflict_paths = @()
+    $result.error = "git cherry-pick exited $pickCode with no conflict paths"
+    $result | ConvertTo-Json -Compress
+    return
+}
 $result.conflict_paths = $conflicts
 $known = Get-KnownConflicts
 $unhandled = @()

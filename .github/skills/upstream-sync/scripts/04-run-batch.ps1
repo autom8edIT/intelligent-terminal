@@ -136,15 +136,24 @@ try {
     # instead, unless -Force is given. Skipped entirely under
     # -PushDirectToMain, which never opens a PR and shouldn't require
     # `gh` auth on the host.
-    if (-not $Force -and -not $PushDirectToMain) {
+    # Skip the existing-PR gate when there's nothing to publish anyway:
+    # -PushDirectToMain never opens a PR, and -DryRun stops well before
+    # 06-finalize-pr.ps1 — neither should require `gh` auth on the host.
+    if (-not $Force -and -not $PushDirectToMain -and -not $DryRun) {
         # Drop the GitHub `head:` search qualifier — it matches exact
         # branch names, not prefixes, so `head:upstream-sync/` would
         # return nothing even when an `upstream-sync/2026-06-04` PR is
         # open. List all open PRs (--limit 200 covers the corner case
         # where a repo has more than the default 30 open) and filter
         # client-side by headRefName.
-        $existingJson = gh pr list --repo microsoft/intelligent-terminal --state open --limit 200 --json number,headRefName,url 2>$null
-        if ($LASTEXITCODE -eq 0 -and $existingJson) {
+        $existingJson = gh pr list --repo microsoft/intelligent-terminal --state open --limit 200 --json number,headRefName,url 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            # `gh` missing / not authenticated / network-blocked. Don't
+            # silently continue and waste a full pick + scan + build
+            # only to fail later in 06-finalize-pr.ps1 — fail fast.
+            Exit-Hard "gh pr list failed (exit $LASTEXITCODE): $existingJson. The existing-PR gate requires gh to be installed and authenticated. Re-run with -Force to bypass (at your own risk), or with -DryRun / -PushDirectToMain to skip the gate."
+        }
+        if ($existingJson) {
             $existing = @($existingJson | ConvertFrom-Json) | Where-Object { $_.headRefName -like 'upstream-sync/*' }
             if ($existing.Count -gt 0) {
                 $first = $existing[0]
