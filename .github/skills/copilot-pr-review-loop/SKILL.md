@@ -25,6 +25,29 @@ open-threads list is empty.
   otherwise findings churn round-over-round.
 - The user wants human reviewer feedback, not Copilot's.
 
+## Critical Anti-Patterns (READ THIS FIRST)
+
+Two failure modes will burn a session if you don't internalize them up front:
+
+1. **Never post `@copilot please review` (or any `@copilot` mention) as
+   a PR comment to trigger code review.** That summons the Copilot
+   **Coding Agent** (which makes commits), not the reviewer bot. It
+   will not produce a code review. The valid triggers are the API
+   mechanisms in [scripts/01-request-review.ps1](scripts/01-request-review.ps1);
+   if they fail, push a substantive commit (auto-assign on
+   `synchronize` is the most reliable trigger).
+2. **HTTP 200 / exit 0 from a trigger call is NOT proof Copilot
+   accepted it.** The server can silently drop a request — quiet-period
+   after dismissal, repo without Copilot enabled, bot not a
+   collaborator. The authoritative success signal is a
+   `copilot_work_started` event in the issue timeline newer than your
+   request. Convergence requires a Copilot review whose `commit.oid`
+   equals the current HEAD — not just "a review exists" and not just
+   "no new comments".
+
+The script + workflow enforce both rules; if you bypass them you will
+reproduce the documented "wait for nothing" / false-done failures.
+
 ## Prerequisites
 
 - `gh` CLI authenticated against the target repository.
