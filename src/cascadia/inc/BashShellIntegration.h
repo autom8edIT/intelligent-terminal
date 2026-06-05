@@ -155,7 +155,7 @@ unset __it_shellinteg_b
     // are always LF). The descriptor sets forceLf=true so the driver
     // uses "\n" for the line endings IT writes — i.e. the trailing
     // newline after our appended block, and any joining around an
-    // in-place replace. Pre-existing CRLF in the user's content
+    // in-place replace. Preexisting CRLF in the user's content
     // OUTSIDE our block is preserved as-is; the installer never
     // normalizes the whole file. We keep the signature so the same
     // generic driver can call us.
