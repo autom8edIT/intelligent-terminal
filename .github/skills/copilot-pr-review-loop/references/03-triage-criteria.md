@@ -82,6 +82,37 @@ only when:
 Otherwise, decide. Repeated confirmation prompts when the answer is
 already clear add no value and slow the loop down.
 
+## Project-specific policy hooks — check before deciding
+
+Some findings are decided by **project policy**, not by general
+correctness reasoning. Always check the repo's contributing docs and
+existing config before applying a generic "fix" — what looks like an
+obvious fix may violate a project rule.
+
+Common cases:
+
+- **Spell-check / dictionary findings**: many projects (including
+  `microsoft/intelligent-terminal`) require **rewording the document
+  for English words** and adding a regex to
+  `.github/actions/spelling/patterns/patterns.txt` (e.g.
+  `\bLOCALE_[A-Z][A-Z0-9_]+\b`) for OS API constants and code
+  identifiers — **never** add individual words to `expect.txt`. Check
+  the spell-check config conventions before adding any allowlist
+  entry. Auto-adding to `expect.txt` will be rejected on review.
+- **Lint suppressions / `// NOLINT` / `# noqa`**: most projects only
+  accept suppressions with an inline rationale comment. Bare
+  suppressions get pushed back.
+- **License headers / file boilerplate**: project-specific format,
+  often enforced by CI. Copy the existing header from a neighbor file.
+- **Test framework choices, mock libraries, formatting tool versions**:
+  follow the convention of the surrounding test files; do not
+  introduce a new framework just because Copilot suggested one.
+
+The rule: when Copilot proposes a "standard" fix for a class of finding
+the project already has a policy for, follow the project's policy, not
+Copilot's generic suggestion. Cite the project's config file or
+convention in your reply.
+
 ## Conflicting Comments — Break Oscillation Before It Becomes a Loop
 
 A real failure mode (sometimes spanning rounds, sometimes between two

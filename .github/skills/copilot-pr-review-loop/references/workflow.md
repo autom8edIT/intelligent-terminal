@@ -1,25 +1,31 @@
 # Copilot PR Review Loop — Full Workflow
 
-Detailed procedure for one round of the loop. Repeat until both convergence
-conditions in step 8 hold, then run step 9 once.
+Detailed procedure for one round of the loop. Repeat until all three
+convergence conditions in step 9 hold, then run step 10 once.
 
 ## Per-round checklist
 
 Track progress through one round with this list (copy into your scratch
 notes or session todos):
 
-- [ ] **1.** Request review — `scripts/01-request-review.ps1 -PrNumber <n>`
-- [ ] **2.** Wait, then list open threads — `scripts/02-list-open-threads.ps1 -PrNumber <n>`
-- [ ] **3.** Triage each finding using [03-triage-criteria.md](03-triage-criteria.md)
-- [ ] **4.** Apply fixes — one sub-agent per independent change
-- [ ] **5.** Build + run affected tests (no unverified pushes)
-- [ ] **6.** Reply + resolve each thread using [06-reply-templates.md](06-reply-templates.md) → `scripts/06-reply-and-resolve.ps1`
-- [ ] **7.** Commit + push the round's changes (one focused commit per round)
-- [ ] **8.** Convergence check: latest review says *"no new comments"* **and** step 2 returns empty
-- [ ] **9.** (once at end of loop) Cleanup outdated — `scripts/09-cleanup-outdated.ps1 -PrNumber <n>`
+- [ ] **1.** Request review — `scripts/01-request-review.ps1 -PrNumber <n>` (verifies `copilot_work_started` event landed; will throw if all 3 mechanisms fail)
+- [ ] **2.** Wait for review submission — `scripts/02-wait-for-review.ps1 -PrNumber <n>` (default 35-min timeout; blocks until a Copilot review against current HEAD is submitted, or returns `TimedOut` / `HeadAdvanced`)
+- [ ] **3.** List open threads — `scripts/02-list-open-threads.ps1 -PrNumber <n>` (outdated threads included by default — reply + resolve them too)
+- [ ] **4.** Triage each finding using [03-triage-criteria.md](03-triage-criteria.md)
+- [ ] **5.** Apply fixes — one sub-agent per independent change
+- [ ] **6.** Build + run affected tests (no unverified pushes)
+- [ ] **7.** Reply + resolve each thread using [06-reply-templates.md](06-reply-templates.md) → `scripts/06-reply-and-resolve.ps1`
+- [ ] **8.** Commit + push the round's changes (one focused commit per round)
+- [ ] **9.** Convergence check (ALL THREE must hold):
+  - (a) latest Copilot review's `commit.oid` equals current PR HEAD SHA
+  - (b) that review's body is the *"generated no new comments"* form
+  - (c) step 3 (`02-list-open-threads.ps1` with no `-ExcludeOutdated`) returns empty
+- [ ] **10.** (once at end of loop) Cleanup outdated — `scripts/09-cleanup-outdated.ps1 -PrNumber <n>` (safety net only — most loops converge with nothing to clean)
 
-If step 8 fails, loop back to step 1. If step 8 passes, run step 9 once
-and you're done.
+If step 9 fails on any condition, loop back to step 1. If step 9 passes
+on all three, run step 10 once and you're done. Print the review's
+`commit.oid` and `submittedAt` in your task-complete message — proof,
+not assertion.
 
 ## Sub-agent delegation map
 
@@ -30,48 +36,78 @@ sequencing, the `git commit`/`git push`, and the final
 
 | Step | Sub-agent role | Why |
 |------|----------------|-----|
-| 2 — List open threads | Categorize each finding by file/severity | One-shot, deterministic; useful as a fresh read of what's outstanding |
-| 3 — Triage | Apply the rubric in [03-triage-criteria.md](03-triage-criteria.md), return fix/decline per thread | Fresh judgment, not contaminated by the implementer's intent |
-| 4 — Fix | One sub-agent per independent fix; run in parallel where possible | Parallelism; isolated context per fix |
-| 5 — Build & test | Run the project's build + unit tests, return only failures | Keeps long build output out of the parent context |
-| 6 — Reply drafting | Draft replies using [06-reply-templates.md](06-reply-templates.md) | Consistency; avoids drift between replies on related threads |
-| 8 — Convergence check | Re-run step 2's script and re-list, compare to expected empty set | Independent verification of the convergence condition |
+| 3 — List open threads | Categorize each finding by file/severity | One-shot, deterministic; useful as a fresh read of what's outstanding |
+| 4 — Triage | Apply the rubric in [03-triage-criteria.md](03-triage-criteria.md), return fix/decline per thread | Fresh judgment, not contaminated by the implementer's intent |
+| 5 — Fix | One sub-agent per independent fix; run in parallel where possible | Parallelism; isolated context per fix |
+| 6 — Build & test | Run the project's build + unit tests, return only failures | Keeps long build output out of the parent context |
+| 7 — Reply drafting | Draft replies using [06-reply-templates.md](06-reply-templates.md) | Consistency; avoids drift between replies on related threads |
+| 9 — Convergence check | Re-run step 3's script + re-query latest review's `commit.oid`, compare to current HEAD | Independent verification of all three convergence conditions |
 
 ## 1. Request a Copilot review
 
-Use the `gh pr edit --add-reviewer` form — the only consistently working
-mechanism. The GraphQL `requestReviews` mutation no longer accepts the
-Copilot bot login, and REST `requested_reviewers` rejects bots with HTTP
-422. See [api-quirks.md](api-quirks.md) for details.
+Run [scripts/01-request-review.ps1](../scripts/01-request-review.ps1) — it tries the
+three known trigger mechanisms in order (`gh pr edit --add-reviewer`,
+REST POST, REST DELETE+POST) and verifies success by watching the issue
+event log for a new `copilot_work_started` event within ~30 seconds.
+HTTP / exit status alone is NOT sufficient — the server can silently
+drop trivial-diff re-reviews while returning success. See
+[api-quirks.md](api-quirks.md).
 
 ```powershell
 pwsh ../scripts/01-request-review.ps1 -PrNumber <pr-number>
 ```
 
-The script is idempotent — re-running it triggers a fresh review.
+If all three mechanisms fail (no `copilot_work_started` event), the
+script throws with diagnostic guidance. The usual cause is Copilot
+suppressing a re-review of an unchanged HEAD — push a substantive new
+commit and retry.
 
-## 2. Wait, then fetch open threads
+**DO NOT** post `@copilot please review` (or any @copilot mention) as a
+PR comment. That summons the Copilot **Coding Agent** (which makes
+commits), not the reviewer bot. This anti-pattern has been observed
+across multiple Copilot CLI sessions and is a confirmed waste of time.
 
-Copilot typically posts a new review within 3–6 minutes; allow up to 10.
+## 2. Wait for the review to actually land
 
-**Do not block the agent foreground with `Start-Sleep`.** If the parent
-agent is running interactively, end the turn after step 1 and resume in a
-later turn (or schedule a reminder). If you are running headless or in a
-script, use a background mechanism — `Start-Job`, a separate shell, or
-the scheduling layer of your runtime — rather than holding the foreground
-for 6 minutes doing nothing.
+The trigger check in step 1 confirms Copilot accepted the job. Step 2
+waits for Copilot to actually **submit** the review against the current
+HEAD. These are two different things — past sessions have shipped
+"convergence" on a review that was against an earlier commit.
 
-When you come back, fetch the open threads:
+```powershell
+pwsh ../scripts/02-wait-for-review.ps1 -PrNumber <pr-number>
+```
+
+Default timeout is **35 minutes**, not 10. Small-diff and trivial-diff
+reviews can be suppressed/batched for 15–30+ min; shortening the
+timeout produces blind retries that compound the suppression and hit
+rate limits.
+
+The script returns one of:
+
+- `ReviewCompleted` — a fresh Copilot review at current HEAD landed. Proceed.
+- `HeadAdvanced` — someone pushed during the wait. Re-run step 1 + step 2 against the new HEAD.
+- `TimedOut` — no review at HEAD in 35 min. Do NOT blindly retry. First verify the `copilot_work_started` event for the trigger that should have produced this review. If the event landed, the bot is suppressing — push a substantive commit and re-trigger.
+- `Error` — unrecoverable API/auth issue.
+
+You can run the wait script in a background sub-agent (via the `task`
+tool) and use the foreground turn for other independent work
+(e.g. drafting reply templates for likely findings). Do NOT end the
+turn and "come back later" without a concrete completion signal —
+that's how false-done declarations creep in.
+
+## 3. Fetch open threads
 
 ```powershell
 pwsh ../scripts/02-list-open-threads.ps1 -PrNumber <pr-number>
 ```
 
-`-Owner` / `-Repo` default to the current repo via `gh repo view`, so
-they're optional when you run from inside a worktree of the target repo.
+Outdated threads (`isOutdated: true`) are **included by default** —
+they still appear in the PR UI as unresolved and still need reply +
+resolve. Pass `-ExcludeOutdated` only for the "what's actionable on
+current lines" view; never use that flag to declare convergence.
 
-Don't poll faster than ~3 minutes — there is no progress signal and faster
-polling only wastes API budget.
+`-Owner` / `-Repo` default to the current repo via `gh repo view`.
 
 ## 3. Triage each finding
 

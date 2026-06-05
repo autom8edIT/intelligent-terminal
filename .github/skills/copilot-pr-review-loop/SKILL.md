@@ -32,19 +32,32 @@ open-threads list is empty.
 
 ## Step-by-Step Workflows
 
-The loop has nine steps. Run steps 1–7 each round; check convergence at
-step 8; run step 9 once when the loop terminates. Full procedure, with
+The loop has ten steps. Run steps 1–8 each round; check convergence at
+step 9; run step 10 once when the loop terminates. Full procedure, with
 commands, rationale, the per-step sub-agent delegation table, and a
 resumable checklist, is in [references/workflow.md](references/workflow.md).
 
 ```
-Request review → Wait → List open threads → Triage → Fix → Build/test →
-Reply + resolve → Loop → Cleanup outdated (final, once)
+Request review → Wait for trigger pickup → Wait for review submission →
+List open threads → Triage → Fix → Build/test → Reply + resolve → Loop →
+Cleanup outdated (final, once)
 ```
 
-Terminate when a review returns "no new comments" **and** the open-threads
-list is empty. A single condition is not enough — a "no new comments"
-review can still coexist with a stale open thread you forgot to resolve.
+Terminate when a review with `commit.oid == current HEAD` returns "no new
+comments" **and** the open-threads list is empty. Three things must be
+true simultaneously for convergence:
+
+1. The latest Copilot review's `commit.oid` equals the PR HEAD SHA.
+   (A "no new comments" review against an older commit is stale — it
+   did not see your most recent fix.)
+2. That review's body is the "generated no new comments" form.
+3. The open-threads list (`02-list-open-threads.ps1`, no
+   `-ExcludeOutdated`) returns empty.
+
+If any one is false, the loop is not done. Do **not** call
+`task_complete` until all three are verified — print the review's
+commit OID + submittedAt in the completion message as proof, not as
+assertion.
 
 **Delegate substantive steps to a fresh sub-agent.** Each round's triage,
 fix-drafting, and reply-drafting benefit from a clean context (no
@@ -55,9 +68,29 @@ agent owns sequencing, commits, and the final mutating
 
 ## Gotchas
 
-- **Use `gh pr edit --add-reviewer copilot-pull-request-reviewer`** to
-  request a Copilot review. The GraphQL `requestReviews` mutation rejects
-  the Copilot bot login, and REST `requested_reviewers` returns HTTP 422
+- **NEVER post `@copilot please review` (or any @copilot mention) as a
+  PR comment** to trigger a code review. That summons the Copilot
+  **Coding Agent** (which makes commits), not the reviewer bot. It will
+  not produce a review. The only valid triggers are the three
+  mechanisms tried by [scripts/01-request-review.ps1](scripts/01-request-review.ps1):
+  `gh pr edit --add-reviewer`, REST POST `requested_reviewers`, and
+  REST DELETE+POST cycle — all verified via the `copilot_work_started`
+  event in the issue timeline. If all three fail, push a substantive
+  commit and retry — do not fall back to @-mentions.
+- **HTTP 200 / exit 0 from a re-request call is NOT proof Copilot
+  accepted it.** The server can silently drop trivial-diff re-reviews.
+  The only authoritative signal is a `copilot_work_started` event newer
+  than your request. `01-request-review.ps1` already enforces this; do
+  not weaken it.
+- **A "no new comments" review is necessary but not sufficient for
+  convergence.** Also check the review's `commit.oid` equals the
+  current HEAD (run [scripts/02-wait-for-review.ps1](scripts/02-wait-for-review.ps1)
+  before declaring done) AND the open-threads list is empty. A stale
+  review on an earlier commit lets a regression slip through unreviewed.
+- **Use `gh pr edit --add-reviewer copilot-pull-request-reviewer`** as
+  the first trigger mechanism. The GraphQL `requestReviews` mutation
+  rejects the Copilot bot login, and REST `requested_reviewers` returns
+  HTTP 422
   because bots are not repository collaborators.
 - **`git stash push -m` must come before `--`.** The form
   `git stash push -- <paths> -m <msg>` parses `<msg>` as a path and
@@ -67,10 +100,13 @@ agent owns sequencing, commits, and the final mutating
   `-F` for numeric/boolean variables. A reply body that happens to be
   `"true"` or all digits otherwise fails silently with a type error. See
   [references/api-quirks.md](references/api-quirks.md).
-- **Reply *and* resolve every thread, including declines.** Resolving
-  without a reply leaves no record of why the issue was considered
-  addressed; replying without resolving keeps the open-threads list
-  non-empty and blocks convergence.
+- **Reply *and* resolve every thread, including declines and outdated
+  ones.** Resolving without a reply leaves no record of why the issue
+  was considered addressed; replying without resolving keeps the
+  open-threads list non-empty and blocks convergence. Outdated threads
+  (whose cited lines have since shifted) still need reply + resolve —
+  they show up in the PR UI as unresolved until you explicitly close
+  them.
 - **One focused commit per round, not one per PR.** Bundling rounds
   destroys the audit trail of which finding drove which change and breaks
   `git bisect`.
@@ -91,10 +127,10 @@ agent owns sequencing, commits, and the final mutating
 |-------|----------|
 | `gh api` request to add Copilot reviewer returns HTTP 422 | Use `gh pr edit --add-reviewer copilot-pull-request-reviewer` (see [api-quirks.md](references/api-quirks.md)) |
 | No new review after ~10 minutes | Re-run the request — `scripts/01-request-review.ps1` is idempotent |
-| Outdated threads still appear in the open-threads list | Run [scripts/09-cleanup-outdated.ps1](scripts/09-cleanup-outdated.ps1) once at convergence |
+| Outdated-but-unresolved threads appear in the open-threads list | This is **expected** since the filter switch — outdated threads can still be actionable. Reply + resolve them like any other open thread. Use `-ExcludeOutdated` only if you specifically want "what's actionable on current lines". `09-cleanup-outdated.ps1` is a safety net for threads that became outdated after your last fetch, not the primary mechanism. |
 | Unsure whether to fix or decline a finding | Apply the rubric in [references/03-triage-criteria.md](references/03-triage-criteria.md) |
 | Need a reply that conveys "fixed", "declined", or "drift" | Use a template from [references/06-reply-templates.md](references/06-reply-templates.md) |
-| `list-open-threads` still shows resolved-looking threads | Filter is `!isResolved && !isOutdated` only — the script already does this; resolved-looking but still-open threads usually mean someone resolved the GitHub UI conversation without the GraphQL `resolveReviewThread` mutation completing |
+| `list-open-threads` still shows resolved-looking threads | Filter is `!isResolved` only (and excludes `isOutdated` only when `-ExcludeOutdated` is passed) — the script already does this; resolved-looking but still-open threads usually mean someone resolved the GitHub UI conversation without the GraphQL `resolveReviewThread` mutation completing |
 
 ## References
 
@@ -107,11 +143,17 @@ agent owns sequencing, commits, and the final mutating
 - [references/06-reply-templates.md](references/06-reply-templates.md) — reply
   patterns for accepted fixes, declined-with-rationale findings, and
   description-update acknowledgements.
-- [scripts/01-request-review.ps1](scripts/01-request-review.ps1) — re-request a
-  Copilot review on a PR.
-- [scripts/02-list-open-threads.ps1](scripts/02-list-open-threads.ps1) — fetch
-  open, non-outdated Copilot review threads.
+- [scripts/01-request-review.ps1](scripts/01-request-review.ps1) —
+  re-request a Copilot review on a PR, verified by `copilot_work_started`
+  event in the issue timeline (not by HTTP status).
+- [scripts/02-wait-for-review.ps1](scripts/02-wait-for-review.ps1) —
+  block until a fresh Copilot review submission lands against the
+  current HEAD (default 35 min timeout — accounts for small-diff
+  suppression).
+- [scripts/02-list-open-threads.ps1](scripts/02-list-open-threads.ps1) —
+  fetch unresolved Copilot review threads (outdated threads included
+  by default; reply + resolve every one).
 - [scripts/06-reply-and-resolve.ps1](scripts/06-reply-and-resolve.ps1) — post a
   reply and resolve in one call.
 - [scripts/09-cleanup-outdated.ps1](scripts/09-cleanup-outdated.ps1) —
-  batch-resolve outdated Copilot threads at convergence.
+  safety net for outdated threads that slipped past the per-round loop.
