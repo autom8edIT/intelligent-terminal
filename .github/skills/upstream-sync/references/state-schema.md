@@ -44,7 +44,7 @@ Path: `.github/upstream-sync/state.json` (committed on `main`).
   "last_run": {
     "at": "2026-06-04T13:41:45+08:00",
     "host": "SH-YEELAM-D11S",
-    "status": "ok",           // "ok" | "no-op" | "stuck" | "stuck-static-scan" | "stuck-build-failed" | "stuck-build-inconclusive" | "stuck-toolchain-missing" | "skipped-locked"
+    "status": "ok",           // "ok" | "stuck" | "stuck-static-scan" | "stuck-build-failed" | "stuck-build-inconclusive" | "stuck-toolchain-missing"
     "branch": "upstream-sync/2026-06-04",
     "pr_url": "https://github.com/microsoft/intelligent-terminal/pull/999",
     "picked_count": 7,
@@ -53,10 +53,12 @@ Path: `.github/upstream-sync/state.json` (committed on `main`).
     "tier0_resolutions": 1
   },
 
-  // Rolling history — keep last 20 runs.
+  // Rolling history — keep last 20 runs. Only `ok` and `stuck*` runs
+  // write state (and therefore appear here); `no-op`, `dry-run`, and
+  // `skipped-*` runs produce a local-only report and leave state.json
+  // unchanged.
   "history": [
     { "at": "...", "status": "ok",      "picked_count": 7,  "pr_url": "..." },
-    { "at": "...", "status": "no-op",   "picked_count": 0 },
     { "at": "...", "status": "stuck",   "stuck_on_sha": "abc...", "issue_url": "..." }
   ]
 }

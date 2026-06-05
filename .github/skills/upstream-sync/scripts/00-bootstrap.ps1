@@ -25,13 +25,13 @@ param(
 
 . "$PSScriptRoot/Common.ps1"
 
-# Safety: a bootstrap PR must contain *only* state.json. Refuse if the
-# worktree is dirty or HEAD isn't main, otherwise unrelated diffs (or a
+# Safety: a bootstrap PR must contain only state.json. Refuse if the
+# worktree is dirty or HEAD is not main; otherwise unrelated diffs (or a
 # feature branch's tip) could ride along on the bootstrap commit/PR.
 $currentBranch = (git rev-parse --abbrev-ref HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw "git rev-parse failed (is this a git repo?)." }
 if ($currentBranch -ne 'main') {
-    throw "Bootstrap must be run from 'main'. Currently on '$currentBranch'. git switch main first."
+    throw "Bootstrap must be run from 'main'. Currently on '$currentBranch'; git switch main first."
 }
 $dirty = git status --porcelain
 if ($LASTEXITCODE -ne 0) { throw "git status failed." }
@@ -55,7 +55,7 @@ if ((Test-Path $statePath) -and -not $Force) {
     throw "state.json already exists at $statePath. Pass -Force to overwrite (rewinding the baseline can cause re-picks)."
 }
 
-$state = @{
+$state = [ordered] @{
     version                  = 1
     upstream_remote_url      = 'https://github.com/microsoft/terminal.git'
     upstream_branch          = 'main'

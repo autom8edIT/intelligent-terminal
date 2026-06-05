@@ -25,19 +25,25 @@ function Get-ReportsDir {
 }
 
 function ConvertTo-RepoRelativePath {
-    # `git add` pathspec semantics differ between absolute and relative paths
-    # depending on the worktree-root vs. cwd interaction. Normalize every
-    # path our scripts hand to `git add` to a forward-slash, repo-relative
-    # form so the call is portable and won't silently no-op (or worse,
-    # leak a path-outside-tree error) on platforms where git treats
-    # absolute paths strictly.
+    # `git add` path arguments behave differently when absolute vs.
+    # repo-relative, depending on the worktree-root vs. cwd interaction.
+    # Normalize every path our scripts hand to `git add` to a
+    # forward-slash, repo-relative form so the call is portable and
+    # will not silently no-op (or worse, leak a path-outside-tree
+    # error) on platforms where git treats absolute paths strictly.
     param([Parameter(Mandatory)] [string] $Path)
-    $root = (Get-RepoRoot) -replace '\\','/'
+    $root = ((Get-RepoRoot) -replace '\\','/').TrimEnd('/')
     $abs  = $Path -replace '\\','/'
-    if ($abs.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
-        $rel = $abs.Substring($root.Length).TrimStart('/')
-        if (-not $rel) { throw "ConvertTo-RepoRelativePath: refusing to return empty (path == repo root): $Path" }
-        return $rel
+    if ($abs.Equals($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "ConvertTo-RepoRelativePath: refusing to return empty (path == repo root): $Path"
+    }
+    # Require a path-segment boundary after the prefix so 'C:/repo' does not
+    # match 'C:/repo-old/file' (prior implementation took the substring after
+    # the root length and only trimmed leading '/', which silently mangled
+    # sibling paths into garbage relative ones).
+    $prefix = "$root/"
+    if ($abs.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $abs.Substring($prefix.Length)
     }
     throw "ConvertTo-RepoRelativePath: '$Path' is not under repo root '$root'."
 }

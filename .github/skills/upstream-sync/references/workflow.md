@@ -22,8 +22,8 @@ git fetch upstream main --no-tags
 
 Script: [`01-fetch-upstream.ps1`](../scripts/01-fetch-upstream.ps1).
 
-Exits with `state.last_run.status = "no-op"` and writes a "nothing to do"
-report if `git rev-parse upstream/main` equals `state.last_synced_upstream_sha`.
+Writes a local "no-op" report and exits 0 (without updating `state.json`) if
+`git rev-parse upstream/main` equals `state.last_synced_upstream_sha`.
 
 ### 2. Compute pending range
 
