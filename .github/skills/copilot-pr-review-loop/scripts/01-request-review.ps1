@@ -164,7 +164,7 @@ while ((Get-Date) -lt $deadline) {
     $now = gh api --paginate "repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100" `
         --jq '[.[] | select(.event=="copilot_work_started") | .created_at] | sort | .[-1] // ""' 2>&1
     if ($LASTEXITCODE -eq 0) {
-        $now = ($now -split "`n" | Where-Object { $_.Trim() } | Sort-Object | Select-Object -Last 1).Trim()
+        $now = (@($now -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) | Sort-Object | Select-Object -Last 1)
         if ($now -and $now -ne $beforeTs) { $afterTs = $now; break }
     }
 }
