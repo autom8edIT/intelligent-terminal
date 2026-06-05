@@ -212,8 +212,10 @@ You are done ONLY when all three conditions hold simultaneously:
    this. Quote `LatestCopilotReview.bodyHead` in your task-complete
    message as proof.
 
-3. **`02-list-open-threads.ps1` returns empty** — or equivalently,
-   `02-check-review-status.ps1` returns `OpenThreadCount: 0`.
+3. **No unresolved review threads remain.** Use
+   `02-check-review-status.ps1`'s `OpenThreadCount: 0` for the
+   machine-readable check; `02-list-open-threads.ps1` prints
+   `No open threads.` for the human-readable empty case.
 
 The `02-check-review-status.ps1` script computes all three as a
 single `Converged: true` boolean. The loop is done iff that's true.

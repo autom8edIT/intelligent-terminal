@@ -74,7 +74,10 @@ true simultaneously for convergence:
    (A "no new comments" review against an older commit is stale — it
    did not see your most recent fix.)
 2. That review's body is the "generated no new comments" form.
-3. The open-threads list (`02-list-open-threads.ps1`) returns empty.
+3. There are no unresolved threads. Prefer
+   `02-check-review-status.ps1`'s `OpenThreadCount == 0`; the human
+   `02-list-open-threads.ps1` output prints `No open threads.` for that
+   case.
 
 If any one is false, the loop is not done. Do **not** call
 `task_complete` until all three are verified — print the review's
