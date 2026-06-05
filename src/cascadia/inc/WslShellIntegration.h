@@ -302,18 +302,39 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
             static std::mutex cacheMu;
             static std::map<std::wstring, std::string, std::less<>> cache;
 
-            std::lock_guard<std::mutex> g{ cacheMu };
-            if (const auto it = cache.find(distName); it != cache.end())
+            // Double-checked lookup: hold the mutex only across the
+            // cache touches, NOT across the up-to-30s QueryWslHomeRaw
+            // probe. Holding it across the probe would serialize all
+            // callers (even for different distros) and block unrelated
+            // work for the full cold-start window.
             {
-                return it->second;
+                std::lock_guard<std::mutex> g{ cacheMu };
+                if (const auto it = cache.find(distName); it != cache.end())
+                {
+                    return it->second;
+                }
             }
+            // Probe without the lock. Two concurrent callers for the
+            // same distro might both probe — the duplicate work is
+            // acceptable (rare, and the cost is bounded) and avoids
+            // the cross-distro serialization above.
             auto home = QueryWslHomeRaw(distName);
-            // Only cache successful probes. Failed probes (empty) are
-            // re-attempted on the next call — see the comment above for
-            // why this is the right trade-off.
-            if (!home.empty())
             {
-                cache.emplace(std::wstring{ distName }, home);
+                std::lock_guard<std::mutex> g{ cacheMu };
+                // Re-check: another thread may have populated this
+                // entry while we were probing. Their result wins
+                // (it's equally valid and already inserted).
+                if (const auto it = cache.find(distName); it != cache.end())
+                {
+                    return it->second;
+                }
+                // Only cache successful probes. Failed probes (empty)
+                // are re-attempted on the next call — see the comment
+                // above for why this is the right trade-off.
+                if (!home.empty())
+                {
+                    cache.emplace(std::wstring{ distName }, home);
+                }
             }
             return home;
         }

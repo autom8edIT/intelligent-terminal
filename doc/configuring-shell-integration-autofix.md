@@ -27,7 +27,7 @@ The downstream pipeline (autofix detection, classification, VT-event forwarding)
 
 ## Enabling Shell Integration
 
-The FRE wizard and the Settings UI "Install" button handle this for you. The sections below document the snippets they install, in case you want to install manually or audit them.
+The FRE wizard and the Settings UI "Install" button handle this for you. The snippets below are a simplified manual-install reference — useful for auditing what shell integration looks like or for installing by hand. The installer writes a slightly more careful version (preserving any existing `PROMPT_COMMAND`, guarding on `$BASH_VERSION` so the block silently no-ops in non-bash shells, and using the sentinel-bracketed `# >>> intelligent-terminal shell-integration >>>` markers so a later Uninstall finds the block byte-precisely).
 
 ### PowerShell (manual)
 

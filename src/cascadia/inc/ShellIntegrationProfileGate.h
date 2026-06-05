@@ -182,25 +182,25 @@ namespace Microsoft::Terminal::ShellIntegration
     // Returns true if the given (source, commandline) pair represents a
     // profile that uses `target`.
     //
-    // Matching strategy (intentionally simple — token-bounded leaf
-    // match + one source discriminator — to avoid over-engineering this
-    // gate while still recognizing both the path-with-.exe and bare
-    // forms a user may legitimately set in their profile commandline):
+    // Matching strategy (intentionally simple — launch-exe leaf match
+    // + one source discriminator — to avoid over-engineering this gate
+    // while still recognizing both the path-with-.exe and bare forms
+    // a user may legitimately set in their profile commandline):
     //
     //   * Pwsh: source == "Windows.Terminal.PowershellCore" OR
-    //           commandline contains the leaf token "pwsh"
-    //           (matches both `pwsh.exe` and bare `pwsh`).
-    //   * WindowsPowerShell: commandline contains leaf token
-    //           "powershell" AND does NOT contain leaf token
-    //           "pwsh". pwsh.exe installs under
-    //           "...\\PowerShell\\7\\pwsh.exe" so a bare "powershell"
-    //           token match would mis-classify it — the NOT-pwsh
-    //           discriminator distinguishes the two leaf .exes.
-    //   * Bash (Git Bash): commandline contains leaf token "bash"
-    //           AND does NOT contain leaf token "wsl". WSL distro
-    //           profiles use "wsl.exe -d <distro>" (or "wsl -d ...")
-    //           and must NOT be matched as Git Bash (they're covered
-    //           by the Wsl-source iteration on the caller side).
+    //           launch-exe leaf is `pwsh` or `pwsh.exe`.
+    //   * WindowsPowerShell: launch-exe leaf is `powershell` or
+    //           `powershell.exe`. Note: pwsh.exe lives under
+    //           "...\\PowerShell\\7\\pwsh.exe" but our matcher only
+    //           inspects the LAUNCH leaf (first token after path-strip),
+    //           and `pwsh.exe` ≠ `powershell.exe` as leaf tokens, so
+    //           no NOT-pwsh discriminator is needed — pwsh launches
+    //           naturally fail the powershell-leaf check.
+    //   * Bash (Git Bash): launch-exe leaf is `bash` or `bash.exe`.
+    //           WSL distro profiles whose launch is wsl.exe naturally
+    //           fail this check (their leaf is `wsl(.exe)`, not
+    //           `bash(.exe)`) — they're covered by the Wsl-source
+    //           iteration on the caller side, not here.
     //
     // Commandline matching is case-insensitive (token-bounded leaf).
     // The source-string check is case-SENSITIVE because the WT
@@ -224,11 +224,21 @@ namespace Microsoft::Terminal::ShellIntegration
             }
             return details::_CommandlineHasExeToken(commandline, L"pwsh");
         case Target::WindowsPowerShell:
-            return details::_CommandlineHasExeToken(commandline, L"powershell") &&
-                   !details::_CommandlineHasExeToken(commandline, L"pwsh");
+            // The launch-exe matcher compares the full leaf token
+            // (`powershell` or `powershell.exe`) — a launch exe whose
+            // leaf is `pwsh(.exe)` can't ALSO match `powershell(.exe)`
+            // (different leaf token), so a `!HasExeToken(... "pwsh")`
+            // discriminator is redundant. The substring-era matcher
+            // needed it because pwsh.exe lives under a folder named
+            // "PowerShell"; the launch-exe matcher anchors past that.
+            return details::_CommandlineHasExeToken(commandline, L"powershell");
         case Target::Bash:
-            return details::_CommandlineHasExeToken(commandline, L"bash") &&
-                   !details::_CommandlineHasExeToken(commandline, L"wsl");
+            // Same reasoning as WindowsPowerShell: a launch exe with
+            // leaf `bash(.exe)` cannot also have leaf `wsl(.exe)`, so
+            // a `!HasExeToken(... "wsl")` check is redundant. WSL
+            // distro profiles whose launch is wsl.exe naturally fail
+            // the `bash` leaf check.
+            return details::_CommandlineHasExeToken(commandline, L"bash");
         default:
             return false;
         }
