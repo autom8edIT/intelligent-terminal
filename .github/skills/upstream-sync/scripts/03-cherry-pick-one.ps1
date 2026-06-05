@@ -126,12 +126,33 @@ $unhandled = @()
 foreach ($p in $conflicts) {
     $e = $known | Where-Object { $_.Path -eq $p } | Select-Object -First 1
     if (-not $e) { $unhandled += $p; continue }
+    $checkoutOk = $true
     switch ($e.Strategy) {
-        'take-upstream' { git checkout --theirs -- $p | Out-Null }
-        'take-ours'     { git checkout --ours    -- $p | Out-Null }
-        'union'         { Write-Warning "union strategy not implemented yet for $p"; $unhandled += $p; continue }
+        'take-upstream' {
+            git checkout --theirs -- $p 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { $checkoutOk = $false }
+        }
+        'take-ours' {
+            git checkout --ours -- $p 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { $checkoutOk = $false }
+        }
+        'union' {
+            Write-Warning "union strategy not implemented yet for $p"
+            $unhandled += $p
+            continue
+        }
     }
-    git add -- $p | Out-Null
+    if (-not $checkoutOk) {
+        Write-Warning "git checkout for Tier-0 strategy '$($e.Strategy)' failed on $p; falling back to stuck."
+        $unhandled += $p
+        continue
+    }
+    git add -- $p 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "git add failed for Tier-0 path $p; falling back to stuck."
+        $unhandled += $p
+        continue
+    }
     $result.tier0_paths += $p
 }
 

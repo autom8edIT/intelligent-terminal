@@ -37,11 +37,13 @@ param(
 . "$PSScriptRoot/Common.ps1"
 
 # Compute a findings hash so re-runs of the same broken batch are detectable.
+# Use [ordered] hashtables so JSON serialization (and therefore the hash) is
+# stable across runs — plain @{} property order is not guaranteed.
 $findingsForHash = switch ($Kind) {
     'static-scan'         { $Ctx.Scan.findings }
-    'build-failed'        { @(@{ exit_code = $Ctx.Build.exit_code; tail_excerpt = ($Ctx.Build.log_tail -split "`n" | Select-Object -Last 20) -join "`n" }) }
-    'build-inconclusive'  { @(@{ kind = 'inconclusive'; duration_ms = $Ctx.Build.duration_ms }) }
-    'toolchain-missing'   { @(@{ missing = $Ctx.Preflight.missing }) }
+    'build-failed'        { @([ordered] @{ exit_code = $Ctx.Build.exit_code; tail_excerpt = ($Ctx.Build.log_tail -split "`n" | Select-Object -Last 20) -join "`n" }) }
+    'build-inconclusive'  { @([ordered] @{ kind = 'inconclusive'; duration_ms = $Ctx.Build.duration_ms }) }
+    'toolchain-missing'   { @([ordered] @{ missing = @($Ctx.Preflight.missing | Sort-Object) }) }
 }
 $findingsHash = Get-FindingsHash $findingsForHash
 
