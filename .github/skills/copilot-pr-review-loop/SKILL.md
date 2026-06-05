@@ -116,12 +116,11 @@ agent owns sequencing, commits, and the final mutating
   than your request. `01-request-review.ps1` already enforces this; do
   not weaken it.
 - **A "no new comments" review is necessary but not sufficient for
-  convergence.** Also check the review's `commit.oid` equals the
-  current HEAD (re-read the `LatestReview` field from the
-  `ReviewCompleted` JSON that `02-wait-for-review.ps1` returned in
-  step 2 — do NOT re-invoke that script for convergence, it will time
-  out) AND the open-threads list is empty. A stale review on an
-  earlier commit lets a regression slip through unreviewed.
+  convergence.** Use `02-check-review-status.ps1` which returns a
+  `Converged: true` flag iff all three hold: latest review's
+  `commit.oid == HEAD`, body matches "no new comments", open thread
+  count is 0. A stale review on an earlier commit lets a regression
+  slip through unreviewed.
 - **Use the trigger flow in [scripts/01-request-review.ps1](scripts/01-request-review.ps1).** GraphQL `requestReviewsByLogin` with `botLogins:["copilot-pull-request-reviewer"]` is primary; REST POST `requested_reviewers[]=Copilot` and `gh pr edit --add-reviewer Copilot` are fallbacks. Any trigger can return success while the bot is silently dropped — `copilot_work_started` event in the issue timeline is the only authoritative success signal. See [references/api-quirks.md](references/api-quirks.md).
 - **`git stash push -m` must come before `--`.** The form
   `git stash push -- <paths> -m <msg>` parses `<msg>` as a path and
@@ -157,7 +156,7 @@ agent owns sequencing, commits, and the final mutating
 | Issue | Solution |
 |-------|----------|
 | Trigger fails with `'Copilot' not found` (gh pr edit) or POST returns 201 but Copilot disappears from `requested_reviewers` | Push a substantive (non-whitespace) commit — repo auto-assign on `synchronize` is the most reliable trigger. Persistent failure across both mechanisms after a substantive commit indicates Copilot Code Review is not enabled on the repo or account (Settings → Code & automation → Copilot, or account-level Copilot Pro/Pro+). |
-| No new review after `02-wait-for-review.ps1`'s default 35-min timeout | Quiet-period after recent dismissal or trivial-diff suppression. Push a substantive commit (auto-assign on `synchronize` is the most reliable trigger). Do not blindly re-run `01-request-review.ps1` — read its exit message first. |
+| No new review after waiting ~10 min between snapshots | Quiet-period after recent dismissal or trivial-diff suppression. Push a substantive commit (auto-assign on `synchronize` is the most reliable trigger). Do not blindly re-run `01-request-review.ps1` — its in-flight check will simply report InFlight if a review is already pending. |
 | Outdated-but-unresolved threads appear in the open-threads list | This is expected: current unresolved state is the source of truth. Reply + resolve them like any other open thread. `09-cleanup-outdated.ps1` is only a final safety net, not the primary mechanism. |
 | Unsure whether to fix or decline a finding | Apply the rubric in [references/03-triage-criteria.md](references/03-triage-criteria.md) |
 | Need a reply that conveys "fixed", "declined", or "drift" | Use a template from [references/06-reply-templates.md](references/06-reply-templates.md) |
@@ -175,12 +174,14 @@ agent owns sequencing, commits, and the final mutating
   patterns for accepted fixes, declined-with-rationale findings, and
   description-update acknowledgements.
 - [scripts/01-request-review.ps1](scripts/01-request-review.ps1) —
-  re-request a Copilot review on a PR, verified by `copilot_work_started`
-  event in the issue timeline (not by HTTP status).
-- [scripts/02-wait-for-review.ps1](scripts/02-wait-for-review.ps1) —
-  block until a fresh Copilot review submission lands against the
-  current HEAD (default 35 min timeout — accounts for small-diff
-  suppression).
+  single-job script: trigger Copilot review and verify the trigger
+  landed (via `copilot_work_started` event in the issue timeline).
+  Returns JSON; does NOT wait for the review submission — that's the
+  agent's job.
+- [scripts/02-check-review-status.ps1](scripts/02-check-review-status.ps1) —
+  single-shot JSON snapshot of the PR's current Copilot review state
+  (HeadOid, LatestCopilotReview, ReviewAtHead, NoNewComments,
+  OpenThreadCount, Converged). Call this in your agent's wait loop.
 - [scripts/02-list-open-threads.ps1](scripts/02-list-open-threads.ps1) —
   fetch every unresolved PR review thread from **all reviewers** (Copilot,
   humans, github-advanced-security, etc.); reply + resolve every one.

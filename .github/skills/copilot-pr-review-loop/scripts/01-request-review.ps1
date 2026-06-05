@@ -1,122 +1,92 @@
 <#
 .SYNOPSIS
-    Ensure Copilot is reviewing the given PR. Single contract — single
-    success/failure outcome.
+    Ensure Copilot is reviewing the given PR. Single-job script.
 
 .DESCRIPTION
-    This script has ONE job: ensure Copilot is actively reviewing the
-    PR by the time it returns successfully. The caller does not need
-    to know how that happens.
+    ONE job: request Copilot review on the PR and verify the trigger
+    landed. Returns a JSON status object. The caller (agent) decides
+    what to do next — including how long to wait for the review to
+    actually submit. THIS SCRIPT DOES NOT WAIT FOR THE REVIEW.
 
     Success contract (exit 0):
-      - Copilot has picked up review work for the current PR head. This is
-        proven by a `copilot_work_started` event that is still in flight,
-        or by a new `copilot_work_started` event produced by this
-        invocation.
+      - JSON with Status = "TriggerLanded" — Copilot has accepted the
+        request (verified by a copilot_work_started event newer than
+        the snapshot taken before the trigger), OR
+      - JSON with Status = "InFlight" — Copilot is already actively
+        reviewing the current HEAD (recent copilot_work_started, no
+        submitted review yet at HEAD). No re-trigger needed.
 
     Failure contract (throw, exit 1):
-      - All trigger mechanisms attempted, none produced a verifiable
-        `copilot_work_started` event. The thrown message lists what
-        was tried and the most likely remedy (usually: push a
-        substantive commit and retry).
+      - All trigger mechanisms attempted, no verifiable
+        copilot_work_started event. JSON Detail explains likely cause
+        (quiet-period, repo config, etc.). Caller should push a
+        substantive commit and retry.
 
-    The caller can retry on failure. Two retries against the same
-    HEAD with no in-between change are unlikely to behave differently
-    — the canonical remedy is push-substantive-commit.
+    Trigger mechanisms attempted (in order, until one verifies):
+      1. GraphQL `requestReviewsByLogin` with
+         `botLogins:["copilot-pull-request-reviewer"]` (primary)
+      2. REST POST `requested_reviewers[]=Copilot` (fallback)
+      3. `gh pr edit --add-reviewer Copilot` (last-ditch)
 
-    Verification is always via the `copilot_work_started` event in
-    the issue timeline. The script does not wait for Copilot to submit a
-    completed review; that is the caller's job. HTTP / exit status alone
-    is not trusted because the server can return success while silently
-    dropping the bot.
+    Three GraphQL traps documented in api-quirks.md (took ~2 hours to
+    find): use `requestReviewsByLogin` not `requestReviews`,
+    `botLogins` not `userLogins`, `copilot-pull-request-reviewer` slug
+    not `Copilot` display login.
 
-    Behavior by current PR state:
-      - Copilot review already in flight for current HEAD (recent
-        work_started, newer than latest review_requested AND newer
-        than latest Copilot review submittedAt) → exit 0 without
-        triggering. Cancelling an in-flight review costs another full
-        review cycle.
-      - Copilot in `requested_reviewers` but stuck (no work_started
-        for >5 min after the request) → DELETE+POST to re-arm. This
-        is the ONLY path that ever deletes.
-      - Otherwise → trigger via, in order:
-        (1) GraphQL `requestReviewsByLogin` with
-            `botLogins:["copilot-pull-request-reviewer"]` — primary
-        (2) REST POST `requested_reviewers[]=Copilot` — fallback
-        (3) `gh pr edit --add-reviewer Copilot` — last-ditch
+    In-flight protection: if a copilot_work_started event already
+    exists for current HEAD that's newer than the latest submitted
+    review, return Status="InFlight" without re-triggering.
+    Re-triggering would risk cancelling the in-flight review.
 
-    Three GraphQL traps that took ~2 hours of session time to find,
-    documented to save future sessions:
-      - Mutation is `requestReviewsByLogin` (NOT `requestReviews`)
-      - Field is `botLogins` (NOT `userLogins`)
-      - Slug is `copilot-pull-request-reviewer` (NOT `Copilot`)
-
-    Re-request is a first-class supported flow — the script does NOT
-    silently skip when Copilot has already reviewed; it issues the
-    trigger and verifies via the event log. The original "wait for
-    nothing" failure mode this script was built to kill was caused
-    by silent re-request skips + unverified triggers.
-
-    DO NOT post `@copilot please review` (or any @copilot mention) as
-    a PR comment as a workaround. That summons the Copilot **Coding
-    Agent** (which makes commits), not the reviewer bot. The valid
-    triggers are the API mechanisms above.
+    DO NOT post `@copilot` PR comments as a trigger — that summons the
+    Copilot Coding Agent, not the reviewer bot.
 
 .PARAMETER PrNumber
     The pull request number. The only required parameter.
 
 .PARAMETER Owner
-    Repository owner. OPTIONAL — auto-resolved from `gh repo view`
-    when omitted. You only need to pass this when running outside the
-    target repo's worktree.
+    Repository owner. OPTIONAL — auto-resolved from `gh repo view`.
 
 .PARAMETER Repo
     Repository name. OPTIONAL — auto-resolved from `gh repo view`.
-    Same auto-resolve as Owner.
+
+.PARAMETER TriggerWaitSeconds
+    Max seconds to wait for the copilot_work_started event after
+    triggering. Default 30. This is a short verification poll, NOT a
+    wait-for-review-completion — that's the caller's job. Keep it
+    short; if no event in 30s the trigger almost certainly failed.
 
 .EXAMPLE
-    # Canonical usage — from inside the target repo's worktree.
+    # Canonical usage — agent calls this, gets JSON back, decides
+    # when/how to check for the actual review submission.
     pwsh 01-request-review.ps1 -PrNumber 236
 
-.EXAMPLE
-    # Cross-repo — only when not running from inside the target repo.
-    pwsh 01-request-review.ps1 -Owner microsoft -Repo intelligent-terminal -PrNumber 236
+    # JSON output (on TriggerLanded):
+    # {"Status":"TriggerLanded","HeadOid":"...","WorkStartedAt":"..."}
+
+    # JSON output (on InFlight):
+    # {"Status":"InFlight","HeadOid":"...","WorkStartedAt":"..."}
 #>
 [CmdletBinding()]
 param(
+    [Parameter(Mandatory = $true)]
+    [int]$PrNumber,
+
     [string]$Owner,
     [string]$Repo,
 
-    [Parameter(Mandatory = $true)]
-    [int]$PrNumber
+    [int]$TriggerWaitSeconds = 30
 )
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $Owner -or -not $Repo) {
-    $repoJson = gh repo view --json owner,name
-    if ($LASTEXITCODE -ne 0) {
-        throw "gh repo view failed (exit $LASTEXITCODE). Pass -Owner and -Repo explicitly or run from inside a gh-detected repo."
-    }
-    $repoInfo = $repoJson | ConvertFrom-Json
-    if (-not $Owner) { $Owner = $repoInfo.owner.login }
-    if (-not $Repo)  { $Repo  = $repoInfo.name }
-}
+# ---------- helpers ----------
 
-$repoArg = "$Owner/$Repo"
-
-# UTC-normalizing datetime parser. PowerShell's ConvertFrom-Json strips
-# the Z suffix from ISO-8601 timestamps and returns DateTime with
-# Kind=Unspecified, treating the literal hours as local time. Comparing
-# such a value with a freshly-cast [datetime] from a different code
-# path silently gives wrong answers (off by the local UTC offset). All
-# timestamp comparisons in this script MUST go through ToUtcDt.
 function ToUtcDt {
     param($Value)
     if ($null -eq $Value -or $Value -eq '') { return $null }
     $s = if ($Value -is [datetime]) {
         if ($Value.Kind -eq [System.DateTimeKind]::Unspecified) {
-            # Came from ConvertFrom-Json with Z stripped -- treat as UTC.
             [System.DateTime]::SpecifyKind($Value, [System.DateTimeKind]::Utc).ToString('o')
         } else {
             $Value.ToUniversalTime().ToString('o')
@@ -131,63 +101,28 @@ function ToUtcDt {
     )
 }
 
-# Snapshot the latest "Copilot is now working on this PR" event before
-# any attempt. We treat copilot_work_started — not review_requested — as
-# the real success signal because it's emitted by the bot only after it
-# actually picks up the request server-side. A review_requested event
-# without a follow-up copilot_work_started means the bot saw the request
-# but declined to queue a review.
-#
-# Pagination note: the REST events endpoint returns events oldest-first,
-# 100 per page. We MUST --paginate (which fetches all pages) so the
-# newest events are in the result; otherwise on PRs with >100 events the
-# latest copilot_work_started will be silently missed and the
-# verification logic will spin / falsely report "no event".
+# Event log endpoint returns events oldest-first, 100/page. MUST use
+# --paginate to see the newest events on busy PRs.
 function Get-LatestCopilotWorkStarted {
     $json = gh api --paginate "repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100" `
         --jq '[.[] | select(.event=="copilot_work_started") | .created_at] | sort | .[-1] // ""' 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "gh api events failed (exit $LASTEXITCODE) while snapshotting copilot_work_started events: $json"
-    }
-    # --paginate concatenates jq output from each page; take the last line which is the newest.
-    $lines = $json -split "`n" | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() }
-    if (-not $lines -or $lines.Count -eq 0) { return '' }
-    # Each page's --jq emitted a single timestamp; take the maximum across all pages.
-    ($lines | Sort-Object | Select-Object -Last 1)
-}
-
-function Get-LatestReviewRequested {
-    $json = gh api --paginate "repos/$Owner/$Repo/issues/$PrNumber/events?per_page=100" `
-        --jq '[.[] | select(.event=="review_requested" and (.requested_reviewer.login // "" | test("^(?i)copilot"))) | .created_at] | sort | .[-1] // ""' 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        # Be consistent with Get-LatestCopilotWorkStarted: throw on API
-        # failure rather than silently swallowing. Returning '' here used
-        # to mask auth/rate-limit issues and could misclassify PR state
-        # (a failed events fetch looked like "no request exists" and the
-        # stuck-pending re-arm path would be silently skipped).
-        throw "gh api events failed (exit $LASTEXITCODE) while fetching review_requested events: $json"
+        throw "gh api events failed (exit $LASTEXITCODE): $json"
     }
     $lines = $json -split "`n" | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() }
     if (-not $lines -or $lines.Count -eq 0) { return '' }
     ($lines | Sort-Object | Select-Object -Last 1)
 }
 
-function Get-PrStateSnapshot {
-    # Returns a hashtable with: HeadOid, CopilotPending, LatestCopilotReview.
-    #
-    # IMPORTANT: We use `reviews(last: 50)` instead of `latestReviews`.
-    # `latestReviews` is documented as "latest per user" but empirically
-    # exhibits stale-cache behavior — a fresh Copilot review can be
-    # absent from `latestReviews` for several minutes while the regular
-    # `reviews` connection (and REST /reviews) reflects it immediately.
-    # The stale view causes the in-flight / already-reviewed checks to
-    # operate against an obsolete commit OID. Always use `reviews`.
+function Get-CurrentSnapshot {
+    # Single GraphQL call: head SHA + Copilot review state.
+    # Uses `reviews(last:50)` not `latestReviews` (which has stale-cache behavior).
     $q = @'
 query($o:String!,$r:String!,$n:Int!){
   repository(owner:$o,name:$r){
     pullRequest(number:$n){
       headRefOid
-      reviewRequests(first:50){nodes{requestedReviewer{__typename ... on User{login} ... on Bot{login}}}}
+      state
       reviews(last:50){nodes{author{login} submittedAt commit{oid}}}
     }
   }
@@ -196,295 +131,153 @@ query($o:String!,$r:String!,$n:Int!){
     $j = gh api graphql -f "query=$q" -f "o=$Owner" -f "r=$Repo" -F "n=$PrNumber" 2>&1
     if ($LASTEXITCODE -ne 0) { throw "GraphQL snapshot failed (exit $LASTEXITCODE): $j" }
     $d = $j | ConvertFrom-Json
-    # gh api graphql can exit 0 with HTTP 200 while returning a top-level
-    # `errors` array. Check explicitly or the next line dereferences null.
     if ($d.errors) {
         $msgs = ($d.errors | ForEach-Object { $_.message }) -join '; '
         throw "GraphQL snapshot returned errors: $msgs"
     }
     $pr = $d.data.repository.pullRequest
-    if (-not $pr) { throw "GraphQL snapshot: PR #$PrNumber not found in $Owner/$Repo." }
-    $copilotPending = $false
-    foreach ($n in $pr.reviewRequests.nodes) {
-        if ($n.requestedReviewer.login -match '^(?i)copilot') { $copilotPending = $true; break }
-    }
+    if (-not $pr) { throw "PR #$PrNumber not found in $Owner/$Repo." }
     $copilotReviews = @($pr.reviews.nodes | Where-Object { $_.author.login -match '^(?i)copilot' })
     $latest = if ($copilotReviews.Count -gt 0) { $copilotReviews | Sort-Object submittedAt -Descending | Select-Object -First 1 } else { $null }
-    @{
-        HeadOid              = $pr.headRefOid
-        CopilotPending       = $copilotPending
-        LatestCopilotReview  = $latest
+    [pscustomobject]@{
+        HeadOid             = $pr.headRefOid
+        State               = $pr.state
+        LatestCopilotReview = $latest
     }
 }
 
 function Wait-ForCopilotWorkStarted {
-    param([string]$BeforeTs, [int]$TimeoutSeconds = 30)
+    param([string]$BeforeTs, [int]$TimeoutSeconds)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 5
         $now = Get-LatestCopilotWorkStarted
-        if ($now -and $now -ne $BeforeTs) {
-            return $now
-        }
+        if ($now -and $now -ne $BeforeTs) { return $now }
     }
     return ''
 }
 
-function Wait-ForCopilotInReviewRequests {
-    param([int]$TimeoutSeconds = 15)
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    while ((Get-Date) -lt $deadline) {
-        Start-Sleep -Seconds 3
-        $snap = Get-PrStateSnapshot
-        if ($snap.CopilotPending) { return $true }
+# ---------- resolve repo ----------
+
+if (-not $Owner -or -not $Repo) {
+    $repoJson = gh repo view --json owner,name
+    if ($LASTEXITCODE -ne 0) {
+        throw "gh repo view failed. Pass -Owner and -Repo explicitly."
     }
-    return $false
+    $repoInfo = $repoJson | ConvertFrom-Json
+    if (-not $Owner) { $Owner = $repoInfo.owner.login }
+    if (-not $Repo)  { $Repo  = $repoInfo.name }
 }
 
-# === PRE-CHECKS ===
-# Before triggering anything, snapshot the current state. We need to handle:
-#   (a) Copilot is mid-review of the current HEAD (work_started landed but
-#       no review submitted yet) — do NOT trigger again; the in-flight
-#       review will land. Triggering again risks cancellation (e.g. via
-#       the DELETE+POST fallback) which kills the in-flight review and
-#       costs another full review cycle.
-#   (b) Copilot is queued but stuck (in requested_reviewers without a
-#       follow-up work_started for >5 min) — re-trigger via DELETE+POST.
-#   (c) Copilot is not in requested_reviewers at all — try fresh triggers.
+# ---------- pre-trigger snapshot ----------
 
-$snapshot = Get-PrStateSnapshot
+$snapshot = Get-CurrentSnapshot
 $beforeTs = Get-LatestCopilotWorkStarted
-$lastReqAt = Get-LatestReviewRequested
-$headOid = $snapshot.HeadOid
+$headOid  = $snapshot.HeadOid
 
-# DESIGN: When the caller invokes this script, they want a NEW review
-# of the current HEAD. We do NOT early-exit because "Copilot already
-# reviewed this HEAD" -- re-request is a first-class supported flow
-# (GraphQL requestReviewsByLogin accepts the same call for both
-# initial-add and re-request). Silently skipping the trigger would be
-# the "wait for nothing" failure mode the script exists to prevent.
-#
-# The ONLY case where we skip triggering is (b) below: a review is
-# genuinely IN FLIGHT (work_started but no submitted review yet) and
-# re-triggering would risk cancelling it.
-
-# Case (b): in-flight review against the CURRENT HEAD.
-# An in-flight review = a copilot_work_started event that has not yet
-# produced a submitted review. We must NOT treat a work_started as
-# in-flight if it has already been consumed by a review submission --
-# even if the consumed review is for a different commit (HEAD advanced
-# after that review was submitted). All FOUR conditions must hold:
-#   1. A copilot_work_started event exists.
-#   2. It is recent (<12 min) — otherwise it likely failed silently.
-#   3. It is newer than the latest Copilot review_requested event
-#      (otherwise the request was superseded).
-#   4. It is newer than the latest Copilot review's submittedAt
-#      (otherwise the work_started has already been "consumed" —
-#      Copilot already reviewed and submitted; the next round needs
-#      a fresh trigger).
-# Skipping any of these recreates "wait for nothing": e.g. after a
-# round completes, the script would falsely report in-flight against
-# stale state and step 2 would time out waiting for a never-coming
-# new submission.
-$workStartedRecent          = $false
-$workStartedAfterRequest    = $true   # default true so the check passes when there's no review_requested record at all
-$workStartedNotYetConsumed  = $true   # default true so the check passes when no prior Copilot review exists
-$beforeDt = ToUtcDt $beforeTs
-if ($beforeDt) {
-    $workStartedAge = (Get-Date).ToUniversalTime() - $beforeDt
-    $workStartedRecent = $workStartedAge.TotalMinutes -lt 12
-    $lastReqDt = ToUtcDt $lastReqAt
-    if ($lastReqDt) {
-        $workStartedAfterRequest = $beforeDt -ge $lastReqDt
-    }
-    if ($snapshot.LatestCopilotReview) {
-        $latestReviewDt = ToUtcDt $snapshot.LatestCopilotReview.submittedAt
-        if ($latestReviewDt) {
-            $workStartedNotYetConsumed = $beforeDt -gt $latestReviewDt
-        }
-    }
+if ($snapshot.State -ne 'OPEN') {
+    @{
+        Status   = 'Error'
+        Detail   = "PR is not OPEN (state=$($snapshot.State))."
+        PrNumber = $PrNumber
+        HeadOid  = $headOid
+    } | ConvertTo-Json -Compress
+    exit 1
 }
-if ($workStartedRecent -and $workStartedAfterRequest -and $workStartedNotYetConsumed) {
-    Write-Host "Copilot is already reviewing the current HEAD ($($headOid.Substring(0,7))). Last copilot_work_started: $beforeTs (~$([int]$workStartedAge.TotalSeconds)s ago) is newer than any submitted Copilot review. NOT re-triggering — in-flight reviews must not be cancelled. Run scripts/02-wait-for-review.ps1 to wait for the submission."
+
+# In-flight protection: if a copilot_work_started exists that's newer
+# than the latest Copilot review's submittedAt, treat as in-flight.
+$beforeDt       = ToUtcDt $beforeTs
+$lastReviewDt   = if ($snapshot.LatestCopilotReview) { ToUtcDt $snapshot.LatestCopilotReview.submittedAt } else { $null }
+$inFlight       = $false
+if ($beforeDt) {
+    $ageMin = ((Get-Date).ToUniversalTime() - $beforeDt).TotalMinutes
+    $consumed = $lastReviewDt -and $beforeDt -le $lastReviewDt
+    $inFlight = ($ageMin -lt 12) -and (-not $consumed)
+}
+if ($inFlight) {
+    @{
+        Status        = 'InFlight'
+        PrNumber      = $PrNumber
+        HeadOid       = $headOid
+        WorkStartedAt = $beforeTs
+        Detail        = "Copilot work_started at $beforeTs (~$([int]$ageMin)min ago) is newer than any submitted review. Not re-triggering."
+    } | ConvertTo-Json -Compress
     exit 0
 }
+
+# ---------- trigger ----------
 
 $tried = @()
 
-# Case (c): Copilot is pending but stuck (no work_started after a recent request).
-# Use DELETE+POST to re-arm. This is the only path that should ever delete.
-$stuckPending = $false
-if ($snapshot.CopilotPending -and $lastReqAt) {
-    $lastReqDt2 = ToUtcDt $lastReqAt
-    $pendingAge = (Get-Date).ToUniversalTime() - $lastReqDt2
-    if ($pendingAge.TotalMinutes -gt 5 -and (-not $beforeDt -or $lastReqDt2 -gt $beforeDt)) {
-        $stuckPending = $true
-    }
-}
-
-if ($stuckPending) {
-    Write-Host "Copilot is in requested_reviewers but stuck (no work_started after a review_requested $([int]$pendingAge.TotalMinutes)m ago). Re-arming via DELETE+POST."
-    gh api -X DELETE "repos/$Owner/$Repo/pulls/$PrNumber/requested_reviewers" `
-        -f "reviewers[]=Copilot" --silent 2>&1 | Out-Null
-    $delExit = $LASTEXITCODE
-    Start-Sleep -Seconds 2
-    gh api -X POST "repos/$Owner/$Repo/pulls/$PrNumber/requested_reviewers" `
-        -f "reviewers[]=Copilot" --silent 2>&1 | Out-Null
-    $postExit = $LASTEXITCODE
-    $tried += "DELETE+POST (re-arm stuck: DEL=$delExit POST=$postExit)"
-
-    $afterTs = Wait-ForCopilotWorkStarted -BeforeTs $beforeTs -TimeoutSeconds 30
-    if ($afterTs) {
-        Write-Host "Copilot review re-armed (work started at $afterTs)."
-        exit 0
-    }
-}
-
-# Case (d): no Copilot reviewer yet — try fresh triggers.
-#
-# PRIMARY mechanism: GraphQL `requestReviewsByLogin` mutation with
-# `botLogins: ["copilot-pull-request-reviewer"]`. Verified empirically
-# (2026-06-05) to work for both initial-add and re-request, on personal
-# repos without Copilot Pro, where every other public API path silently
-# drops. The REST `requested_reviewers` endpoint and the now-removed
-# GraphQL `requestReviews` mutation don't accept bot identifiers
-# reliably; this mutation does.
-#
-# IMPORTANT: must use:
-#   - mutation `requestReviewsByLogin` (NOT `requestReviews`)
-#   - field `botLogins` (NOT `userLogins`)
-#   - slug `copilot-pull-request-reviewer` (the App slug, NOT `Copilot`)
-$prIdQuery = "query{repository(owner:`"$Owner`",name:`"$Repo`"){pullRequest(number:$PrNumber){id}}}"
-$prIdResp = gh api graphql -f "query=$prIdQuery" --jq '.data.repository.pullRequest.id' 2>&1
+# Mechanism 1 (PRIMARY): GraphQL requestReviewsByLogin
+$prIdResp = gh api graphql -f "query=query{repository(owner:`"$Owner`",name:`"$Repo`"){pullRequest(number:$PrNumber){id}}}" --jq '.data.repository.pullRequest.id' 2>&1
 if ($LASTEXITCODE -ne 0) {
-    throw "Could not resolve GraphQL node id for $Owner/$Repo PR #$PrNumber (gh exit $LASTEXITCODE): $prIdResp"
+    throw "Failed to resolve PR node id (exit $LASTEXITCODE): $prIdResp"
 }
 $prNodeId = ($prIdResp | Out-String).Trim()
-if (-not $prNodeId -or $prNodeId -match '^(null|error|Error)$' -or $prNodeId -eq '') {
-    throw "Could not resolve GraphQL node id for $Owner/$Repo PR #$PrNumber. Empty/invalid response: $prIdResp"
-}
-$mutation = 'mutation($p:ID!){requestReviewsByLogin(input:{pullRequestId:$p,botLogins:["copilot-pull-request-reviewer"]}){pullRequest{number}}}'
-$mutResp = gh api graphql -f "query=$mutation" -f "p=$prNodeId" 2>&1
+$mut = 'mutation($p:ID!){requestReviewsByLogin(input:{pullRequestId:$p,botLogins:["copilot-pull-request-reviewer"]}){pullRequest{number}}}'
+$mutResp = gh api graphql -f "query=$mut" -f "p=$prNodeId" 2>&1
 $mutExit = $LASTEXITCODE
 $tried += "GraphQL requestReviewsByLogin (exit=$mutExit)"
-$mutAccepted = $false
-if ($mutExit -eq 0) {
-    try {
-        $j = $mutResp | ConvertFrom-Json
-        if ($j.errors) {
-            $msgs = ($j.errors | ForEach-Object { $_.message }) -join '; '
-            Write-Host "WARNING: GraphQL requestReviewsByLogin returned errors: $msgs"
-        } else {
-            $mutAccepted = $true
-        }
-    } catch { }
-}
 
-if ($mutAccepted) {
-    $afterTs = Wait-ForCopilotWorkStarted -BeforeTs $beforeTs -TimeoutSeconds 30
-    if ($afterTs) {
-        Write-Host "Copilot review requested on PR #$PrNumber via GraphQL requestReviewsByLogin (work started at $afterTs)."
-        exit 0
-    }
-    Write-Host "WARNING: GraphQL mutation accepted but no copilot_work_started event observed within 30s. Trying REST fallback."
-}
-
-# FALLBACK mechanism 1: REST POST reviewers[]=Copilot
-# Kept as defensive fallback for older GitHub server versions or edge
-# cases where the GraphQL path silently drops while REST works.
-$postBody = gh api -X POST "repos/$Owner/$Repo/pulls/$PrNumber/requested_reviewers" -f "reviewers[]=Copilot" 2>&1
-$postExit = $LASTEXITCODE
-$tried += "REST POST (exit=$postExit)"
-$postAccepted = $false
-if ($postExit -eq 0) {
-    try {
-        $bodyJson = $postBody | ConvertFrom-Json
-        foreach ($u in @($bodyJson.requested_reviewers)) {
-            if ($u.login -match '^(?i)copilot') { $postAccepted = $true; break }
-        }
-    } catch { }
-    if (-not $postAccepted) {
-        # Fall back: poll requested_reviewers for ~10s in case the response body lagged.
-        $postAccepted = Wait-ForCopilotInReviewRequests -TimeoutSeconds 10
-    }
-}
-
-if ($postAccepted) {
-    $afterTs = Wait-ForCopilotWorkStarted -BeforeTs $beforeTs -TimeoutSeconds 30
-    if ($afterTs) {
-        Write-Host "Copilot review requested on PR #$PrNumber via REST POST (work started at $afterTs)."
-        exit 0
-    }
-    Write-Host "WARNING: Copilot is in requested_reviewers but no copilot_work_started event observed within 30s. Trying fallback mechanism."
-}
-
-# Mechanism 2: gh pr edit --add-reviewer Copilot
-# Best-effort fallback. Known to return "not found" in many gh CLI
-# versions for BOTH 'Copilot' and 'copilot-pull-request-reviewer' logins
-# (the bot is not a regular collaborator). Kept as a fallback because
-# behavior varies across gh-cli versions and account types.
-# gh pr edit's stderr is intentionally discarded: we already verify
-# success via the copilot_work_started event poll below, and the
-# specific "not found" / repo-config error text is duplicated by the
-# REST POST diagnostic if both fail. Output is suppressed so the
-# user-facing terminal stays clean.
-gh pr edit $PrNumber --repo $repoArg --add-reviewer Copilot 2>&1 | Out-Null
-$tried += "gh pr edit --add-reviewer Copilot (exit=$LASTEXITCODE)"
-
-$afterTs = Wait-ForCopilotWorkStarted -BeforeTs $beforeTs -TimeoutSeconds 20
+$afterTs = Wait-ForCopilotWorkStarted -BeforeTs $beforeTs -TimeoutSeconds $TriggerWaitSeconds
 if ($afterTs) {
-    Write-Host "Copilot review requested on PR #$PrNumber via gh pr edit (work started at $afterTs)."
+    @{
+        Status        = 'TriggerLanded'
+        PrNumber      = $PrNumber
+        HeadOid       = $headOid
+        WorkStartedAt = $afterTs
+        Detail        = "Triggered via GraphQL requestReviewsByLogin; copilot_work_started at $afterTs."
+    } | ConvertTo-Json -Compress
     exit 0
 }
 
-# If the REST POST was accepted (Copilot in requested_reviewers) but no
-# copilot_work_started event yet, throw a SPECIFIC diagnostic rather
-# than the generic one — this is a different situation (bot might just
-# be slow) and deserves its own next-step guidance.
-if ($postAccepted) {
-    throw @'
-Copilot was successfully added to requested_reviewers, but no
-copilot_work_started event landed within ~50 seconds. The bot may be
-slow to pick up the request, or may have silently dropped it. The
-script's contract is "verified by copilot_work_started event" -- exiting
-0 here would send the caller into a long wait for a review that may
-never arrive.
-
-Recommended next steps (try in order):
-  * Wait 2-5 min and rerun this script -- the bot may simply be slow.
-  * Push a substantive commit -- repo auto-assign on synchronize is
-    the most reliable trigger.
-  * Verify Copilot Code Review is enabled on the repo + your account.
-'@
+# Mechanism 2 (FALLBACK): REST POST
+$null = gh api -X POST "repos/$Owner/$Repo/pulls/$PrNumber/requested_reviewers" -f 'reviewers[]=Copilot' 2>&1
+$tried += "REST POST (exit=$LASTEXITCODE)"
+$afterTs = Wait-ForCopilotWorkStarted -BeforeTs $beforeTs -TimeoutSeconds $TriggerWaitSeconds
+if ($afterTs) {
+    @{
+        Status        = 'TriggerLanded'
+        PrNumber      = $PrNumber
+        HeadOid       = $headOid
+        WorkStartedAt = $afterTs
+        Detail        = "Triggered via REST POST requested_reviewers; copilot_work_started at $afterTs."
+    } | ConvertTo-Json -Compress
+    exit 0
 }
 
+# Mechanism 3 (LAST-DITCH): gh pr edit
+gh pr edit $PrNumber --repo "$Owner/$Repo" --add-reviewer Copilot 2>&1 | Out-Null
+$tried += "gh pr edit (exit=$LASTEXITCODE)"
+$afterTs = Wait-ForCopilotWorkStarted -BeforeTs $beforeTs -TimeoutSeconds $TriggerWaitSeconds
+if ($afterTs) {
+    @{
+        Status        = 'TriggerLanded'
+        PrNumber      = $PrNumber
+        HeadOid       = $headOid
+        WorkStartedAt = $afterTs
+        Detail        = "Triggered via gh pr edit --add-reviewer; copilot_work_started at $afterTs."
+    } | ConvertTo-Json -Compress
+    exit 0
+}
+
+# All mechanisms attempted, no event. Throw with diagnostic.
 throw @'
 Copilot review trigger: all mechanisms attempted, none produced a
 copilot_work_started event within the timeout.
 '@ + "`n  Tried: $($tried -join ', ')" + "`n  Latest copilot_work_started before: '$beforeTs'" + "`n  Latest copilot_work_started after:  '$(Get-LatestCopilotWorkStarted)'" + "`n  Head SHA: $headOid" + @'
 
 
-Most likely causes (in order of frequency):
-  * Quiet-period after a recent dismissal of Copilot from this PR. After
-    a `review_request_removed` event, GitHub typically suppresses
-    re-adds for several minutes. Wait 5-10 min and rerun; or push a
-    substantive new commit to bypass the quiet period.
-  * Trivial / small diff suppressed by Copilot before any review has
-    run. Push a substantive (non-whitespace, non-comment-only) commit
-    and retry — this is also the canonical remedy on initial PR
-    suppression.
-  * Copilot Code Review is not enabled on the repo. Verify in
-    repo Settings -> Code & automation -> Copilot, OR account-level
-    Copilot Pro/Pro+ for personal repos.
-  * The PR is in a state that blocks bot review (draft, closed, merge
-    conflict, branch protection requiring approvals first).
-  * Auth-scope issue — confirm "gh auth status" shows the repo scope.
+Most likely causes:
+  * Quiet-period after a recent dismissal — wait 5-10 min, or push a
+    substantive commit (auto-assign on synchronize is the most reliable
+    trigger).
+  * Trivial diff suppressed by Copilot — push a substantive commit.
+  * Copilot Code Review not enabled on the repo / account.
+  * PR in a state that blocks bot review (draft, closed, conflict).
 
-ANTI-PATTERN — DO NOT DO THIS: posting "@copilot please review" (or any
-@copilot mention) as a PR comment summons the Copilot **Coding Agent**
-(which makes commits), NOT the reviewer bot. It will not produce a
-review. This has been observed across multiple Copilot CLI sessions and
-is a confirmed waste of time. The valid triggers are the API mechanisms
-above — if they fail, push a substantive commit and retry; do not fall
-back to @-mentions.
+DO NOT post @copilot comments as a workaround — that summons the
+Coding Agent, not the reviewer.
 '@

@@ -8,19 +8,16 @@ convergence conditions in step 9 hold, then run step 10 once.
 Track progress through one round with this list (copy into your scratch
 notes or session todos):
 
-- [ ] **1.** Request review — `scripts/01-request-review.ps1 -PrNumber <n>` (snapshots state via GraphQL `reviews(last:50)`, protects in-flight reviews, throws on failure). The script ALWAYS attempts to trigger a fresh review when invoked — re-request is a first-class supported flow. The only case where it exits without triggering is when a copilot_work_started event is genuinely in flight (recent, newer than latest review_requested, newer than latest Copilot review submittedAt). If you see that message, skip directly to step 2 to wait for the in-flight review.
-- [ ] **2.** Wait for review submission — `scripts/02-wait-for-review.ps1 -PrNumber <n>` (default 35-min timeout; blocks until a Copilot review against current HEAD is submitted, or returns `ReviewCompleted` / `HeadAdvanced` / `TimedOut` / `Error`). On `ReviewCompleted` the JSON includes `NoNewComments` (boolean) and `BodyHead` so convergence condition (b) can be read mechanically.
-- [ ] **3.** List open threads — `scripts/02-list-open-threads.ps1 -PrNumber <n>` (prints every unresolved thread — reply + resolve them all)
+- [ ] **1.** Request review — `pwsh scripts/01-request-review.ps1 -PrNumber <n>`. Returns JSON immediately with `Status: TriggerLanded | InFlight | Error`. NEVER blocks waiting for the actual review submission — that's the agent's job (see step 2).
+- [ ] **2.** Wait at the agent level, then snapshot — schedule a check 3-5 minutes after step 1, then call `pwsh scripts/02-check-review-status.ps1 -PrNumber <n>`. Returns single-shot JSON with `ReviewAtHead`, `NoNewComments`, `OpenThreadCount`, `Converged` (all booleans). If `ReviewAtHead == false` after 5 min, wait another few minutes and call again — the bot usually responds in 3-15 min total. **Do NOT use a blocking wait script** — that approach was deprecated; the agent's own scheduling is the right place for the wait loop.
+- [ ] **3.** List open threads — `pwsh scripts/02-list-open-threads.ps1 -PrNumber <n>` (prints every unresolved thread — reply + resolve them all)
 - [ ] **4.** Triage each finding using [03-triage-criteria.md](03-triage-criteria.md)
 - [ ] **5.** Apply fixes — one sub-agent per independent change
 - [ ] **6.** Build + run affected tests (no unverified pushes)
-- [ ] **7.** Reply + resolve each thread using [06-reply-templates.md](06-reply-templates.md) → `scripts/06-reply-and-resolve.ps1`
+- [ ] **7.** Reply + resolve each thread using [06-reply-templates.md](06-reply-templates.md) → `pwsh scripts/06-reply-and-resolve.ps1`
 - [ ] **8.** Commit + push the round's changes (one focused commit per round)
-- [ ] **9.** Convergence check (ALL THREE must hold):
-  - (a) latest Copilot review's `commit.oid` equals current PR HEAD SHA (= `LatestReview.commit.oid` from step 2's `ReviewCompleted` JSON)
-  - (b) that review's body is the *"generated no new comments"* form (= `NoNewComments` flag in the same JSON)
-  - (c) step 3 (`02-list-open-threads.ps1`) returns empty
-- [ ] **10.** (once at end of loop) Cleanup outdated — `scripts/09-cleanup-outdated.ps1 -PrNumber <n>` (safety net only — most loops converge with nothing to clean)
+- [ ] **9.** Convergence check — call `02-check-review-status.ps1`; converged iff its JSON shows `Converged: true` (which is set when ALL THREE of `ReviewAtHead && NoNewComments && OpenThreadCount==0` hold).
+- [ ] **10.** (once at end of loop) Cleanup outdated — `pwsh scripts/09-cleanup-outdated.ps1 -PrNumber <n>` (safety net only — most loops converge with nothing to clean)
 
 If step 9 fails on any condition, loop back to step 1. If step 9 passes
 on all three, run step 10 once and you're done. Print the review's
@@ -96,34 +93,39 @@ PR comment. That summons the Copilot **Coding Agent** (which makes
 commits), not the reviewer bot. This anti-pattern has been observed
 across multiple Copilot CLI sessions and is a confirmed waste of time.
 
-## 2. Wait for the review to actually land
+## 2. Wait for the review at the AGENT level, then snapshot
 
-The trigger check in step 1 confirms Copilot accepted the job. Step 2
-waits for Copilot to actually **submit** the review against the current
-HEAD. These are two different things — past sessions have shipped
-"convergence" on a review that was against an earlier commit.
+The trigger from step 1 returned `TriggerLanded` (or `InFlight`). The
+review submission usually lands 3-15 minutes later. **Do NOT block in
+a script**; the agent owns the wait loop.
+
+Pattern: schedule a status snapshot 3-5 minutes after step 1, then
+call:
 
 ```powershell
-pwsh ../scripts/02-wait-for-review.ps1 -PrNumber <pr-number>
+pwsh ../scripts/02-check-review-status.ps1 -PrNumber <pr-number>
 ```
 
-Default timeout is **35 minutes**, not 10. Small-diff and trivial-diff
-reviews can be suppressed/batched for 15–30+ min; shortening the
-timeout produces blind retries that compound the suppression and hit
-rate limits.
+This is a single-shot, no-wait JSON snapshot. Key fields:
 
-The script returns one of:
+- `ReviewAtHead` (boolean) — latest Copilot review's `commit.oid` matches PR HEAD
+- `NoNewComments` (boolean) — latest review body matches "no new comments" / "generated 0 comments"
+- `OpenThreadCount` (integer) — unresolved review threads from any reviewer
+- `Converged` (boolean) — `ReviewAtHead && NoNewComments && OpenThreadCount == 0`
 
-- `ReviewCompleted` — a fresh Copilot review at current HEAD landed. Proceed.
-- `HeadAdvanced` — someone pushed during the wait. Re-run step 1 + step 2 against the new HEAD.
-- `TimedOut` — no review at HEAD in 35 min. Do NOT blindly retry. First verify the `copilot_work_started` event for the trigger that should have produced this review. If the event landed, the bot is suppressing — push a substantive commit and re-trigger.
-- `Error` — unrecoverable API/auth issue.
+If `ReviewAtHead == false`: review hasn't landed yet. Wait another
+3-5 minutes (or longer for trivial-diff suppression) and snapshot
+again. **Do not block** — the agent can do other work between checks.
 
-You can run the wait script in a background sub-agent (via the `task`
-tool) and use the foreground turn for other independent work
-(e.g. drafting reply templates for likely findings). Do NOT end the
-turn and "come back later" without a concrete completion signal —
-that's how false-done declarations creep in.
+If you're using the `task` tool to dispatch a sub-agent for the wait
+loop: have the sub-agent loop on `02-check-review-status.ps1` with
+sleeps between calls. The sub-agent reports back when `Converged ==
+true` or after a hard deadline.
+
+**Hard rule**: do NOT call `task_complete` on the review loop until
+the snapshot shows `Converged: true`. The previous "wait for nothing"
+failure mode came from blocking-wait scripts that timed out without
+clear signal. The single-shot snapshot avoids that.
 
 ## 3. Fetch open threads
 
@@ -217,15 +219,20 @@ You are done ONLY when all three conditions hold simultaneously:
      --jq '{head:.data.repository.pullRequest.headRefOid, latest:(.data.repository.pullRequest.reviews.nodes | map(select(.author.login|test("^(?i)copilot"))) | sort_by(.submittedAt) | last | {submittedAt,state,commit:.commit.oid})}'
    ```
 
-   Or re-read the `LatestReview` field from the `ReviewCompleted` JSON
-   that `02-wait-for-review.ps1` returned in step 2 — it already proves
-   `commit.oid == HEAD`. Do **not** re-invoke `02-wait-for-review.ps1`
-   to verify convergence; it will time out waiting for a NEWER review.
+   Or just call `02-check-review-status.ps1` — it returns
+   `ReviewAtHead` (boolean) and `LatestCopilotReview.commitOid` so
+   you can verify (a) directly from the snapshot.
 
-2. **The review body is the "generated no new comments" form.** Quote
-   the body in your task-complete message.
+2. **The review body is the "generated no new comments" form.**
+   `02-check-review-status.ps1` returns `NoNewComments` (boolean) for
+   this. Quote `LatestCopilotReview.bodyHead` in your task-complete
+   message as proof.
 
-3. **`02-list-open-threads.ps1` returns empty**.
+3. **`02-list-open-threads.ps1` returns empty** — or equivalently,
+   `02-check-review-status.ps1` returns `OpenThreadCount: 0`.
+
+The `02-check-review-status.ps1` script computes all three as a
+single `Converged: true` boolean. The loop is done iff that's true.
 
 If any one is false, the loop is not done. Print the
 `commit.oid` + `submittedAt` in your completion message — proof, not
