@@ -62,7 +62,7 @@ __it_shellinteg_prompt() {
     printf '\033]133;D;%s\007\033]133;A\007\033]9;9;"%s"\007' "$__ec" "${PWD:-}"
 }
 PROMPT_COMMAND=__it_shellinteg_prompt
-PS1="${PS1:-}"$'\[\033]133;B\007\]'
+PS1="${PS1:-}"'\[\033]133;B\007\]'
 ```
 
 This produces the same `133;D` / `133;A` / `133;B` marks as the PowerShell snippet (plus OSC `9;9` to report the current working directory). The `\[ \]` brackets tell readline the embedded escape sequence is zero-width so line wrap stays correct.

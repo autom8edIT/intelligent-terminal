@@ -88,8 +88,11 @@ namespace Microsoft::Terminal::ShellIntegration
     //   * WindowsPowerShell: commandline contains "powershell.exe" AND
     //           does NOT contain "pwsh.exe". pwsh.exe installs under
     //           "...\\PowerShell\\7\\pwsh.exe" so a bare "powershell"
-    //           substring match would mis-classify it — anchor on the
-    //           leaf .exe instead.
+    //           substring match would mis-classify it — the NOT-pwsh
+    //           discriminator (plain case-insensitive substring, not
+    //           a regex word-boundary check) is what distinguishes
+    //           the two leaf .exes here. Two substring tests are the
+    //           full extent of the matcher.
     //   * Bash (Git Bash): commandline contains "bash.exe" AND does
     //           NOT contain "wsl.exe". WSL distro profiles use
     //           "wsl.exe -d <distro>" or `wsl.exe ~ -d <distro>` and

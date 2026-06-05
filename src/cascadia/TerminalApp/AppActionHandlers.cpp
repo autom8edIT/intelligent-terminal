@@ -2097,7 +2097,7 @@ namespace winrt::TerminalApp::implementation
         args.Handled(true);
     }
 
-    safe_void_coroutine TerminalPage::_InitShellIntegration(const ShellIntegrationTarget target)
+    safe_void_coroutine TerminalPage::_InitShellIntegration([[maybe_unused]] const ShellIntegrationTarget target)
     {
         // Publish "user clicked Install -> desired = true" SYNCHRONOUSLY,
         // before the first suspension. If we deferred this until after the
