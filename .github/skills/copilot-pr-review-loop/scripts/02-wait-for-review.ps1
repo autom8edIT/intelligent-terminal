@@ -188,7 +188,32 @@ if (-not $SinceTimestamp) {
     }
 }
 
-$sinceDt = [datetime]$SinceTimestamp
+# UTC-normalizing parser. PowerShell's ConvertFrom-Json strips the Z
+# from ISO-8601 timestamps and returns DateTime with Kind=Unspecified,
+# treating the literal hours as local time. Comparing a JSON-parsed
+# DateTime to one created via [datetime]"...Z" silently gives wrong
+# answers (off by the local UTC offset). All timestamp comparisons MUST
+# go through ToUtcDt.
+function ToUtcDt {
+    param($Value)
+    if ($null -eq $Value -or $Value -eq '') { return $null }
+    $s = if ($Value -is [datetime]) {
+        if ($Value.Kind -eq [System.DateTimeKind]::Unspecified) {
+            [System.DateTime]::SpecifyKind($Value, [System.DateTimeKind]::Utc).ToString('o')
+        } else {
+            $Value.ToUniversalTime().ToString('o')
+        }
+    } else {
+        [string]$Value
+    }
+    return [datetime]::Parse(
+        $s,
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal
+    )
+}
+
+$sinceDt = ToUtcDt $SinceTimestamp
 Write-Host "[baseline] expectedHead=$($ExpectedHeadOid.Substring(0,7)) since=$SinceTimestamp timeout=${TimeoutMinutes}min poll=${PollSeconds}s"
 
 # ---------- poll loop ----------
@@ -223,7 +248,8 @@ while ((Get-Date) -lt $deadline) {
     }
 
     $latest = $current.LatestCopilotReview
-    if ($latest -and [datetime]$latest.submittedAt -gt $sinceDt -and $latest.commit.oid -eq $ExpectedHeadOid) {
+    $latestDt = if ($latest) { ToUtcDt $latest.submittedAt } else { $null }
+    if ($latest -and $latestDt -gt $sinceDt -and $latest.commit.oid -eq $ExpectedHeadOid) {
         $result.Status         = 'ReviewCompleted'
         $result.LatestReview   = $latest
         # Convergence condition (b) requires checking whether the review body

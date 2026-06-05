@@ -85,6 +85,32 @@ if (-not $Owner -or -not $Repo) {
 
 $repoArg = "$Owner/$Repo"
 
+# UTC-normalizing datetime parser. PowerShell's ConvertFrom-Json strips
+# the Z suffix from ISO-8601 timestamps and returns DateTime with
+# Kind=Unspecified, treating the literal hours as local time. Comparing
+# such a value with a freshly-cast [datetime] from a different code
+# path silently gives wrong answers (off by the local UTC offset). All
+# timestamp comparisons in this script MUST go through ToUtcDt.
+function ToUtcDt {
+    param($Value)
+    if ($null -eq $Value -or $Value -eq '') { return $null }
+    $s = if ($Value -is [datetime]) {
+        if ($Value.Kind -eq [System.DateTimeKind]::Unspecified) {
+            # Came from ConvertFrom-Json with Z stripped -- treat as UTC.
+            [System.DateTime]::SpecifyKind($Value, [System.DateTimeKind]::Utc).ToString('o')
+        } else {
+            $Value.ToUniversalTime().ToString('o')
+        }
+    } else {
+        [string]$Value
+    }
+    return [datetime]::Parse(
+        $s,
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal
+    )
+}
+
 # Snapshot the latest "Copilot is now working on this PR" event before
 # any attempt. We treat copilot_work_started — not review_requested — as
 # the real success signal because it's emitted by the bot only after it
@@ -204,27 +230,44 @@ if ($snapshot.LatestCopilotReview -and $snapshot.LatestCopilotReview.commit.oid 
 }
 
 # Case (b): in-flight review against the CURRENT HEAD.
-# All three conditions must hold to treat as in-flight:
-#   1. A copilot_work_started event landed recently (<12 min ago).
-#   2. That work_started came AFTER the latest Copilot review_requested
-#      event -- otherwise it's stale from a previous request that was
-#      since superseded (e.g. HEAD advanced after the work_started).
-#   3. No Copilot review exists at the current HEAD yet -- otherwise
-#      it's case (a) above.
-# Skipping any of these can recreate "wait for nothing": e.g. if HEAD
-# advanced after a stale work_started, we'd skip the trigger and step 2
-# would wait for a review that was never requested for this HEAD.
-$workStartedRecent = $false
-$workStartedAfterRequest = $true   # default true so the check passes when there's no review_requested record at all
-if ($beforeTs) {
-    $workStartedAge = (Get-Date) - [datetime]$beforeTs
+# Case (b): in-flight review against the CURRENT HEAD.
+# An in-flight review = a copilot_work_started event that has not yet
+# produced a submitted review. We must NOT treat a work_started as
+# in-flight if it has already been consumed by a review submission --
+# even if the consumed review is for a different commit (HEAD advanced
+# after that review was submitted). All FOUR conditions must hold:
+#   1. A copilot_work_started event exists.
+#   2. It is recent (<12 min) — otherwise it likely failed silently.
+#   3. It is newer than the latest Copilot review_requested event
+#      (otherwise the request was superseded).
+#   4. It is newer than the latest Copilot review's submittedAt
+#      (otherwise the work_started has already been "consumed" —
+#      Copilot already reviewed and submitted; the next round needs
+#      a fresh trigger).
+# Skipping any of these recreates "wait for nothing": e.g. after a
+# round completes, the script would falsely report in-flight against
+# stale state and step 2 would time out waiting for a never-coming
+# new submission.
+$workStartedRecent          = $false
+$workStartedAfterRequest    = $true   # default true so the check passes when there's no review_requested record at all
+$workStartedNotYetConsumed  = $true   # default true so the check passes when no prior Copilot review exists
+$beforeDt = ToUtcDt $beforeTs
+if ($beforeDt) {
+    $workStartedAge = (Get-Date).ToUniversalTime() - $beforeDt
     $workStartedRecent = $workStartedAge.TotalMinutes -lt 12
-    if ($lastReqAt) {
-        $workStartedAfterRequest = [datetime]$beforeTs -ge [datetime]$lastReqAt
+    $lastReqDt = ToUtcDt $lastReqAt
+    if ($lastReqDt) {
+        $workStartedAfterRequest = $beforeDt -ge $lastReqDt
+    }
+    if ($snapshot.LatestCopilotReview) {
+        $latestReviewDt = ToUtcDt $snapshot.LatestCopilotReview.submittedAt
+        if ($latestReviewDt) {
+            $workStartedNotYetConsumed = $beforeDt -gt $latestReviewDt
+        }
     }
 }
-if ($workStartedRecent -and $workStartedAfterRequest) {
-    Write-Host "Copilot is already reviewing the current HEAD ($($headOid.Substring(0,7))). Last copilot_work_started: $beforeTs (~$([int]$workStartedAge.TotalSeconds)s ago). NOT re-triggering — in-flight reviews must not be cancelled. Run scripts/02-wait-for-review.ps1 to wait for the submission."
+if ($workStartedRecent -and $workStartedAfterRequest -and $workStartedNotYetConsumed) {
+    Write-Host "Copilot is already reviewing the current HEAD ($($headOid.Substring(0,7))). Last copilot_work_started: $beforeTs (~$([int]$workStartedAge.TotalSeconds)s ago) is newer than any submitted Copilot review. NOT re-triggering — in-flight reviews must not be cancelled. Run scripts/02-wait-for-review.ps1 to wait for the submission."
     exit 0
 }
 
@@ -234,8 +277,9 @@ $tried = @()
 # Use DELETE+POST to re-arm. This is the only path that should ever delete.
 $stuckPending = $false
 if ($snapshot.CopilotPending -and $lastReqAt) {
-    $pendingAge = (Get-Date) - [datetime]$lastReqAt
-    if ($pendingAge.TotalMinutes -gt 5 -and (-not $beforeTs -or [datetime]$lastReqAt -gt [datetime]$beforeTs)) {
+    $lastReqDt2 = ToUtcDt $lastReqAt
+    $pendingAge = (Get-Date).ToUniversalTime() - $lastReqDt2
+    if ($pendingAge.TotalMinutes -gt 5 -and (-not $beforeDt -or $lastReqDt2 -gt $beforeDt)) {
         $stuckPending = $true
     }
 }
