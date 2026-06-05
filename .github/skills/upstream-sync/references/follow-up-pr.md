@@ -42,9 +42,8 @@ follow-up PR.
 
 ### Worktree setup
 
-Keep the primary worktree at `Q:\official\intelligent-terminal` on `main`
-and open a sibling worktree for the follow-up so the main worktree stays
-clean:
+Keep the primary worktree on `main` and open a sibling worktree for the
+follow-up so the primary stays clean:
 
 ```pwsh
 $syncPr      = 220

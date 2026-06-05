@@ -104,8 +104,10 @@ $all = @(Get-PendingUpstreamShas -Since $from)
 # fine at typical batch sizes).
 $info = @{}
 foreach ($sha in $all) {
-    $subj = git log -1 --format='%s' $sha
-    $body = git log -1 --format='%B' $sha
+    $subj = git log -1 --format='%s' $sha 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "git log --format=%s failed for $sha : $subj" }
+    $body = git log -1 --format='%B' $sha 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "git log --format=%B failed for $sha : $body" }
     $info[$sha] = @{ subject = $subj; body = $body }
 }
 
@@ -150,7 +152,8 @@ foreach ($sha in $all) {
 $empty = @()
 foreach ($sha in $all) {
     if ($dropped.Contains($sha)) { continue }
-    $files = git diff-tree --no-commit-id --name-only -r $sha
+    $files = git diff-tree --no-commit-id --name-only -r $sha 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "git diff-tree failed for $sha : $files" }
     if (-not $files) {
         $empty += $sha
         [void] $dropped.Add($sha)
