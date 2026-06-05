@@ -38,7 +38,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Remote 'upstream' points at '$($existing.Trim())' (expected '$UpstreamUrl'). Fix the remote before running upstream-sync."
 }
 
-git fetch upstream main --no-tags 2>&1 | Out-Host
+git fetch upstream main --no-tags 2>&1 | ForEach-Object { [Console]::Error.WriteLine($_) }
 if ($LASTEXITCODE -ne 0) { throw "git fetch upstream main failed." }
 
 $sha = git rev-parse upstream/main

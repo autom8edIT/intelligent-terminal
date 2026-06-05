@@ -65,7 +65,7 @@ $bodyContent = $banner + $PrBody
 $shortTo = $UpstreamHeadSha.Substring(0,9)
 $title = "chore(upstream): sync microsoft/terminal up to $shortTo"
 
-git push -u origin $Branch | Out-Host
+git push -u origin $Branch 2>&1 | ForEach-Object { [Console]::Error.WriteLine($_) }
 if ($LASTEXITCODE -ne 0) {
     Remove-Item -LiteralPath $bodyPath -Force -ErrorAction SilentlyContinue
     throw "git push failed for $Branch."
@@ -100,11 +100,11 @@ $prUrl = $prUrl.Trim()
 
 if ($AutoMergeStrategy -ne 'none') {
     $strategyFlag = "--$AutoMergeStrategy"
-    gh pr merge -R microsoft/intelligent-terminal $prUrl $strategyFlag --auto --delete-branch | Out-Host
+    gh pr merge -R microsoft/intelligent-terminal $prUrl $strategyFlag --auto --delete-branch 2>&1 | ForEach-Object { [Console]::Error.WriteLine($_) }
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "gh pr merge --auto failed. PR is open at $prUrl; merge manually with '$AutoMergeStrategy' strategy (NOT squash)."
     } else {
-        Write-Host "Auto-merge armed with strategy: $AutoMergeStrategy" -ForegroundColor Green
+        [Console]::Error.WriteLine("Auto-merge armed with strategy: $AutoMergeStrategy")
     }
 }
 

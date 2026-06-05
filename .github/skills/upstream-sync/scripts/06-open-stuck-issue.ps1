@@ -42,7 +42,7 @@ param(
 . "$PSScriptRoot/Common.ps1"
 
 # Push the stuck branch so the human can resume on it.
-git push -u origin $Branch 2>&1 | Out-Host
+git push -u origin $Branch 2>&1 | ForEach-Object { [Console]::Error.WriteLine($_) }
 if ($LASTEXITCODE -ne 0) { Write-Warning "Could not push stuck branch — issue still being filed for visibility." }
 
 $shortSha    = $StuckSha.Substring(0,9)

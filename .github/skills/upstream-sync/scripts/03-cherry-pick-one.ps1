@@ -96,7 +96,7 @@ $env:GIT_COMMITTER_DATE  = $info[5]
 try {
 
 # Attempt the pick.
-git cherry-pick --keep-redundant-commits -x $fullSha 2>&1 | Out-Host
+git cherry-pick --keep-redundant-commits -x $fullSha 2>&1 | ForEach-Object { [Console]::Error.WriteLine($_) }
 $pickCode = $LASTEXITCODE
 
 if ($pickCode -eq 0) {
@@ -181,7 +181,7 @@ if ($unhandled.Count -gt 0) {
 }
 
 # All conflicts handled by Tier-0; continue the pick (preserve original message).
-git cherry-pick --continue --no-edit 2>&1 | Out-Host
+git cherry-pick --continue --no-edit 2>&1 | ForEach-Object { [Console]::Error.WriteLine($_) }
 if ($LASTEXITCODE -ne 0) {
     # Could still be empty after Tier-0.
     $staged = git diff --cached --name-only

@@ -64,7 +64,7 @@ $findingsForHash = if ($Kind -eq 'build-failed') {
 $findingsHash = Get-FindingsHash $findingsForHash
 
 # Push the sync branch so the human can resume on it.
-git push -u origin $Branch 2>&1 | Out-Host
+git push -u origin $Branch 2>&1 | ForEach-Object { [Console]::Error.WriteLine($_) }
 if ($LASTEXITCODE -ne 0) { Write-Warning "Could not push sync branch — issue still being filed for visibility." }
 
 $titleKindLabel = if ($Kind -eq 'build-failed') { 'build failure' } else { 'build inconclusive (timeout)' }
