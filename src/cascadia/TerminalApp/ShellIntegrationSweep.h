@@ -127,8 +127,9 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
                     // installer's allow-list rejects (quotes,
                     // backslash, pipe, semicolon, ampersand, space,
                     // newline, control bytes, etc — IsSafeDistroName
-                    // only permits `[A-Za-z0-9._+-]`). Skip silently
-                    // rather than surfacing an install error per-sweep.
+                    // only permits `[A-Za-z0-9._+-]` including
+                    // underscores). Skip silently rather than
+                    // surfacing an install error per-sweep.
                     continue;
                 }
                 if (seen.insert(name).second)
