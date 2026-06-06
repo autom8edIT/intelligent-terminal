@@ -18,6 +18,11 @@
 
 .EXAMPLE
     pwsh 02-list-open-threads.ps1 -PrNumber 122
+
+.PARAMETER MaxBodyLength
+    Cap the `Body` column at this many characters (default 500; pass 0 to
+    disable). Long Copilot comments otherwise dominate stdout and slow
+    triage; truncated bodies are suffixed with `…`.
 #>
 [CmdletBinding()]
 param(
@@ -25,7 +30,10 @@ param(
     [string]$Repo,
 
     [Parameter(Mandatory = $true)]
-    [int]$PrNumber
+    [int]$PrNumber,
+
+    [ValidateRange(0, 100000)]
+    [int]$MaxBodyLength = 500
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,13 +94,16 @@ if (-not $open) {
 
 foreach ($t in $open) {
     $c = $t.comments.nodes[0]
-    $body = $c.body
+    $body = ($c.body -replace "`r?`n", ' ')
+    if ($MaxBodyLength -gt 0 -and $body.Length -gt $MaxBodyLength) {
+        $body = $body.Substring(0, $MaxBodyLength) + '…'
+    }
     $path = if ($null -ne $c.line) { "$($c.path):$($c.line)" } else { $c.path }
     [pscustomobject]@{
         ThreadId   = $t.id
         Author     = $c.author.login
         Path       = $path
         CreatedAt  = $c.createdAt
-        Body       = $body -replace "`r?`n", ' '
+        Body       = $body
     }
 }

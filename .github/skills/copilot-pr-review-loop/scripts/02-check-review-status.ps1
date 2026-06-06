@@ -130,8 +130,12 @@ $latest = if ($copilotReviews.Count -gt 0) { $copilotReviews | Sort-Object submi
 $reviewAtHead = $false
 $noNewComments = $false
 $bodyHead = $null
+$latestCommitOid = $null
 if ($latest) {
-    $reviewAtHead = ($latest.commit.oid -eq $pr.headRefOid)
+    if ($latest.commit -and $latest.commit.oid) {
+        $latestCommitOid = $latest.commit.oid
+        $reviewAtHead = ($latestCommitOid -eq $pr.headRefOid)
+    }
     $bodyText = if ($latest.body) { $latest.body } else { '' }
     $noNewComments = ($bodyText -match '(?i)generated no new comments|generated\s+0\s+comments|reviewed\s+\d+\s+out\s+of\s+\d+\s+changed\s+files\s+in\s+this\s+pull\s+request\s+and\s+generated\s+no\s+new\s+comments')
     $bodyHead = if ($bodyText.Length -gt 300) { $bodyText.Substring(0, 300) } else { $bodyText }
@@ -150,7 +154,7 @@ $result = [ordered]@{
         [ordered]@{
             state       = $latest.state
             submittedAt = $latest.submittedAt
-            commitOid   = $latest.commit.oid
+            commitOid   = $latestCommitOid
             bodyHead    = $bodyHead
         }
     } else { $null }
