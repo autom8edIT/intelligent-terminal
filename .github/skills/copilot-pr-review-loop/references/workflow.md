@@ -20,7 +20,7 @@ existing practice — never invent build commands.
 | Sub-agent must return | `status` ∈ {`complete`, `partial`, `blocked`} + `next_action` + `needs_extension_minutes` (0 if none). Always summarize progress before the budget expires — never silently overrun. |
 | Extension | parent only extends when `status: partial` AND `next_action` is concrete; sends `write_agent "continue for N min"` with `N = min(needs_extension_minutes, 10)` |
 | Extension cap (default) | 2 extensions per step; step 6 (build/test) up to 2× for slow suites. Step 2 (wait) is a single bounded sub-agent — see step 2 — not extension-driven. |
-| Parent never blocks | step 1 trigger, step 4 commit, step 5 push, step 6 reply+resolve mutations, and the `task_complete` decision stay in the parent |
+| Parent never blocks | step 1 (request), step 7 (commit + push), step 8 reply/resolve mutations, and the `task_complete` decision stay in the parent |
 
 ## Sub-agent delegation map
 
