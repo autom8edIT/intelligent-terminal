@@ -91,6 +91,18 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
                 return cmd.substr(tokStart, tokEnd - tokStart);
             }
         }
+        // Fallback for Microsoft.WSL profiles (newer Store WSL
+        // generator): commandline may be empty in settings.json and
+        // resolved at runtime to something we don't parse. That
+        // generator sets profile.Name() to the exact distro name
+        // (it's the generator's source of truth, not user-edited
+        // free text like in legacy Windows.Terminal.Wsl profiles).
+        // The IsSafeDistroName allow-list downstream still rejects
+        // anything malformed, so this is safe.
+        if (profile.Source() == L"Microsoft.WSL")
+        {
+            return std::wstring{ profile.Name() };
+        }
         return {};
     }
 
@@ -114,7 +126,12 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
         std::set<std::wstring> seen;
         for (const auto& profile : settings.AllProfiles())
         {
-            if (profile.Source() == L"Windows.Terminal.Wsl")
+            // The legacy `Windows.Terminal.Wsl` source is what the
+            // older WslDistroGenerator emits; the newer Store WSL
+            // package generator uses `Microsoft.WSL` instead. Accept
+            // both so users on either generator get integration.
+            const auto src = profile.Source();
+            if (src == L"Windows.Terminal.Wsl" || src == L"Microsoft.WSL")
             {
                 auto name = ExtractWslDistroName(profile);
                 if (name.empty())
