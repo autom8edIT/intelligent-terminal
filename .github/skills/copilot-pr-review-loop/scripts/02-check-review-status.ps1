@@ -111,7 +111,15 @@ param(
     [int]$PrNumber,
 
     [string]$Owner,
-    [string]$Repo
+    [string]$Repo,
+
+    # When set, the agent has decided to drive this PR as a single
+    # iteration (typically because 01-request-review.ps1 failed with a
+    # Copilot-disabled error). In this mode, convergence ignores the
+    # stale-review checks (ReviewAtHead / NoNewComments) — those can
+    # never become true when the trigger is intentionally skipped —
+    # and depends solely on OpenThreadsAwaitingReply == 0.
+    [switch]$SingleIteration
 )
 
 $ErrorActionPreference = 'Stop'
@@ -290,21 +298,19 @@ $result = [ordered]@{
     OpenThreadsAwaitingReply  = $awaitingCount
     CopilotPending            = $copilotPending
     # Converged = "the agent has nothing more to do".
-    # - When a Copilot review is at HEAD: ReviewAtHead && NoNewComments
-    #   && OpenThreadsAwaitingReply == 0.
-    # - When no Copilot review has been observed on this PR: just
-    #   OpenThreadsAwaitingReply == 0 (single-iteration end). Note
-    #   that this branch ALSO fires for brand-new PRs where Copilot
-    #   simply hasn't been triggered yet — convergence in that case
-    #   means "no findings exist yet to reply to", which is correct
-    #   per the contract but the agent should still trigger the
-    #   first review via 01-request-review.ps1 if Copilot is enabled
-    #   on the repo. (We deliberately do NOT auto-detect "Copilot
-    #   unavailable" here — that's not reliably inferrable from
-    #   API state. The agent decides single-iteration based on
-    #   01-request-review failing with a specific Copilot-disabled
-    #   error.)
-    Converged = if ($latest -or $copilotPending) {
+    # - SingleIteration (agent decision; Copilot unavailable or
+    #   trigger intentionally skipped): just OpenThreadsAwaitingReply
+    #   == 0. Ignores ReviewAtHead / NoNewComments because those will
+    #   never advance without a new Copilot review.
+    # - Copilot review exists or pending: ReviewAtHead &&
+    #   NoNewComments && OpenThreadsAwaitingReply == 0.
+    # - No Copilot review has ever been observed: just
+    #   OpenThreadsAwaitingReply == 0 (also fires for brand-new PRs
+    #   with zero findings; agent should still trigger via
+    #   01-request-review.ps1 if Copilot is enabled).
+    Converged = if ($SingleIteration) {
+        $awaitingCount -eq 0
+    } elseif ($latest -or $copilotPending) {
         $reviewAtHead -and $noNewComments -and $awaitingCount -eq 0
     } else {
         $awaitingCount -eq 0

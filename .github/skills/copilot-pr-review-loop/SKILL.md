@@ -68,8 +68,10 @@ in [references/workflow.md](references/workflow.md).
 **Single-iteration fallback (Copilot unavailable)**: when
 `01-request-review.ps1` throws because Copilot Code Review isn't
 enabled on the repo / account (the GraphQL mutation reports the bot
-isn't a valid reviewer), the agent skips steps 2 and runs steps 3–8
-once. `02-check-review-status.ps1` then reports `Converged: true`
+isn't a valid reviewer), the agent skips step 2 and runs steps 3–8
+once, then calls `02-check-review-status.ps1 -SingleIteration` for
+the convergence check (which then ignores the stale-review checks
+that can't advance without a new Copilot review). `Converged: true`
 when `OpenThreadsAwaitingReply == 0`. Re-iteration happens only when
 a human posts new comments later — re-run the skill at that point.
 
