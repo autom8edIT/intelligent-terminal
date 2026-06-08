@@ -42,10 +42,15 @@ Then `gh auth login` and re-run this command.
     $proc = [System.Diagnostics.Process]::Start($psi)
     try {
         $errTask = $proc.StandardError.ReadToEndAsync()
-        $null = $proc.StandardOutput.ReadToEndAsync()
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
         $proc.WaitForExit()
+        # Await both async reads before disposing so neither leaks an
+        # unobserved Task / faulted continuation, and so stderr is fully
+        # drained when we read it on the failure path. Stdout content is
+        # discarded but the task must still be awaited.
+        $null = $outTask.GetAwaiter().GetResult()
+        $err = $errTask.GetAwaiter().GetResult()
         if ($proc.ExitCode -ne 0) {
-            $err = $errTask.GetAwaiter().GetResult().Trim()
             throw @"
 copilot-pr-review-loop: prerequisite missing — ``gh`` CLI is not authenticated.
 
@@ -53,7 +58,7 @@ Run:
   gh auth login
 
 Then re-run this command. (``gh auth status`` reported:
-  $err)
+  $($err.Trim()))
 "@
         }
     } finally {
