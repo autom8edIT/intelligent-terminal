@@ -29,15 +29,22 @@
     pwsh 10-cleanup-outdated.ps1 -PrNumber 122
 
 .EXAMPLE
-    pwsh 10-cleanup-outdated.ps1 -PrNumber 122 -WhatIf
+    pwsh 10-cleanup-outdated.ps1 -PrNumber 122 -DryRun
 #>
-[CmdletBinding(SupportsShouldProcess = $true)]
+[CmdletBinding()]
 param(
     [string]$Owner,
     [string]$Repo,
 
     [Parameter(Mandatory = $true)]
-    [int]$PrNumber
+    [int]$PrNumber,
+
+    # Print what would be resolved without making any GraphQL
+    # mutation. Uses an explicit switch (not the PowerShell
+    # SupportsShouldProcess / -WhatIf machinery) so the helper's
+    # internal `2>` redirect doesn't inherit a WhatIfPreference and
+    # print cosmetic "Performing the operation Output to File" noise.
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
@@ -106,7 +113,9 @@ mutation($tid: ID!) {
 '@
 
 foreach ($t in $targets) {
-    if ($PSCmdlet.ShouldProcess($t.id, 'Resolve outdated Copilot thread')) {
+    if ($DryRun) {
+        Write-Output "Would resolve $($t.id) (DryRun)"
+    } else {
         $resolveArgs = @('-f', "query=$resolveMutation", '-f', "tid=$($t.id)")
         Invoke-GhGraphQL -GhArgs $resolveArgs -Context "resolve outdated thread $($t.id)" | Out-Null
         Write-Output "Resolved $($t.id)"

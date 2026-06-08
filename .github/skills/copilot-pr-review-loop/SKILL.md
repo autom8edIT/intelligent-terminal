@@ -32,10 +32,8 @@ installed and authenticated (see Prerequisites).
 ## Prerequisites
 
 - `gh` CLI installed and authenticated against the target repository.
-- PowerShell 7+ (`pwsh`) on PATH — any 7.x. The bundled scripts use
-  `System.Diagnostics.ProcessStartInfo.ArgumentList` which is .NET
-  Core / .NET 5+ only; Windows PowerShell 5.1 (running on .NET
-  Framework) is NOT supported.
+- PowerShell on PATH — Windows PowerShell 5.1+ (`powershell.exe`) or
+  PowerShell 7+ (`pwsh`). Both are tested.
 - The repository must have Copilot Code Review enabled (repo or
   account-level Copilot Pro/Pro+); if not, the trigger step will
   cleanly throw and the loop cannot proceed.

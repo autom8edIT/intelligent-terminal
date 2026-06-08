@@ -4,10 +4,15 @@
 # Dot-sourcing runs the prerequisite check below; if `gh` is missing or
 # unauthenticated the script halts BEFORE doing any work, with a single
 # actionable error message the calling agent can pattern-match on.
+#
+# Compatibility: Windows PowerShell 5.1+ and PowerShell 7+. Uses only
+# `& gh @args 2>$tempFile` for stdout/stderr separation — avoids
+# `System.Diagnostics.ProcessStartInfo.ArgumentList` which is .NET
+# Core / .NET 5+ only and returns $null on .NET Framework.
 
 # Prerequisite check: gh CLI installed AND authenticated.
-# Fails fast with install/login instructions. Runs once per PowerShell
-# session (idempotent — re-dot-sourcing is a no-op after success).
+# Fails fast with install/login instructions. Idempotent (once per
+# PowerShell session).
 function Assert-GhReady {
     if ($script:_GhReady) { return }
 
@@ -28,29 +33,17 @@ Then `gh auth login` and re-run this command.
     }
 
     # 2. Authenticated? `gh auth status` exits non-zero when no account
-    # is logged in. We can't call Invoke-Gh (defined below this function),
-    # so use ProcessStartInfo directly — same .NET path, no PS `2>`
-    # redirect (which inherits the caller's WhatIf and would print
-    # spurious "Performing the operation Output to File" noise on -WhatIf
-    # runs of consuming scripts).
-    $psi = [System.Diagnostics.ProcessStartInfo]::new('gh')
-    $null = $psi.ArgumentList.Add('auth')
-    $null = $psi.ArgumentList.Add('status')
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.UseShellExecute = $false
-    $proc = [System.Diagnostics.Process]::Start($psi)
+    # is logged in. Capture stderr to a temp file via the `2>` redirect.
+    $errFile = [IO.Path]::GetTempFileName()
     try {
-        $errTask = $proc.StandardError.ReadToEndAsync()
-        $outTask = $proc.StandardOutput.ReadToEndAsync()
-        $proc.WaitForExit()
-        # Await both async reads before disposing so neither leaks an
-        # unobserved Task / faulted continuation, and so stderr is fully
-        # drained when we read it on the failure path. Stdout content is
-        # discarded but the task must still be awaited.
-        $null = $outTask.GetAwaiter().GetResult()
-        $err = $errTask.GetAwaiter().GetResult()
-        if ($proc.ExitCode -ne 0) {
+        $null = & gh auth status 2>$errFile
+        $ec = $LASTEXITCODE
+        if ($ec -ne 0) {
+            $err = ''
+            if (Test-Path -LiteralPath $errFile) {
+                $err = (Get-Content -Raw -LiteralPath $errFile -ErrorAction SilentlyContinue)
+                if ($null -eq $err) { $err = '' }
+            }
             throw @"
 copilot-pr-review-loop: prerequisite missing — ``gh`` CLI is not authenticated.
 
@@ -62,38 +55,41 @@ Then re-run this command. (``gh auth status`` reported:
 "@
         }
     } finally {
-        $proc.Dispose()
+        if (Test-Path -LiteralPath $errFile) {
+            Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue
+        }
     }
 
     $script:_GhReady = $true
 }
 
 # Single-invocation gh wrapper. Captures stdout + stderr separately
-# via .NET ProcessStartInfo (with async stream reads to avoid the
-# deadlock risk on chatty stderr) and returns ExitCode/Stdout/Stderr.
-# Going through .NET — not PowerShell's `2>` redirect — sidesteps the
-# `Out-File`/-WhatIf inheritance that otherwise prints
-# `What if: Performing the operation "Output to File"` noise when the
-# calling script is invoked with -WhatIf.
+# via the `2>` redirect to a temp file. Returns ExitCode/Stdout/Stderr
+# so callers never have to re-invoke `gh` just to recover stderr, and
+# never feed stderr into `ConvertFrom-Json` on success.
+#
+# Note on -WhatIf: PowerShell's `2>` redirect goes through Out-File,
+# which respects $WhatIfPreference at the caller scope. The bundled
+# `10-cleanup-outdated.ps1` therefore uses an explicit `-DryRun`
+# switch instead of [CmdletBinding(SupportsShouldProcess)], so this
+# helper never sees a leaked WhatIfPreference and never prints
+# "Performing the operation Output to File" noise.
 function Invoke-Gh {
     param([Parameter(Mandatory)][string[]]$GhArgs)
-    $psi = [System.Diagnostics.ProcessStartInfo]::new('gh')
-    foreach ($a in $GhArgs) { $null = $psi.ArgumentList.Add($a) }
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.UseShellExecute = $false
-    $proc = [System.Diagnostics.Process]::Start($psi)
+    $errFile = [IO.Path]::GetTempFileName()
     try {
-        $outTask = $proc.StandardOutput.ReadToEndAsync()
-        $errTask = $proc.StandardError.ReadToEndAsync()
-        $proc.WaitForExit()
-        [pscustomobject]@{
-            ExitCode = $proc.ExitCode
-            Stdout   = $outTask.GetAwaiter().GetResult()
-            Stderr   = $errTask.GetAwaiter().GetResult()
+        $out = & gh @GhArgs 2>$errFile
+        $ec = $LASTEXITCODE
+        $err = ''
+        if (Test-Path -LiteralPath $errFile) {
+            $err = (Get-Content -Raw -LiteralPath $errFile -ErrorAction SilentlyContinue)
+            if ($null -eq $err) { $err = '' }
         }
+        [pscustomobject]@{ ExitCode = $ec; Stdout = ($out | Out-String); Stderr = $err }
     } finally {
-        $proc.Dispose()
+        if (Test-Path -LiteralPath $errFile) {
+            Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue
+        }
     }
 }
 
