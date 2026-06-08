@@ -9,7 +9,7 @@ The downstream pipeline (autofix detection, classification, VT-event forwarding)
 - **Bash** (Git Bash on Windows) — block written to `~/.bashrc`; the block sources `$HOME/.intelligent-terminal/shell-integration_v1.sh` (which is `%USERPROFILE%\.intelligent-terminal\shell-integration_v1.sh` on Git Bash, where `$HOME` resolves to `%USERPROFILE%`)
 - **WSL** (one install per WSL distro you have a Windows Terminal profile for) — block written to the distro's `~/.bashrc`; the block sources `$HOME/.intelligent-terminal/shell-integration_v1.sh` inside the distro filesystem. We write both via the `\\wsl$\<distName>\` UNC mount from the Windows side
 
-> **Distro discovery.** The installer iterates `_settings.AllProfiles()` and picks every profile whose `Source` is `Windows.Terminal.Wsl` (the dynamic-profile namespace used by `WslDistroGenerator`). Add a distro to WT (Settings → "+ Add a new profile" picks up new WSL distros automatically; or `wsl --install <Distro>` followed by relaunching WT) and the next FRE save or Settings install will cover it.
+> **Distro discovery.** The installer iterates `_settings.AllProfiles()` and picks every profile whose `Source` is `Windows.Terminal.Wsl` (the dynamic-profile namespace used by the legacy `WslDistroGenerator`) **or** `Microsoft.WSL` (the namespace used by the newer Store WSL package generator). Both work; the installer extracts the distro name from the commandline's `-d`/`--distribution` flag, or — for `Microsoft.WSL` profiles whose commandline is resolved at runtime — from the profile name. Add a distro to WT (Settings → "+ Add a new profile" picks up new WSL distros automatically; or `wsl --install <Distro>` followed by relaunching WT) and the next FRE save or Settings install will cover it.
 
 > **Cold-start cost.** The first `wsl.exe` invocation in a Windows session spins up the WSL2 VM (~5–15s). The installer's per-distro `$HOME` probe pays this cost once; subsequent invocations are fast.
 
@@ -130,10 +130,10 @@ The sourced helper script (`~/.intelligent-terminal/shell-integration_v1.sh` for
 
 ### WSL: distro not detected
 
-The installer discovers WSL distros by iterating `_settings.AllProfiles()` and filtering on `Source == "Windows.Terminal.Wsl"`. A distro is invisible to the installer if Windows Terminal hasn't generated a profile for it yet. Two fixes:
+The installer discovers WSL distros by iterating `_settings.AllProfiles()` and filtering on `Source == "Windows.Terminal.Wsl"` (legacy `WslDistroGenerator`) **or** `Source == "Microsoft.WSL"` (newer Store WSL package generator). A distro is invisible to the installer if Windows Terminal hasn't generated a profile for it yet. Two fixes:
 
 1. **New distro**: open WT Settings → "+ Add a new profile" (the "from default profiles" picker lists newly registered WSL distros), or just relaunch WT after `wsl --install <Distro>`. Then re-run the installer.
-2. **Hidden profile**: if the WSL profile exists but is marked `"hidden": true` in `settings.json`, the installer still picks it up (the filter is on `Source`, not visibility). If it doesn't, check that the profile's `source` field literally reads `"Windows.Terminal.Wsl"` — `wsl-distro-launcher`-style manual profiles use a different generator and are skipped.
+2. **Hidden profile**: if the WSL profile exists but is marked `"hidden": true` in `settings.json`, the installer still picks it up (the filter is on `Source`, not visibility). If it doesn't, check that the profile's `source` field literally reads `"Windows.Terminal.Wsl"` or `"Microsoft.WSL"` — `wsl-distro-launcher`-style manual profiles use a different generator and are skipped.
 
 ### `set -u` / strict bash mode
 
