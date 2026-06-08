@@ -22,7 +22,7 @@ Score every proposed change on two axes, then decide:
 
 ## Reviewer-type policy (foundation, not a nit)
 
-Each thread's `author` (returned by `02-list-open-threads.ps1`) drives
+Each thread's `author` (returned by `03-list-open-threads.ps1`) drives
 who can decide it:
 
 | Reviewer | Default action |

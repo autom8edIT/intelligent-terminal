@@ -17,7 +17,7 @@
 .PARAMETER PrNumber                  The pull request number.
 
 .EXAMPLE
-    pwsh 02-list-open-threads.ps1 -PrNumber 122
+    pwsh 03-list-open-threads.ps1 -PrNumber 122
 
 .PARAMETER MaxBodyLength
     Cap the `Body` column at this many characters (default 500; pass 0 to

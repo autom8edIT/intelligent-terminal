@@ -22,14 +22,21 @@
       - NoNewComments      : true iff the latest review body matches
                              "generated no new comments" / "generated 0 comments"
       - OpenThreadCount    : number of unresolved review threads (from all reviewers)
+      - CopilotPending     : true iff the Copilot reviewer bot is currently
+                             listed in `requested_reviewers` on the PR (a
+                             review is in flight; the caller should wait
+                             rather than re-trigger)
       - Converged          : true iff ReviewAtHead && NoNewComments && OpenThreadCount==0
 
-    Typical agent loop:
-      1. Call 01-request-review.ps1 → get TriggerLanded
-      2. Schedule a check N minutes later
-      3. Call this script (02-check-review-status.ps1)
-      4. If ReviewAtHead && NoNewComments && OpenThreadCount==0 → converged
-      5. Otherwise, fetch threads via 02-list-open-threads.ps1, triage, fix, repeat
+    Canonical agent loop (workflow.md):
+      1. Call this script → capture LatestCopilotReview.submittedAt as
+         baseline AND read CopilotPending.
+      2. If CopilotPending is true, skip the trigger step — Copilot is
+         already reviewing. Otherwise call 01-request-review.ps1.
+      3. Wait sub-agent polls this script until either submittedAt
+         advances past baseline AND ReviewAtHead is true, OR Converged.
+      4. On convergence end the loop; otherwise fetch threads via
+         03-list-open-threads.ps1, triage, fix, push, reply, repeat.
 
 .PARAMETER PrNumber
     The pull request number. The only required parameter.
@@ -75,6 +82,7 @@ query($o:String!,$r:String!,$n:Int!){
       headRefOid
       state
       reviews(last:100){nodes{author{login} state submittedAt body commit{oid}}}
+      reviewRequests(first:100){nodes{requestedReviewer{__typename ... on Bot{login} ... on User{login} ... on Mannequin{login}}}}
     }
   }
 }
@@ -148,6 +156,14 @@ if ($latest) {
 $openThreads = @($allThreads | Where-Object { -not $_.isResolved })
 $openCount = $openThreads.Count
 
+# CopilotPending: is the Copilot reviewer bot currently in
+# `requested_reviewers`? Canonical signal for "review is in flight";
+# the wait sub-agent (workflow step 2) consults this so the trigger
+# step (01-request-review.ps1) can be skipped when already pending.
+$copilotPending = @($pr.reviewRequests.nodes | Where-Object {
+    $_.requestedReviewer.login -match '(?i)^copilot-pull-request-reviewer(\[bot\])?$'
+}).Count -gt 0
+
 $result = [ordered]@{
     PrNumber            = $PrNumber
     Owner               = $Owner
@@ -165,6 +181,7 @@ $result = [ordered]@{
     ReviewAtHead    = $reviewAtHead
     NoNewComments   = $noNewComments
     OpenThreadCount = $openCount
+    CopilotPending  = $copilotPending
     Converged       = ($reviewAtHead -and $noNewComments -and $openCount -eq 0)
 }
 $result | ConvertTo-Json -Depth 5 -Compress

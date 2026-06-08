@@ -27,18 +27,25 @@ Then `gh auth login` and re-run this command.
 '@
     }
 
-    # 2. Authenticated? `gh auth status` exits non-zero when no account is
-    # logged in. Use raw call (not Invoke-Gh) so we don't recurse into the
-    # ready-check.
-    $errFile = [IO.Path]::GetTempFileName()
+    # 2. Authenticated? `gh auth status` exits non-zero when no account
+    # is logged in. We can't call Invoke-Gh (defined below this function),
+    # so use ProcessStartInfo directly — same .NET path, no PS `2>`
+    # redirect (which inherits the caller's WhatIf and would print
+    # spurious "Performing the operation Output to File" noise on -WhatIf
+    # runs of consuming scripts).
+    $psi = [System.Diagnostics.ProcessStartInfo]::new('gh')
+    $null = $psi.ArgumentList.Add('auth')
+    $null = $psi.ArgumentList.Add('status')
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $proc = [System.Diagnostics.Process]::Start($psi)
     try {
-        $null = & gh auth status 2>$errFile
-        $ec = $LASTEXITCODE
-        if ($ec -ne 0) {
-            $err = ''
-            if ([System.IO.File]::Exists($errFile)) {
-                $err = [System.IO.File]::ReadAllText($errFile).Trim()
-            }
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        $null = $proc.StandardOutput.ReadToEndAsync()
+        $proc.WaitForExit()
+        if ($proc.ExitCode -ne 0) {
+            $err = $errTask.GetAwaiter().GetResult().Trim()
             throw @"
 copilot-pr-review-loop: prerequisite missing — ``gh`` CLI is not authenticated.
 
@@ -50,40 +57,38 @@ Then re-run this command. (``gh auth status`` reported:
 "@
         }
     } finally {
-        if ([System.IO.File]::Exists($errFile)) {
-            [System.IO.File]::Delete($errFile)
-        }
+        $proc.Dispose()
     }
 
     $script:_GhReady = $true
 }
 
-# Single-invocation gh wrapper. Captures stdout + stderr separately (via
-# temp file) and returns ExitCode/Stdout/Stderr so callers never have to
-# re-invoke `gh` just to recover stderr, and never feed stderr into
-# `ConvertFrom-Json` on success.
+# Single-invocation gh wrapper. Captures stdout + stderr separately
+# via .NET ProcessStartInfo (with async stream reads to avoid the
+# deadlock risk on chatty stderr) and returns ExitCode/Stdout/Stderr.
+# Going through .NET — not PowerShell's `2>` redirect — sidesteps the
+# `Out-File`/-WhatIf inheritance that otherwise prints
+# `What if: Performing the operation "Output to File"` noise when the
+# calling script is invoked with -WhatIf.
 function Invoke-Gh {
     param([Parameter(Mandatory)][string[]]$GhArgs)
-    # Bypass any caller WhatIfPreference / ConfirmPreference inheritance — these
-    # are coordination preferences for the script's own mutating ops, not for
-    # the internal gh capture pipeline. Without this, `2>$tempFile` prints
-    # "What if: Performing the operation Output to File" noise on -WhatIf
-    # runs and the temp file is never written, so $err is empty.
-    $WhatIfPreference = $false
-    $ConfirmPreference = 'None'
-    $errFile = [IO.Path]::GetTempFileName()
+    $psi = [System.Diagnostics.ProcessStartInfo]::new('gh')
+    foreach ($a in $GhArgs) { $null = $psi.ArgumentList.Add($a) }
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $proc = [System.Diagnostics.Process]::Start($psi)
     try {
-        $out = & gh @GhArgs 2>$errFile
-        $ec = $LASTEXITCODE
-        $err = ''
-        if ([System.IO.File]::Exists($errFile)) {
-            $err = [System.IO.File]::ReadAllText($errFile)
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        $proc.WaitForExit()
+        [pscustomobject]@{
+            ExitCode = $proc.ExitCode
+            Stdout   = $outTask.GetAwaiter().GetResult()
+            Stderr   = $errTask.GetAwaiter().GetResult()
         }
-        [pscustomobject]@{ ExitCode = $ec; Stdout = ($out | Out-String); Stderr = $err }
     } finally {
-        if ([System.IO.File]::Exists($errFile)) {
-            [System.IO.File]::Delete($errFile)
-        }
+        $proc.Dispose()
     }
 }
 

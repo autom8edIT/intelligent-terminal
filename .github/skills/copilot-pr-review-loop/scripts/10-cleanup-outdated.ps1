@@ -26,10 +26,10 @@
     The pull request number.
 
 .EXAMPLE
-    pwsh 09-cleanup-outdated.ps1 -PrNumber 122
+    pwsh 10-cleanup-outdated.ps1 -PrNumber 122
 
 .EXAMPLE
-    pwsh 09-cleanup-outdated.ps1 -PrNumber 122 -WhatIf
+    pwsh 10-cleanup-outdated.ps1 -PrNumber 122 -WhatIf
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(

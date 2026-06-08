@@ -141,7 +141,7 @@ message.
 | Script throws `prerequisite missing — gh CLI is not authenticated` | Run `gh auth login`. STOP the loop until the user completes auth. |
 | Trigger fails or no `copilot_work_started` event lands | Push a substantive (non-whitespace) commit — auto-assign on `synchronize` is the most reliable trigger. Persistent failure indicates Copilot Code Review may not be enabled on the repo / account (check repo Settings → Code & automation → Copilot, or account-level Copilot Pro/Pro+). |
 | No new review after waiting ~10 min | Quiet-period after recent dismissal or trivial-diff suppression. Push a substantive commit and retry. Do not blindly re-run `01-request-review.ps1` — it reports `InFlight` while Copilot is still a requested reviewer. |
-| Outdated-but-unresolved threads in the open list | Expected: unresolved state is the source of truth. Reply + resolve them like any other open thread. `09-cleanup-outdated.ps1` is only a final safety net. |
+| Outdated-but-unresolved threads in the open list | Expected: unresolved state is the source of truth. Reply + resolve them like any other open thread. `10-cleanup-outdated.ps1` is only a final safety net. |
 | Unsure whether to fix or decline a finding | See [references/03-triage-criteria.md](references/03-triage-criteria.md). |
 | Need a reply phrasing for "fixed", "declined", or "drift" | See [references/06-reply-templates.md](references/06-reply-templates.md). |
 
@@ -167,10 +167,10 @@ message.
 - [scripts/02-check-review-status.ps1](scripts/02-check-review-status.ps1) —
   single-shot snapshot of the PR's Copilot review state; emits
   `Converged: true` only when all three conditions hold.
-- [scripts/02-list-open-threads.ps1](scripts/02-list-open-threads.ps1) —
+- [scripts/03-list-open-threads.ps1](scripts/03-list-open-threads.ps1) —
   every unresolved PR review thread from **all reviewers** (Copilot,
   humans, github-advanced-security, etc.).
-- [scripts/06-reply-and-resolve.ps1](scripts/06-reply-and-resolve.ps1) —
+- [scripts/08-reply-and-resolve.ps1](scripts/08-reply-and-resolve.ps1) —
   post a reply and resolve in one call.
-- [scripts/09-cleanup-outdated.ps1](scripts/09-cleanup-outdated.ps1) —
+- [scripts/10-cleanup-outdated.ps1](scripts/10-cleanup-outdated.ps1) —
   safety net for outdated Copilot threads.

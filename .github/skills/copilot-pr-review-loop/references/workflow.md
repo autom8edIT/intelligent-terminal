@@ -31,16 +31,16 @@ the pushed commit SHA.
 
 | Step | Agent type | Budget | Returns | Notes |
 |------|------------|--------|---------|-------|
-| 1 — Request review | _(parent)_ | n/a | `01-request-review.ps1` JSON; record `WorkStartedAt` and the pre-trigger `LatestCopilotReview.submittedAt` as **baselines** for step 2 | — |
+| 1 — Request review | _(parent)_ | n/a | call `02-check-review-status.ps1` first; capture `LatestCopilotReview.submittedAt` as **baseline** for step 2; if `CopilotPending: true` skip the trigger and go to step 2 directly; otherwise run `01-request-review.ps1` (which returns its own `WorkStartedAt` for diagnostics). | `01-request-review.ps1` keeps its own InFlight short-circuit as a safety net, but the canonical "is Copilot pending?" signal lives in `02-check-review-status.ps1`. |
 | 2 — Wait for review | `general-purpose` | **20 min hard cap**, poll every ~3 min | `02-check-review-status.ps1` JSON + recommendation (`ready` \| `give-up-push-commit`); `ready` iff `LatestCopilotReview.submittedAt > baseline` AND `ReviewAtHead: true` | one bounded sub-agent, not extension-driven; on `give-up-push-commit`, parent falls back to a substantive commit |
-| 3 — List + categorize open threads | `explore` | 5 min | table of `{thread_id, file, line, author, severity, summary}` from `02-list-open-threads.ps1` | classify each row's `author` as `copilot` vs `human-or-bot` so triage can apply the correct policy |
+| 3 — List + categorize open threads | `explore` | 5 min | table of `{thread_id, file, line, author, severity, summary}` from `03-list-open-threads.ps1` | classify each row's `author` as `copilot` vs `human-or-bot` so triage can apply the correct policy |
 | 4 — Triage | `general-purpose` | 5 min per ≤5 threads (parent batches if more) | table of `{thread_id, fix \| decline \| escalate-to-user, one-line rationale}` per [03-triage-criteria.md](03-triage-criteria.md) | human / advanced-security threads default to `escalate-to-user` unless the user explicitly scoped them in |
 | 5 — Apply fix (one per finding, parallel **max 5 concurrent**) | `general-purpose` | 5 min each | `{files_touched, one-line summary, status}` | each fix sub-agent **first researches the repo's own conventions** for the area it's editing (`.github/instructions/*.md` matching the file's `applyTo` pattern, `.github/skills/`, `AGENTS.md`, `CONTRIBUTING.md`, neighbor-file patterns) — never invent a generic answer that contradicts repo practice. Parent merges and reconciles file conflicts before step 6; the 5-cap prevents fix-fanout chaos. If step 3 returned >5 findings, parent runs step 5 in waves of ≤5. |
 | 6 — Build + test per repo conventions | `task` (may fan out to several `explore` sub-agents for discovery) | 10 min | pass/fail + failure excerpts; **discovery first** — read `.github/instructions/*.md`, `AGENTS.md`, `CONTRIBUTING.md`, `README.md`, `package.json` scripts, `Makefile`, language tooling, AND recent CI workflow runs to learn the *actual* command set in use; THEN run those exact commands on the changed code | independent discovery axes (build tool / test runner / lint / spelling / format) can run as separate `explore` sub-agents in parallel; cache discovered commands per round |
 | 7 — Commit + push | _(parent)_ | n/a | parent runs `git commit` + `git push` directly | one focused commit per round; record the pushed SHA |
-| 8 — Draft + post replies | `general-purpose` drafts → _(parent)_ posts | draft 5 min | sub-agent returns `{thread_id, reply_body}` per open thread citing the pushed SHA; parent then runs `06-reply-and-resolve.ps1` for each | reply+resolve are mutations; the parent owns mutations |
+| 8 — Draft + post replies | `general-purpose` drafts → _(parent)_ posts | draft 5 min | sub-agent returns `{thread_id, reply_body}` per open thread citing the pushed SHA; parent then runs `08-reply-and-resolve.ps1` for each | reply+resolve are mutations; the parent owns mutations |
 | 9 — Convergence verify | `explore` | 3 min | `02-check-review-status.ps1` JSON + independent HEAD-vs-`LatestCopilotReview.commitOid` sanity check | converged iff `Converged: true`; otherwise loop back to step 1 |
-| 10 — Cleanup outdated (once after convergence) | _(parent)_ | n/a | `09-cleanup-outdated.ps1` | safety net only |
+| 10 — Cleanup outdated (once after convergence) | _(parent)_ | n/a | `10-cleanup-outdated.ps1` | safety net only |
 
 When the cap is reached and the work is still `partial`, the parent
 narrows the input (batch smaller in step 4 / split fix scope in step 5)
@@ -51,10 +51,14 @@ or takes the step over itself.
 Command snippets assume your current directory is the skill root.
 
 - [ ] **1.** **Request review (parent):**
-  `pwsh ./scripts/01-request-review.ps1 -PrNumber <n>`. Returns JSON
-  immediately. Before this call, capture
-  `baseline_submitted_at = <current LatestCopilotReview.submittedAt or null>`
-  via `02-check-review-status.ps1` — step 2 uses this baseline to
+  FIRST call `pwsh ./scripts/02-check-review-status.ps1 -PrNumber <n>`
+  and capture `baseline_submitted_at = LatestCopilotReview.submittedAt`
+  (may be null) AND read `CopilotPending`.
+  - If `CopilotPending: true`, skip the trigger — Copilot is already
+    reviewing; go to step 2 with this baseline.
+  - Otherwise call `pwsh ./scripts/01-request-review.ps1 -PrNumber <n>`
+    to trigger and verify via the `copilot_work_started` event.
+  Both paths end with the same baseline that step 2 uses to
   distinguish the new review from any preexisting one.
 
 - [ ] **2.** **Wait for review (sub-agent, one bounded run, 20-min
@@ -70,7 +74,7 @@ Command snippets assume your current directory is the skill root.
   extensions — the parent has no useful work during a passive wait.
 
 - [ ] **3.** **List + categorize open threads (sub-agent, 5-min
-  budget):** `pwsh ./scripts/02-list-open-threads.ps1 -PrNumber <n>`
+  budget):** `pwsh ./scripts/03-list-open-threads.ps1 -PrNumber <n>`
   emits every unresolved thread from every reviewer. Sub-agent
   classifies each row's `author` as `copilot` (loop-owned) vs
   `human-or-other-bot` (default `escalate-to-user` in triage unless
@@ -116,7 +120,7 @@ Command snippets assume your current directory is the skill root.
   using [06-reply-templates.md](06-reply-templates.md) and returns
   `{thread_id, reply_body}` pairs that quote the step-7 SHA. Parent
   then runs
-  `pwsh ./scripts/06-reply-and-resolve.ps1 -ThreadId <id> -Body <text>`
+  `pwsh ./scripts/08-reply-and-resolve.ps1 -ThreadId <id> -Body <text>`
   for each. Reply + resolve are mutations — the parent owns mutations.
 
 - [ ] **9.** **Convergence check (sub-agent, 3-min budget):**
@@ -128,7 +132,7 @@ Command snippets assume your current directory is the skill root.
   converged → step 10. Otherwise, loop back to step 1.
 
 - [ ] **10.** **(Once, after convergence) Cleanup outdated (parent):**
-  `pwsh ./scripts/09-cleanup-outdated.ps1 -PrNumber <n>` — safety
+  `pwsh ./scripts/10-cleanup-outdated.ps1 -PrNumber <n>` — safety
   net for stale `isOutdated: true` Copilot threads. Most loops
   converge with nothing to clean.
 

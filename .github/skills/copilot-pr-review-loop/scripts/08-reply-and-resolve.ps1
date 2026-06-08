@@ -23,11 +23,11 @@
     thread.
 
 .EXAMPLE
-    pwsh 06-reply-and-resolve.ps1 -ThreadId PRRT_kw... -Body "Fixed in abc1234."
+    pwsh 08-reply-and-resolve.ps1 -ThreadId PRRT_kw... -Body "Fixed in abc1234."
 
 .EXAMPLE
     # Decline with rationale, do not resolve yet
-    pwsh 06-reply-and-resolve.ps1 -ThreadId PRRT_kw... -NoResolve `
+    pwsh 08-reply-and-resolve.ps1 -ThreadId PRRT_kw... -NoResolve `
         -Body "Declining: this would require cross-class plumbing for a hypothetical race."
 #>
 [CmdletBinding()]

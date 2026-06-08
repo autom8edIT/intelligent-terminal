@@ -99,9 +99,9 @@ threads:
   lines. Filtering on `!isOutdated` would silently drop those
   threads, leaving the PR's open-conversations list non-empty even
   after the underlying code is fixed.
-- `02-list-open-threads.ps1` therefore lists every unresolved
+- `03-list-open-threads.ps1` therefore lists every unresolved
   thread with no `isOutdated` filter.
-- `09-cleanup-outdated.ps1` is a safety net only — for the rare
+- `10-cleanup-outdated.ps1` is a safety net only — for the rare
   case where a thread becomes outdated AFTER your last per-round
   fetch.
 
