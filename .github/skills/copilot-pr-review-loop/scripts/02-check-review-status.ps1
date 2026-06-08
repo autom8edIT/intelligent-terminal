@@ -34,10 +34,19 @@
                              listed in `requested_reviewers` on the PR (a
                              review is in flight; the caller should wait
                              rather than re-trigger)
-      - Converged          : true iff ReviewAtHead && NoNewComments &&
-                             OpenThreadsAwaitingReply == 0. The agent has
-                             done its work; any remaining open threads are
-                             explicit hand-offs to the human merge owner.
+      - Mode               : "copilot" if Copilot Code Review has touched
+                             the PR (LatestCopilotReview exists OR
+                             CopilotPending is true) — runs multi-iteration.
+                             "human-only" otherwise — runs single-iteration
+                             (skip 01-request-review.ps1 and the wait loop;
+                             go straight to triaging existing threads).
+      - Converged          : true iff the agent has done its job.
+                             In `copilot` mode: ReviewAtHead && NoNewComments
+                             && OpenThreadsAwaitingReply == 0.
+                             In `human-only` mode: OpenThreadsAwaitingReply
+                             == 0. Open threads may remain in either mode
+                             — those are explicit hand-offs to the human
+                             merge owner.
 
     Canonical agent loop (workflow.md):
       1. Call this script → capture LatestCopilotReview.submittedAt as
@@ -267,12 +276,25 @@ $result = [ordered]@{
     OpenThreadCount           = $openCount
     OpenThreadsAwaitingReply  = $awaitingCount
     CopilotPending            = $copilotPending
-    # Converged = "the agent has nothing more to do this round".
-    # Open threads may remain (escalate-to-user hand-offs, contested
-    # declines) — those are by design; the human owns the merge
-    # decision. The agent converges when the latest review is at
-    # HEAD, produced no new comments, AND every remaining open
-    # thread already has the agent's reply.
-    Converged                 = ($reviewAtHead -and $noNewComments -and $awaitingCount -eq 0)
+    # Mode = "copilot" if Copilot Code Review has touched the PR
+    # (review exists OR currently pending) — runs multi-iteration:
+    # trigger → wait → triage → reply → re-trigger, until convergence.
+    # Mode = "human-only" if Copilot isn't enabled / never showed
+    # up — runs a single iteration: triage + reply to whatever
+    # threads already exist (no auto-trigger, no auto-wait, no
+    # re-iteration unless a human posts new comments).
+    Mode                      = if ($latest -or $copilotPending) { 'copilot' } else { 'human-only' }
+    # Converged = "the agent has nothing more to do".
+    # - copilot mode: review at HEAD + no new comments + every open
+    #   thread already has the agent's reply.
+    # - human-only mode: every open thread already has the agent's
+    #   reply. The single iteration ends here.
+    # Remaining open threads (in either mode) may be deliberate
+    # human hand-offs — the human owns the merge decision.
+    Converged = if ($latest -or $copilotPending) {
+        $reviewAtHead -and $noNewComments -and $awaitingCount -eq 0
+    } else {
+        $awaitingCount -eq 0
+    }
 }
 $result | ConvertTo-Json -Depth 5 -Compress

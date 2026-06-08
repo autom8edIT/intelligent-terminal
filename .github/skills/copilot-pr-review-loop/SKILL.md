@@ -34,9 +34,15 @@ installed and authenticated (see Prerequisites).
 - `gh` CLI installed and authenticated against the target repository.
 - PowerShell on PATH — Windows PowerShell 5.1+ (`powershell.exe`) or
   PowerShell 7+ (`pwsh`). Both are tested.
-- The repository must have Copilot Code Review enabled (repo or
-  account-level Copilot Pro/Pro+); if not, the trigger step will
-  cleanly throw and the loop cannot proceed.
+- **Copilot Code Review enabled is OPTIONAL.** When enabled (repo or
+  account-level Copilot Pro/Pro+), the skill runs in **multi-iteration
+  mode**: trigger → wait → triage → reply → re-trigger, until
+  convergence. When NOT enabled, the skill runs in **single-iteration
+  mode**: triage + reply to whatever review threads (human or other
+  bots) already exist on the PR, once. No auto-trigger, no auto-wait,
+  no re-iteration unless a human posts new comments later.
+  `02-check-review-status.ps1` reports the mode in its `Mode` field
+  (`copilot` vs `human-only`).
 
 Every script dot-sources [scripts/_lib.ps1](scripts/_lib.ps1) which
 runs `Assert-GhReady` on load: if `gh` is missing OR `gh auth status`
@@ -48,15 +54,22 @@ loop — do not retry or work around it.
 ## Step-by-Step Workflow
 
 Each round runs steps 1–9; step 10 is a one-time cleanup after
-convergence. Steps are coordinated by the parent agent and **every
-substantive step is delegated to a fresh sub-agent with a bounded
-budget** (default ≤5 min; per-step exceptions in the delegation
-table in [references/workflow.md](references/workflow.md)), so the
-parent never blocks on long-running work and each step gets a clean
-context. Sub-agents must summarize and return before their budget
-expires; the parent extends via `write_agent` when needed. Full
-procedure, per-step budgets, return contracts, and the extension
-protocol live in [references/workflow.md](references/workflow.md).
+convergence. The parent agent coordinates; every substantive step is
+delegated to a fresh sub-agent with a bounded budget (default ≤5 min;
+per-step exceptions in the delegation table in
+[references/workflow.md](references/workflow.md)), so the parent
+never blocks on long-running work and each step gets a clean context.
+Sub-agents must summarize and return before their budget expires; the
+parent extends via `write_agent` when needed. Full procedure,
+per-step budgets, return contracts, and the extension protocol live
+in [references/workflow.md](references/workflow.md).
+
+**Single-iteration mode (no Copilot)**: when
+`02-check-review-status.ps1` reports `Mode: "human-only"`, the parent
+skips steps 1–2 (no trigger, no wait) and runs steps 3–8 once. The
+loop terminates when `Converged: true` (= all open threads have the
+agent's reply). Re-iteration only happens if a human posts new
+comments later — re-run the skill at that point.
 
 ```
 Request review → Wait for review (sub-agent) → List + categorize open
