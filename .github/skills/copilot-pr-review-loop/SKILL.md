@@ -29,7 +29,11 @@ has `gh` CLI authenticated and Copilot Code Review is enabled.
 ## Prerequisites
 
 - `gh` CLI installed and authenticated against the target repository.
-- PowerShell 7+ (`pwsh`) on PATH for the bundled scripts.
+- PowerShell **7.3+** (`pwsh`) on PATH — the workflow uses
+  `ConvertFrom-Json -DateKind String` to keep the snapshot's ISO
+  timestamps as strings (default `ConvertFrom-Json` re-binds them to
+  `[datetime]`, which silently breaks lexicographic baseline
+  comparisons via local-culture interpolation).
 - The repository must have Copilot Code Review enabled (repo or
   account-level Copilot Pro/Pro+); if not, the trigger step will
   cleanly throw and the loop cannot proceed.
