@@ -6,8 +6,11 @@ description: 'Drive a GitHub pull request through repeated rounds of Copilot cod
 # Copilot PR Review Loop
 
 Drive any GitHub pull request through repeated rounds of Copilot code
-review until a round produces no new comments **and** the open-threads
-list is empty. Repository-agnostic — works on any repo that has
+review until the agent has done its job — every Copilot finding has
+a reply from the agent (fix-acknowledgement, decline-with-rationale,
+or explicit escalate-to-user hand-off). Remaining open threads, if
+any, are deliberate hand-offs to the human merge owner — they're
+not loop failures. Repository-agnostic — works on any repo that has
 Copilot Code Review enabled, run from a machine with `gh` CLI
 installed and authenticated (see Prerequisites).
 
@@ -93,10 +96,15 @@ message.
   `01-request-review.ps1` enforces this via event-`id` comparison —
   don't weaken it.
 - **A "no new comments" review is necessary but not sufficient for
-  convergence.** It must ALSO be at the current `HEAD` SHA and the
-  open-threads list must be empty. A stale review on an earlier
-  commit lets a regression slip through unreviewed.
-  `02-check-review-status.ps1`'s `Converged` flag enforces all three.
+  convergence.** It must ALSO be at the current `HEAD` SHA AND every
+  open thread must have a reply from the agent
+  (`OpenThreadsAwaitingReply == 0`). A stale review on an earlier
+  commit lets a regression slip through unreviewed; an open Copilot
+  thread the agent hasn't replied to means the loop hasn't done its
+  job yet. `02-check-review-status.ps1`'s `Converged` flag enforces
+  all three. Open threads with our reply (escalate-to-user
+  hand-offs, contested declines) are by design — they're awaiting
+  the human merge owner, not the loop.
 - **Reply *and* resolve every open thread, including declines and
   outdated ones.** Resolving without a reply leaves no record of why
   the issue was considered addressed; replying without resolving

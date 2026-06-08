@@ -150,7 +150,7 @@ query($o:String!,$r:String!,$n:Int!,$after:String){
         pageInfo{endCursor hasNextPage}
         nodes{
           isResolved
-          comments(last:10){nodes{author{login}}}
+          comments(last:100){nodes{author{login}}}
         }
       }
     }
