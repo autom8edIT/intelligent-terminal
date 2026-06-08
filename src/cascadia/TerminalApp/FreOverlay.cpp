@@ -13,6 +13,7 @@
 #include "AgentPaneLog.h"
 
 #include <winrt/Windows.UI.Xaml.Documents.h>
+#include <mutex>
 
 using namespace winrt::Windows::Foundation;
 using namespace winrt::Windows::UI::Xaml;
@@ -22,6 +23,13 @@ namespace Automation = winrt::Windows::UI::Xaml::Automation;
 
 namespace winrt::TerminalApp::implementation
 {
+    // ── Static prewarm state (single-flight per process) ────────────
+    // See FreOverlay.h for the design contract. Definitions live here
+    // because C++ requires out-of-line definitions for non-inline static
+    // class members.
+    std::mutex FreOverlay::s_prewarmMutex;
+    winrt::Windows::Foundation::IAsyncAction FreOverlay::s_prewarmAction{ nullptr };
+
     FreOverlay::FreOverlay()
     {
         InitializeComponent();
@@ -315,6 +323,16 @@ namespace winrt::TerminalApp::implementation
         // "ProgressRing".
         Automation::AutomationProperties::SetName(
             SavingProgressRing(), RS_(L"FreOverlay_SettingUp"));
+
+        // ── Pre-warm winget source cache ───────────────────────────────
+        // While the user reads the Welcome + Settings pages (typically
+        // 5-30s), pre-warm winget's source manifest cache so the on-Save
+        // install skips the slow refresh step. Best-effort, no error UI.
+        // Save will await any in-flight prewarm before its own winget call
+        // to keep the two operations serialised.
+        _MaybeStartPrewarm(
+            /*copilotMissing*/ !_IsAgentInstalled(L"copilot"),
+            /*nodeMissing*/ !_IsNodeInstalled());
     }
 
     // ── Agent selection changed ─────────────────────────────────────────
@@ -409,6 +427,98 @@ namespace winrt::TerminalApp::implementation
                     self->SaveButton().Focus(FocusState::Programmatic);
                 }
             });
+    }
+
+    // ── WinGet source pre-warm ──────────────────────────────────────────
+    //
+    // Kick off `winget source update --name winget` in the background as
+    // soon as the FRE overlay is shown, so that the on-Save `winget install`
+    // sees a warm source manifest cache and skips the 3-20s refresh step.
+    // Gated on whether the install would actually run (Copilot or Node
+    // missing) AND winget being available. Single-flight per process —
+    // re-entrant Initialize() calls and multi-window FRE coalesce onto
+    // one running prewarm. The Save handler awaits s_prewarmAction before
+    // its own winget call (see _SaveAndInstallAsync), guaranteeing the
+    // two winget operations never run concurrently.
+
+    void FreOverlay::_MaybeStartPrewarm(bool copilotMissing, bool nodeMissing)
+    {
+        // Gate: nothing to pre-warm if no winget install step will run.
+        if (!copilotMissing && !nodeMissing)
+        {
+            return;
+        }
+        if (!_IsWingetInstalled())
+        {
+            return;
+        }
+
+        // Single-flight: first caller wins; later callers find the
+        // existing IAsyncAction in the slot and bail out.
+        std::lock_guard<std::mutex> lock{ s_prewarmMutex };
+        if (s_prewarmAction)
+        {
+            return;
+        }
+        // _RunPrewarmAsync starts on the calling thread, hops to background
+        // at its first co_await, and returns the IAsyncAction handle here
+        // for storage and later co_await by Save.
+        s_prewarmAction = _RunPrewarmAsync();
+    }
+
+    winrt::Windows::Foundation::IAsyncAction FreOverlay::_RunPrewarmAsync()
+    {
+        // Hop to background — must never block the UI thread.
+        co_await winrt::resume_background();
+
+        try
+        {
+            _agentPaneLog("[FRE] Pre-warm: winget source update --name winget");
+
+            STARTUPINFOW si{};
+            si.cb = sizeof(si);
+            si.dwFlags = STARTF_USESHOWWINDOW;
+            si.wShowWindow = SW_HIDE;
+            PROCESS_INFORMATION pi{};
+
+            // CreateProcessW requires a *writable* cmdline buffer (it may
+            // mutate the string in-place when parsing). `--disable-interactivity`
+            // prevents any prompt (e.g. source first-run agreement) from
+            // hanging the hidden child process forever.
+            wchar_t cmdline[] = L"winget source update --name winget --disable-interactivity";
+            if (!CreateProcessW(nullptr, cmdline, nullptr, nullptr, FALSE,
+                                CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+            {
+                _agentPaneLog("[FRE] Pre-warm: CreateProcess failed err="
+                              + std::to_string(GetLastError()));
+                co_return;
+            }
+
+            // Wait up to 120s. Corporate proxies / cold caches can push
+            // honest cases past 30s, so we err on the side of patience.
+            // We deliberately do NOT TerminateProcess on timeout: killing
+            // winget mid-write can corrupt its source DB. The Save handler
+            // awaits this whole coroutine, which only completes after
+            // WaitForSingleObject returns, so even a slow prewarm cannot
+            // collide with the eventual install.
+            const DWORD wait = WaitForSingleObject(pi.hProcess, 120000);
+            DWORD exitCode = 0;
+            GetExitCodeProcess(pi.hProcess, &exitCode);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+
+            _agentPaneLog(wait == WAIT_TIMEOUT
+                              ? "[FRE] Pre-warm: still running after 120s (proceeding)"
+                              : "[FRE] Pre-warm: completed exit=" + std::to_string(exitCode));
+        }
+        catch (...)
+        {
+            // Pre-warm is strictly best-effort; never let an exception
+            // escape into the IAsyncAction promise. Save's co_await on
+            // s_prewarmAction also has its own try/catch as belt-and-
+            // suspenders, but this is the primary guard.
+            LOG_CAUGHT_EXCEPTION();
+        }
     }
 
     // ── WinGet install helper ───────────────────────────────────────────
@@ -717,6 +827,37 @@ namespace winrt::TerminalApp::implementation
                 _agentPaneLog("[FRE] winget not found on PATH");
                 _ShowProblem(FreProblemKind::WingetMissing);
                 co_return;
+            }
+
+            // ── Await any in-flight pre-warm before kicking off install ──
+            // The Initialize() handler may have started a `winget source
+            // update` in the background. Winget's intra-process
+            // coordination across concurrent operations is not a
+            // guaranteed contract — we serialise here to avoid two
+            // winget instances stepping on each other. Snapshot the
+            // action under the mutex (Initialize may still be racing to
+            // assign it), then co_await OUTSIDE the lock (holding a
+            // std::mutex across a suspension point is undefined behaviour).
+            winrt::Windows::Foundation::IAsyncAction pending{ nullptr };
+            {
+                std::lock_guard<std::mutex> lock{ s_prewarmMutex };
+                pending = s_prewarmAction;
+            }
+            if (pending &&
+                pending.Status() != winrt::Windows::Foundation::AsyncStatus::Completed)
+            {
+                _agentPaneLog("[FRE] Save: waiting for pre-warm to finish");
+                try
+                {
+                    co_await pending;
+                }
+                catch (...)
+                {
+                    // Pre-warm failure is non-fatal; install will just
+                    // pay the source-refresh cost itself.
+                    LOG_CAUGHT_EXCEPTION();
+                }
+                _agentPaneLog("[FRE] Save: pre-warm done, proceeding with install");
             }
         }
 

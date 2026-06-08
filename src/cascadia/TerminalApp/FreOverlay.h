@@ -85,6 +85,21 @@ namespace winrt::TerminalApp::implementation
         static bool _IsNodeInstalled();
         static bool _IsWingetInstalled();
 
+        // ── Winget source pre-warm coordination ─────────────────────
+        // While the FRE overlay is on screen (Welcome + Settings pages),
+        // pre-warm winget's source manifest cache in the background so
+        // the on-Save `winget install` skips the 3-20s source refresh.
+        // Single-flight per process — re-entrant Initialize() calls and
+        // multi-window FRE coalesce onto one running prewarm. The Save
+        // handler awaits s_prewarmAction before its own winget call to
+        // guarantee the two winget operations never run concurrently
+        // (winget's intra-process locking is not a guaranteed contract).
+        static std::mutex s_prewarmMutex;
+        static winrt::Windows::Foundation::IAsyncAction s_prewarmAction;
+
+        static void _MaybeStartPrewarm(bool copilotMissing, bool nodeMissing);
+        static winrt::Windows::Foundation::IAsyncAction _RunPrewarmAsync();
+
         // Run a winget install synchronously on a background thread.
         // Returns true on success.
         static winrt::Windows::Foundation::IAsyncOperation<bool> _WingetInstallAsync(winrt::hstring packageId);
