@@ -18,7 +18,11 @@
     retry (auto-assign on `synchronize` is the most reliable fallback).
 
 .PARAMETER PrNumber       PR number (required).
-.PARAMETER Owner / .PARAMETER Repo   Optional; auto-resolved from `gh repo view`.
+.PARAMETER Owner
+    Optional; auto-resolved from `gh repo view`.
+
+.PARAMETER Repo
+    Optional; auto-resolved from `gh repo view`.
 .PARAMETER VerifySeconds  Verification poll window (1..600, default 30).
 
 .EXAMPLE

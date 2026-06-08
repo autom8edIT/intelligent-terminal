@@ -13,7 +13,11 @@
     on the same thread are intentionally not surfaced here; this script
     is the input to triage, not to reading conversation history.
 
-.PARAMETER Owner / .PARAMETER Repo   Optional; auto-resolved from `gh repo view`.
+.PARAMETER Owner
+    Optional; auto-resolved from `gh repo view`.
+
+.PARAMETER Repo
+    Optional; auto-resolved from `gh repo view`.
 .PARAMETER PrNumber                  The pull request number.
 
 .EXAMPLE
