@@ -25,11 +25,14 @@
                              reviewers); informational — convergence does
                              NOT require this to be zero
       - OpenThreadsAwaitingReply: number of open threads where the
-                             authenticated user (`gh api user`) has not
-                             yet posted a comment. THIS is what drives
-                             convergence — threads we've already replied
-                             to may stay open deliberately as human
-                             hand-offs
+                             LAST comment is NOT from the authenticated
+                             user (`gh api user`). "Ball-in-court"
+                             model: a Copilot/human comment with no
+                             reply from us OR a re-raise after our
+                             earlier reply both count as awaiting. A
+                             thread where WE are the latest commenter
+                             counts as "done from our side" (the human
+                             merge owner decides next).
       - CopilotPending     : true iff the Copilot reviewer bot is currently
                              listed in `requested_reviewers` on the PR (a
                              review is in flight; the caller should wait
@@ -210,26 +213,25 @@ if ($latest) {
 $openThreads = @($allThreads | Where-Object { -not $_.isResolved })
 $openCount = $openThreads.Count
 
-# OpenThreadsAwaitingReply: open threads where the authenticated
-# user ($me) has NOT yet posted a comment. These are the threads
-# where the agent still owes a reply (fix-acknowledgement, decline-
-# with-rationale, or explicit escalate-to-user hand-off).
-#
-# Threads we've already replied to may still be `isResolved: false`
-# deliberately — e.g. an escalate-to-user reply left open for the
-# human to decide. Those count as "our work done", not as failures.
+# OpenThreadsAwaitingReply: open threads where the LAST comment is
+# NOT from the authenticated user. "Ball is in our court" model:
+#   - Copilot/human posts a finding → last=them → awaiting our reply.
+#   - We reply → last=us → ball passes back → not awaiting.
+#   - Copilot re-raises after our reply → last=them again → awaiting.
+# Using "last comment" (not "any comment by us in window") is what
+# correctly handles re-raised threads. Threads we've replied to but
+# the reviewer hasn't yet acted on count as "done from our side" —
+# the human merge owner decides what to do with them next.
 $awaitingReply = @($openThreads | Where-Object {
     $thread = $_
-    $repliedByMe = $false
-    if ($thread.comments -and $thread.comments.nodes) {
-        foreach ($c in $thread.comments.nodes) {
-            if ($c.author -and $c.author.login -and $c.author.login -eq $me) {
-                $repliedByMe = $true
-                break
-            }
+    $lastAuthor = $null
+    if ($thread.comments -and $thread.comments.nodes -and $thread.comments.nodes.Count -gt 0) {
+        $lastComment = $thread.comments.nodes[$thread.comments.nodes.Count - 1]
+        if ($lastComment -and $lastComment.author -and $lastComment.author.login) {
+            $lastAuthor = $lastComment.author.login
         }
     }
-    -not $repliedByMe
+    $lastAuthor -ne $me
 })
 $awaitingCount = $awaitingReply.Count
 
