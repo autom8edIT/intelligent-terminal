@@ -34,15 +34,16 @@ installed and authenticated (see Prerequisites).
 - `gh` CLI installed and authenticated against the target repository.
 - PowerShell on PATH — Windows PowerShell 5.1+ (`powershell.exe`) or
   PowerShell 7+ (`pwsh`). Both are tested.
-- **Copilot Code Review enabled is OPTIONAL.** When enabled (repo or
-  account-level Copilot Pro/Pro+), the skill runs in **multi-iteration
-  mode**: trigger → wait → triage → reply → re-trigger, until
-  convergence. When NOT enabled, the skill runs in **single-iteration
-  mode**: triage + reply to whatever review threads (human or other
-  bots) already exist on the PR, once. No auto-trigger, no auto-wait,
-  no re-iteration unless a human posts new comments later.
-  `02-check-review-status.ps1` reports the mode in its `Mode` field
-  (`copilot` vs `human-only`).
+- Copilot Code Review is the primary use case (`01-request-review.ps1`
+  uses GraphQL `requestReviewsByLogin` to trigger Copilot). It is
+  **NOT a hard requirement** — if `01-request-review.ps1` fails
+  because Copilot isn't enabled on the repo / account, the agent can
+  still drive existing review threads (human, advanced-security, etc.)
+  to completion by running steps 3–8 once as a single iteration; just
+  skip the trigger + wait. There is no auto-detect for "Copilot
+  unavailable" — the agent makes that decision after the trigger
+  fails (the script can't reliably tell "Copilot disabled" from
+  "Copilot enabled but not yet triggered" from API state alone).
 
 Every script dot-sources [scripts/_lib.ps1](scripts/_lib.ps1) which
 runs `Assert-GhReady` on load: if `gh` is missing OR `gh auth status`
@@ -64,12 +65,13 @@ parent extends via `write_agent` when needed. Full procedure,
 per-step budgets, return contracts, and the extension protocol live
 in [references/workflow.md](references/workflow.md).
 
-**Single-iteration mode (no Copilot)**: when
-`02-check-review-status.ps1` reports `Mode: "human-only"`, the parent
-skips steps 1–2 (no trigger, no wait) and runs steps 3–8 once. The
-loop terminates when `Converged: true` (= all open threads have the
-agent's reply). Re-iteration only happens if a human posts new
-comments later — re-run the skill at that point.
+**Single-iteration fallback (Copilot unavailable)**: when
+`01-request-review.ps1` throws because Copilot Code Review isn't
+enabled on the repo / account (the GraphQL mutation reports the bot
+isn't a valid reviewer), the agent skips steps 2 and runs steps 3–8
+once. `02-check-review-status.ps1` then reports `Converged: true`
+when `OpenThreadsAwaitingReply == 0`. Re-iteration happens only when
+a human posts new comments later — re-run the skill at that point.
 
 ```
 Request review → Wait for review (sub-agent) → List + categorize open

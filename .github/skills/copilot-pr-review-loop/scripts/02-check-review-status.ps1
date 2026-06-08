@@ -37,18 +37,25 @@
                              listed in `requested_reviewers` on the PR (a
                              review is in flight; the caller should wait
                              rather than re-trigger)
-      - Mode               : "copilot" if Copilot Code Review has touched
-                             the PR (LatestCopilotReview exists OR
-                             CopilotPending is true) — runs multi-iteration.
-                             "human-only" otherwise — runs single-iteration
-                             (skip 01-request-review.ps1 and the wait loop;
-                             go straight to triaging existing threads).
       - Converged          : true iff the agent has done its job.
-                             In `copilot` mode: ReviewAtHead && NoNewComments
-                             && OpenThreadsAwaitingReply == 0.
-                             In `human-only` mode: OpenThreadsAwaitingReply
-                             == 0. Open threads may remain in either mode
-                             — those are explicit hand-offs to the human
+                             - When a Copilot review is at HEAD:
+                               ReviewAtHead && NoNewComments &&
+                               OpenThreadsAwaitingReply == 0.
+                             - When no Copilot review has been observed
+                               on this PR (LatestCopilotReview is null
+                               AND CopilotPending is false): just
+                               OpenThreadsAwaitingReply == 0. Note this
+                               ALSO fires for a brand-new PR with zero
+                               threads — meaning "nothing to do yet";
+                               the agent should still trigger a Copilot
+                               review via 01-request-review.ps1 if
+                               Copilot is enabled on the repo. Single-
+                               iteration mode (skip the trigger) is the
+                               agent's decision after 01 fails with a
+                               specific Copilot-disabled error, NOT an
+                               auto-detected state from this script.
+                             Open threads may remain in either case —
+                             those are explicit hand-offs to the human
                              merge owner.
 
     Canonical agent loop (workflow.md):
@@ -56,6 +63,11 @@
          baseline AND read CopilotPending.
       2. If CopilotPending is true, skip the trigger step — Copilot is
          already reviewing. Otherwise, call 01-request-review.ps1.
+         If 01 throws with a Copilot-disabled error (e.g. the bot
+         isn't a valid reviewer on this repo), the agent may fall
+         back to single-iteration mode: skip the wait, jump to
+         03-list-open-threads.ps1, triage + reply to whatever exists,
+         done.
       3. Wait sub-agent polls this script until either submittedAt
          advances past baseline AND ReviewAtHead is true, OR Converged.
       4. On convergence end the loop; otherwise fetch threads via
@@ -278,21 +290,21 @@ $result = [ordered]@{
     OpenThreadCount           = $openCount
     OpenThreadsAwaitingReply  = $awaitingCount
     CopilotPending            = $copilotPending
-    # Mode = "copilot" if Copilot Code Review has touched the PR
-    # (review exists OR currently pending) — runs multi-iteration:
-    # trigger → wait → triage → reply → re-trigger, until convergence.
-    # Mode = "human-only" if Copilot isn't enabled / never showed
-    # up — runs a single iteration: triage + reply to whatever
-    # threads already exist (no auto-trigger, no auto-wait, no
-    # re-iteration unless a human posts new comments).
-    Mode                      = if ($latest -or $copilotPending) { 'copilot' } else { 'human-only' }
     # Converged = "the agent has nothing more to do".
-    # - copilot mode: review at HEAD + no new comments + every open
-    #   thread already has the agent's reply.
-    # - human-only mode: every open thread already has the agent's
-    #   reply. The single iteration ends here.
-    # Remaining open threads (in either mode) may be deliberate
-    # human hand-offs — the human owns the merge decision.
+    # - When a Copilot review is at HEAD: ReviewAtHead && NoNewComments
+    #   && OpenThreadsAwaitingReply == 0.
+    # - When no Copilot review has been observed on this PR: just
+    #   OpenThreadsAwaitingReply == 0 (single-iteration end). Note
+    #   that this branch ALSO fires for brand-new PRs where Copilot
+    #   simply hasn't been triggered yet — convergence in that case
+    #   means "no findings exist yet to reply to", which is correct
+    #   per the contract but the agent should still trigger the
+    #   first review via 01-request-review.ps1 if Copilot is enabled
+    #   on the repo. (We deliberately do NOT auto-detect "Copilot
+    #   unavailable" here — that's not reliably inferrable from
+    #   API state. The agent decides single-iteration based on
+    #   01-request-review failing with a specific Copilot-disabled
+    #   error.)
     Converged = if ($latest -or $copilotPending) {
         $reviewAtHead -and $noNewComments -and $awaitingCount -eq 0
     } else {
