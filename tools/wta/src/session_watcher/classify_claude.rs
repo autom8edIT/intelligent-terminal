@@ -67,16 +67,31 @@ mod tests {
 
     #[test]
     fn tool_use_maps_to_tool_starting() {
-        let r = rec(r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}"#);
+        let r = rec(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}"#,
+        );
         let out = classify(&r, &"k".to_string());
-        assert_eq!(out, vec![SessionEvent::ToolStarting { key: "k".to_string(), tool_name: "Bash".to_string() }]);
+        assert_eq!(
+            out,
+            vec![SessionEvent::ToolStarting {
+                key: "k".to_string(),
+                tool_name: "Bash".to_string()
+            }]
+        );
     }
 
     #[test]
     fn tool_result_maps_to_tool_completed() {
-        let r = rec(r#"{"type":"user","message":{"content":[{"type":"tool_result","is_error":false}]}}"#);
+        let r = rec(
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","is_error":false}]}}"#,
+        );
         let out = classify(&r, &"k".to_string());
-        assert_eq!(out, vec![SessionEvent::ToolCompleted { key: "k".to_string() }]);
+        assert_eq!(
+            out,
+            vec![SessionEvent::ToolCompleted {
+                key: "k".to_string()
+            }]
+        );
     }
 
     #[test]

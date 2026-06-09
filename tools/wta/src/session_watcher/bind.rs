@@ -6,12 +6,15 @@
 //!   * Claude/Gemini → cwd correlation: among live CLI processes, pick the
 //!     one whose working directory matches the session's cwd; ties (same cwd)
 //!     are left unresolved (returns None) to avoid a wrong bind.
+//!
 //! Once a pid is chosen, the pane GUID comes from `proc_bind::wt_session_for_pid`.
 
 use crate::proc_bind;
 use std::path::{Path, PathBuf};
 
 /// A candidate live CLI process for correlation.
+// Consumed by Plan C (master wiring); unused within Plan B.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     pub pid: u32,
@@ -22,6 +25,8 @@ pub struct Candidate {
 /// `None` when there is no match OR more than one match (ambiguous — never
 /// guess). Comparison is case-insensitive with trailing separators ignored
 /// (Windows paths).
+// Consumed by Plan C (master wiring); unused within Plan B.
+#[allow(dead_code)]
 pub fn correlate_by_cwd(candidates: &[Candidate], target: &Path) -> Option<u32> {
     let norm = |p: &Path| {
         p.to_string_lossy()
@@ -39,12 +44,16 @@ pub fn correlate_by_cwd(candidates: &[Candidate], target: &Path) -> Option<u32> 
 }
 
 /// Resolve the pane GUID hosting a Copilot session via its lock file, then PEB.
+// Consumed by Plan C (master wiring); unused within Plan B.
+#[allow(dead_code)]
 pub fn bind_copilot(session_dir: &Path) -> Option<String> {
     let pid = proc_bind::copilot_pid_from_lock(session_dir)?;
     proc_bind::wt_session_for_pid(pid)
 }
 
 /// Resolve the pane GUID hosting a Codex session via Restart Manager, then PEB.
+// Consumed by Plan C (master wiring); unused within Plan B.
+#[allow(dead_code)]
 pub fn bind_codex(rollout_path: &Path) -> Option<String> {
     let pid = proc_bind::file_owner_pid(rollout_path)?;
     proc_bind::wt_session_for_pid(pid)
@@ -55,19 +64,28 @@ mod tests {
     use super::*;
 
     fn cand(pid: u32, cwd: &str) -> Candidate {
-        Candidate { pid, cwd: PathBuf::from(cwd) }
+        Candidate {
+            pid,
+            cwd: PathBuf::from(cwd),
+        }
     }
 
     #[test]
     fn unique_cwd_match_binds() {
         let cands = vec![cand(10, r"C:\Users\u\proj"), cand(20, r"C:\Users\u\other")];
-        assert_eq!(correlate_by_cwd(&cands, Path::new(r"C:\Users\u\proj")), Some(10));
+        assert_eq!(
+            correlate_by_cwd(&cands, Path::new(r"C:\Users\u\proj")),
+            Some(10)
+        );
     }
 
     #[test]
     fn case_and_trailing_sep_insensitive() {
         let cands = vec![cand(10, r"c:\users\u\proj\")];
-        assert_eq!(correlate_by_cwd(&cands, Path::new(r"C:\Users\U\Proj")), Some(10));
+        assert_eq!(
+            correlate_by_cwd(&cands, Path::new(r"C:\Users\U\Proj")),
+            Some(10)
+        );
     }
 
     #[test]

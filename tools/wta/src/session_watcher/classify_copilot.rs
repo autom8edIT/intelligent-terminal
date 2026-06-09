@@ -66,14 +66,22 @@ mod tests {
     fn ask_user_tool_maps_to_notification() {
         let r = rec(r#"{"type":"tool.execution_start","data":{"toolName":"ask_user"}}"#);
         let out = classify(&r, &"sess-1".to_string());
-        assert!(matches!(out.as_slice(), [SessionEvent::Notification { .. }]));
+        assert!(matches!(
+            out.as_slice(),
+            [SessionEvent::Notification { .. }]
+        ));
     }
 
     #[test]
     fn tool_complete_maps_to_tool_completed() {
         let r = rec(r#"{"type":"tool.execution_complete","data":{"success":true}}"#);
         let out = classify(&r, &"sess-1".to_string());
-        assert_eq!(out, vec![SessionEvent::ToolCompleted { key: "sess-1".to_string() }]);
+        assert_eq!(
+            out,
+            vec![SessionEvent::ToolCompleted {
+                key: "sess-1".to_string()
+            }]
+        );
     }
 
     #[test]

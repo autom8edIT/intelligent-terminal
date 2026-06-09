@@ -187,14 +187,19 @@ const RUPP_OFFSET_CURDIR_BUFFER: usize = 0x40;
 
 /// Read a process's current working directory from its PEB. `None` if the
 /// process is inaccessible or the path is empty.
+// Consumed by Plan C (master wiring); unused within Plan B.
+#[allow(dead_code)]
 pub fn cwd_for_pid(pid: u32) -> Option<std::path::PathBuf> {
     let handle = ProcHandle::open(pid)?;
     let pbi = basic_information(handle.0)?;
-    let pp = read_remote_ptr(handle.0, pbi.peb_base_address + PEB_OFFSET_PROCESS_PARAMETERS)?;
+    let pp = read_remote_ptr(
+        handle.0,
+        pbi.peb_base_address + PEB_OFFSET_PROCESS_PARAMETERS,
+    )?;
 
     // Length is the low u16 of the pointer-sized read at the UNICODE_STRING base.
     let len_word = read_remote_ptr(handle.0, pp + RUPP_OFFSET_CURDIR_LENGTH)?;
-    let len_bytes = (len_word & 0xFFFF) as usize;
+    let len_bytes = len_word & 0xFFFF;
     if len_bytes == 0 || len_bytes > 0x8000 {
         return None;
     }
@@ -534,8 +539,14 @@ mod tests {
     #[test]
     fn find_env_value_basic_and_case_insensitive() {
         let block = "FOO=1\0WT_SESSION=abc-123\0BAR=2\0";
-        assert_eq!(find_env_value(block, "WT_SESSION").as_deref(), Some("abc-123"));
-        assert_eq!(find_env_value(block, "wt_session").as_deref(), Some("abc-123"));
+        assert_eq!(
+            find_env_value(block, "WT_SESSION").as_deref(),
+            Some("abc-123")
+        );
+        assert_eq!(
+            find_env_value(block, "wt_session").as_deref(),
+            Some("abc-123")
+        );
         assert_eq!(find_env_value(block, "MISSING"), None);
     }
 
@@ -546,7 +557,10 @@ mod tests {
         // "123456789€" is 9 ASCII bytes + a 3-byte '€' (bytes 9..12).
         let block = "123456789\u{20ac}=value\0WT_SESSION=guid-42\0";
         // The query length 10 (WT_SESSION) lands inside '€' of the first entry.
-        assert_eq!(find_env_value(block, "WT_SESSION").as_deref(), Some("guid-42"));
+        assert_eq!(
+            find_env_value(block, "WT_SESSION").as_deref(),
+            Some("guid-42")
+        );
     }
 
     #[test]
@@ -570,9 +584,9 @@ mod tests {
         // Compare case-insensitively on the final component to avoid
         // \\?\ prefix / drive-letter-case differences.
         assert!(
-            got.to_string_lossy().to_lowercase().contains(
-                &dir.file_name().unwrap().to_string_lossy().to_lowercase()
-            ),
+            got.to_string_lossy()
+                .to_lowercase()
+                .contains(&dir.file_name().unwrap().to_string_lossy().to_lowercase()),
             "expected cwd containing {:?}, got {:?}",
             dir.file_name().unwrap(),
             got

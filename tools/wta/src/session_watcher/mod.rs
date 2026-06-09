@@ -54,36 +54,49 @@ pub(crate) struct Progress {
 
 /// Process one changed file path into emitted events, advancing `progress`.
 /// Pure w.r.t. everything except the on-disk file and the passed-in map.
-pub fn process_change(
-    path: &Path,
-    progress: &mut HashMap<PathBuf, Progress>,
-) -> Vec<Emitted> {
-    let Some(disc) = discover::identify(path) else { return Vec::new() };
+pub fn process_change(path: &Path, progress: &mut HashMap<PathBuf, Progress>) -> Vec<Emitted> {
+    let Some(disc) = discover::identify(path) else {
+        return Vec::new();
+    };
     let entry = progress.entry(path.to_path_buf()).or_default();
     let mut out = Vec::new();
 
     match disc.cli {
         CliSource::Gemini => {
             // Reparse the whole file; take the last non-empty snapshot line.
-            let Ok(text) = std::fs::read_to_string(path) else { return out };
-            let Some(last) = text.lines().rev().find(|l| !l.trim().is_empty()) else { return out };
-            let Ok(val) = serde_json::from_str::<serde_json::Value>(last) else { return out };
+            let Ok(text) = std::fs::read_to_string(path) else {
+                return out;
+            };
+            let Some(last) = text.lines().rev().find(|l| !l.trim().is_empty()) else {
+                return out;
+            };
+            let Ok(val) = serde_json::from_str::<serde_json::Value>(last) else {
+                return out;
+            };
             let (events, new_len) =
                 classify_gemini::classify_snapshot(&val, &disc.key, entry.gemini_msgs);
             entry.gemini_msgs = new_len;
             for event in events {
-                out.push(Emitted { cli: disc.cli.clone(), key: disc.key.clone(), event });
+                out.push(Emitted {
+                    cli: disc.cli.clone(),
+                    key: disc.key.clone(),
+                    event,
+                });
             }
         }
         _ => {
-            let Ok((text, new_off)) = read_appended(path, entry.offset) else { return out };
+            let Ok((text, new_off)) = read_appended(path, entry.offset) else {
+                return out;
+            };
             entry.offset = new_off;
             for line in text.lines() {
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
                 }
-                let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+                let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
+                    continue;
+                };
                 let events = match disc.cli {
                     CliSource::Copilot => classify_copilot::classify(&val, &disc.key),
                     CliSource::Claude => classify_claude::classify(&val, &disc.key),
@@ -91,7 +104,11 @@ pub fn process_change(
                     _ => Vec::new(),
                 };
                 for event in events {
-                    out.push(Emitted { cli: disc.cli.clone(), key: disc.key.clone(), event });
+                    out.push(Emitted {
+                        cli: disc.cli.clone(),
+                        key: disc.key.clone(),
+                        event,
+                    });
                 }
             }
         }
@@ -101,7 +118,9 @@ pub fn process_change(
 
 /// The four watched roots under the user profile.
 pub fn watched_roots() -> Vec<PathBuf> {
-    let home = std::env::var("USERPROFILE").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var("USERPROFILE")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     vec![
         home.join(".copilot").join("session-state"),
         home.join(".claude").join("projects"),

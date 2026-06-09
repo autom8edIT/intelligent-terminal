@@ -44,9 +44,15 @@ pub fn classify_snapshot(
                         .unwrap_or("")
                         .to_string();
                     if is_user_input_tool(&tool) {
-                        out.push(SessionEvent::Notification { key: key.clone(), message: tool });
+                        out.push(SessionEvent::Notification {
+                            key: key.clone(),
+                            message: tool,
+                        });
                     } else {
-                        out.push(SessionEvent::ToolStarting { key: key.clone(), tool_name: tool });
+                        out.push(SessionEvent::ToolStarting {
+                            key: key.clone(),
+                            tool_name: tool,
+                        });
                     }
                     // Gemini embeds the result inline once the tool returns;
                     // a call carrying `result` is already complete.
@@ -85,7 +91,13 @@ mod tests {
         ]}}"#);
         let (out, new_len) = classify_snapshot(&snap, &"k".to_string(), 1);
         assert_eq!(new_len, 2);
-        assert_eq!(out, vec![SessionEvent::ToolStarting { key: "k".to_string(), tool_name: "run_shell_command".to_string() }]);
+        assert_eq!(
+            out,
+            vec![SessionEvent::ToolStarting {
+                key: "k".to_string(),
+                tool_name: "run_shell_command".to_string()
+            }]
+        );
     }
 
     #[test]
@@ -94,10 +106,18 @@ mod tests {
             {"type":"gemini","toolCalls":[{"name":"run_shell_command","result":[{"functionResponse":{}}]}]}
         ]}}"#);
         let (out, _len) = classify_snapshot(&snap, &"k".to_string(), 0);
-        assert_eq!(out, vec![
-            SessionEvent::ToolStarting { key: "k".to_string(), tool_name: "run_shell_command".to_string() },
-            SessionEvent::ToolCompleted { key: "k".to_string() },
-        ]);
+        assert_eq!(
+            out,
+            vec![
+                SessionEvent::ToolStarting {
+                    key: "k".to_string(),
+                    tool_name: "run_shell_command".to_string()
+                },
+                SessionEvent::ToolCompleted {
+                    key: "k".to_string()
+                },
+            ]
+        );
     }
 
     #[test]
@@ -115,6 +135,11 @@ mod tests {
             {"type":"user","content":[{"functionResponse":{"name":"x"}}]}
         ]}}"#);
         let (out, _len) = classify_snapshot(&snap, &"k".to_string(), 0);
-        assert_eq!(out, vec![SessionEvent::ToolCompleted { key: "k".to_string() }]);
+        assert_eq!(
+            out,
+            vec![SessionEvent::ToolCompleted {
+                key: "k".to_string()
+            }]
+        );
     }
 }

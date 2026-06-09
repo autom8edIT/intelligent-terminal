@@ -26,9 +26,15 @@ pub fn classify(record: &serde_json::Value, key: &AgentKey) -> Vec<SessionEvent>
                 .unwrap_or("")
                 .to_string();
             if is_user_input_tool(&tool) {
-                vec![SessionEvent::Notification { key: key.clone(), message: tool }]
+                vec![SessionEvent::Notification {
+                    key: key.clone(),
+                    message: tool,
+                }]
             } else {
-                vec![SessionEvent::ToolStarting { key: key.clone(), tool_name: tool }]
+                vec![SessionEvent::ToolStarting {
+                    key: key.clone(),
+                    tool_name: tool,
+                }]
             }
         }
         ("response_item", "function_call_output")
@@ -53,21 +59,40 @@ mod tests {
 
     #[test]
     fn function_call_maps_to_tool_starting() {
-        let r = rec(r#"{"type":"response_item","payload":{"type":"function_call","name":"shell_command"}}"#);
+        let r = rec(
+            r#"{"type":"response_item","payload":{"type":"function_call","name":"shell_command"}}"#,
+        );
         let out = classify(&r, &"k".to_string());
-        assert_eq!(out, vec![SessionEvent::ToolStarting { key: "k".to_string(), tool_name: "shell_command".to_string() }]);
+        assert_eq!(
+            out,
+            vec![SessionEvent::ToolStarting {
+                key: "k".to_string(),
+                tool_name: "shell_command".to_string()
+            }]
+        );
     }
 
     #[test]
     fn function_call_output_maps_to_tool_completed() {
         let r = rec(r#"{"type":"response_item","payload":{"type":"function_call_output"}}"#);
-        assert_eq!(classify(&r, &"k".to_string()), vec![SessionEvent::ToolCompleted { key: "k".to_string() }]);
+        assert_eq!(
+            classify(&r, &"k".to_string()),
+            vec![SessionEvent::ToolCompleted {
+                key: "k".to_string()
+            }]
+        );
     }
 
     #[test]
     fn task_complete_maps_to_session_stopped() {
         let r = rec(r#"{"type":"event_msg","payload":{"type":"task_complete"}}"#);
-        assert_eq!(classify(&r, &"k".to_string()), vec![SessionEvent::SessionStopped { key: "k".to_string(), reason: "complete".to_string() }]);
+        assert_eq!(
+            classify(&r, &"k".to_string()),
+            vec![SessionEvent::SessionStopped {
+                key: "k".to_string(),
+                reason: "complete".to_string()
+            }]
+        );
     }
 
     #[test]

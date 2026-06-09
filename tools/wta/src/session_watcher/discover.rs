@@ -28,7 +28,11 @@ pub fn identify(path: &Path) -> Option<Discovered> {
     if name == "events.jsonl" {
         let key = path.parent()?.file_name()?.to_str()?.to_string();
         if path.components().any(|c| c.as_os_str() == "session-state") {
-            return Some(Discovered { cli: CliSource::Copilot, key, cwd: None });
+            return Some(Discovered {
+                cli: CliSource::Copilot,
+                key,
+                cwd: None,
+            });
         }
     }
 
@@ -37,15 +41,24 @@ pub fn identify(path: &Path) -> Option<Discovered> {
         // key is the trailing UUID after the last '-'.
         let stem = name.trim_end_matches(".jsonl");
         let key = stem.rsplit('-').next()?.to_string();
-        return Some(Discovered { cli: CliSource::Codex, key, cwd: None });
+        return Some(Discovered {
+            cli: CliSource::Codex,
+            key,
+            cwd: None,
+        });
     }
 
     // Gemini: .../tmp/<slug>/chats/session-*.jsonl
-    if name.starts_with("session-") && name.ends_with(".jsonl")
+    if name.starts_with("session-")
+        && name.ends_with(".jsonl")
         && path.components().any(|c| c.as_os_str() == "chats")
     {
         let key = name.trim_end_matches(".jsonl").to_string();
-        return Some(Discovered { cli: CliSource::Gemini, key, cwd: None });
+        return Some(Discovered {
+            cli: CliSource::Gemini,
+            key,
+            cwd: None,
+        });
     }
 
     // Claude: .../projects/<encoded-cwd>/<UUID>.jsonl
@@ -56,7 +69,11 @@ pub fn identify(path: &Path) -> Option<Discovered> {
             .and_then(|p| p.file_name())
             .and_then(|d| d.to_str())
             .map(decode_claude_cwd);
-        return Some(Discovered { cli: CliSource::Claude, key, cwd });
+        return Some(Discovered {
+            cli: CliSource::Claude,
+            key,
+            cwd,
+        });
     }
 
     None
@@ -76,7 +93,9 @@ mod tests {
 
     #[test]
     fn codex_path() {
-        let p = Path::new(r"C:\Users\u\.codex\sessions\2026\06\08\rollout-2026-06-08T21-29-13-019ea76c-4c47.jsonl");
+        let p = Path::new(
+            r"C:\Users\u\.codex\sessions\2026\06\08\rollout-2026-06-08T21-29-13-019ea76c-4c47.jsonl",
+        );
         let d = identify(p).unwrap();
         assert_eq!(d.cli, CliSource::Codex);
         assert_eq!(d.key, "4c47");
@@ -101,6 +120,9 @@ mod tests {
 
     #[test]
     fn unrelated_path_is_none() {
-        assert!(identify(Path::new(r"C:\Users\u\.copilot\session-state\abc\workspace.yaml")).is_none());
+        assert!(identify(Path::new(
+            r"C:\Users\u\.copilot\session-state\abc\workspace.yaml"
+        ))
+        .is_none());
     }
 }
