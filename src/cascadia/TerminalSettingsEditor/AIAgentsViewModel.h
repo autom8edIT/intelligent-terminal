@@ -8,7 +8,6 @@
 #include "AgentEntry.g.h"
 #include "ViewModelHelpers.h"
 #include "Utils.h"
-#include "../inc/AgentHooksStatus.h"
 
 namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 {
@@ -122,48 +121,6 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
         til::typed_event<Editor::AIAgentsViewModel, Model::ShellIntegrationTarget> InitShellIntegrationRequested;
 
-        // ── Agent Hooks ──────────────────────────────────────────────────
-        bool IsCopilotCliDetected() const noexcept { return _copilotCliDetected; }
-        bool IsClaudeCliDetected() const noexcept { return _claudeCliDetected; }
-        bool IsGeminiCliDetected() const noexcept { return _geminiCliDetected; }
-        bool IsCodexCliDetected() const noexcept { return _codexCliDetected; }
-        bool IsAnyAgentCliDetected() const noexcept
-        {
-            return _copilotCliDetected || _claudeCliDetected || _geminiCliDetected || _codexCliDetected;
-        }
-        // Per-CLI "row visible" flags — true when the CLI has any wt-agent-hooks
-        // state on disk (marketplace registered OR plugin installed). The
-        // expander shows a Remove row for every CLI in this set so users can
-        // clean up partial installs, not just fully-installed ones.
-        bool ShowCopilotHookRow() const noexcept { return _showCopilotHookRow; }
-        bool ShowClaudeHookRow() const noexcept { return _showClaudeHookRow; }
-        bool ShowGeminiHookRow() const noexcept { return _showGeminiHookRow; }
-        bool ShowCodexHookRow() const noexcept { return _showCodexHookRow; }
-        // Detail text shown under the CLI name when state isn't fully
-        // installed. Empty for fully-installed CLIs (subtitle is hidden in XAML).
-        winrt::hstring CopilotHooksSubtitle() const { return _copilotHooksSubtitle; }
-        winrt::hstring ClaudeHooksSubtitle() const { return _claudeHooksSubtitle; }
-        winrt::hstring GeminiHooksSubtitle() const { return _geminiHooksSubtitle; }
-        winrt::hstring CodexHooksSubtitle() const { return _codexHooksSubtitle; }
-        bool ShowCopilotHooksSubtitle() const noexcept { return !_copilotHooksSubtitle.empty(); }
-        bool ShowClaudeHooksSubtitle() const noexcept { return !_claudeHooksSubtitle.empty(); }
-        bool ShowGeminiHooksSubtitle() const noexcept { return !_geminiHooksSubtitle.empty(); }
-        bool ShowCodexHooksSubtitle() const noexcept { return !_codexHooksSubtitle.empty(); }
-        bool CanInstallAgentHooks() const noexcept
-        {
-            return IsAnyAgentCliDetected() && !IsAgentSessionHooksPolicyLocked();
-        }
-        bool IsInstallingAgentHooks() const noexcept { return _installingAgentHooks; }
-        winrt::hstring AgentHooksInstallSummary() const { return _agentHooksInstallSummary; }
-        bool HasAgentHooksInstallSummary() const noexcept { return !_agentHooksInstallSummary.empty(); }
-
-        void RefreshAgentHooksStatus();
-        void InstallAllAgentHooks();
-        void RemoveCopilotHooks();
-        void RemoveClaudeHooks();
-        void RemoveGeminiHooks();
-        void RemoveCodexHooks();
-
     private:
         Model::GlobalAppSettings _GlobalSettings;
         winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry> _acpAgentList;
@@ -212,37 +169,6 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
             winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry>& list,
             const winrt::hstring& customCommand,
             const winrt::hstring& currentAgentId);
-
-        // Agent Hooks state
-        bool _copilotCliDetected{ false };
-        bool _claudeCliDetected{ false };
-        bool _geminiCliDetected{ false };
-        bool _codexCliDetected{ false };
-        // Row visibility — true when the CLI has any wt-agent-hooks state
-        // on disk (marketplace registered OR plugin installed).
-        bool _showCopilotHookRow{ false };
-        bool _showClaudeHookRow{ false };
-        bool _showGeminiHookRow{ false };
-        bool _showCodexHookRow{ false };
-        // Subtitle text per CLI; empty for fully-installed CLIs.
-        winrt::hstring _copilotHooksSubtitle;
-        winrt::hstring _claudeHooksSubtitle;
-        winrt::hstring _geminiHooksSubtitle;
-        winrt::hstring _codexHooksSubtitle;
-        bool _installingAgentHooks{ false };
-        bool _refreshingAgentHooks{ false };
-        winrt::hstring _agentHooksInstallSummary;
-
-        void _ApplyStatusReport(const std::optional<::Microsoft::Terminal::AgentHooks::StatusReport>& report);
-        winrt::fire_and_forget _RefreshAgentHooksStatusAsync();
-        // Args are passed verbatim to wta.exe (e.g. L"hooks install" or
-        // L"hooks uninstall --cli claude"). The in-progress message that
-        // appears beneath the expander while the wta process is running
-        // is set by the caller via `_agentHooksInstallSummary` before
-        // invoking this — keeps the resource lookup at the call site
-        // alongside the matching `_NotifyChanges` so the UI updates
-        // synchronously before this fire-and-forget kicks off.
-        winrt::fire_and_forget _RunHooksWtaAsync(std::wstring wtaArgs);
     };
 };
 

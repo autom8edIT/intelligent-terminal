@@ -524,25 +524,6 @@ namespace winrt::TerminalApp::implementation
     }
 
 
-    // ── Hooks install helper ────────────────────────────────────────────
-
-    IAsyncOperation<bool> FreOverlay::_InstallHooksAsync(winrt::hstring agentId)
-    {
-        auto id = std::wstring{ agentId };
-
-        co_await winrt::resume_background();
-
-        namespace Wta = ::Microsoft::Terminal::WtaProcess;
-
-        const auto wtaPath = Wta::ResolveWtaExePath();
-        // Extend PATH so freshly-installed CLIs (e.g. copilot via winget)
-        // are discoverable by the hooks installer.
-        auto envBlock = Wta::BuildExtendedPathEnvBlock();
-        auto args = L"hooks install --cli " + id;
-        co_return Wta::RunWtaAndWait(wtaPath, args, 60'000,
-                                     envBlock.empty() ? nullptr : envBlock.data());
-    }
-
     // ── Save + install flow ─────────────────────────────────────────────
 
     // Surface a single blocking problem in the bottom-left error area and
@@ -598,13 +579,6 @@ namespace winrt::TerminalApp::implementation
                 _settings.GlobalSettings().AutoErrorDetectionEnabled(false);
                 _settings.GlobalSettings().AutoFixEnabled(false);
             }
-            break;
-        case FreProblemKind::Hooks:
-            ErrorText().Text(RS_(L"FreOverlay_InstallErrorHooks"));
-            url += L"#36-agent-hooks-for-session-management";
-            // Remediation: turn off session management so the user can save and
-            // continue without it.
-            SessionManagementToggle().IsOn(false);
             break;
         }
 
@@ -789,44 +763,10 @@ namespace winrt::TerminalApp::implementation
             }
         }
 
-        // 4+5. Install hooks and shell integration. Run both, collect any
-        // failures, then surface only the highest-priority one (see
-        // _ShowProblem). Lower-priority failures are left enabled so the next
-        // Save retries them.
-        bool hooksFailed = false;
+        // 4. Shell integration — only when error detection is enabled.
         bool shellIntegFailed = false;
         bool shellIntegEpBlocked = false;
 
-        // 4. Hooks — skip if GPO blocks it or settings unavailable.
-        if (SessionManagementToggle().IsOn() &&
-            _settings &&
-            !_settings.GlobalSettings().IsAgentSessionHooksPolicyLocked())
-        {
-            auto self = weak.get();
-            if (!self) co_return;
-
-            _agentPaneLog("[FRE] Installing hooks for " + winrt::to_string(agentId));
-            bool hooksOk = co_await _InstallHooksAsync(agentId);
-            // Helper internally does co_await winrt::resume_background(),
-            // so the continuation may resume on a thread-pool thread.
-            // Hop back to the UI thread before the subsequent
-            // AutoDetectToggle().IsOn() read and any later _ShowProblem
-            // call. Without this, XAML access from the thread pool
-            // throws RPC_E_WRONG_THREAD, which IAsyncAction swallows —
-            // the SavingOverlay would then be stuck with no error
-            // surfaced.
-            co_await winrt::resume_foreground(Dispatcher());
-            self = weak.get();
-            if (!self) co_return;
-
-            _agentPaneLog("[FRE] Hooks install: " + std::string(hooksOk ? "ok" : "FAILED"));
-            if (!hooksOk)
-            {
-                hooksFailed = true;
-            }
-        }
-
-        // 5. Shell integration — only when error detection is enabled.
         if (AutoDetectToggle().IsOn())
         {
             auto self = weak.get();
@@ -865,19 +805,16 @@ namespace winrt::TerminalApp::implementation
             }
         }
 
-        // Surface only the highest-priority failure. Shell integration outranks
-        // hooks; the unshown failure stays enabled and is retried on next Save.
-        if (hooksFailed || shellIntegFailed)
+        // Surface any shell integration failure.
+        if (shellIntegFailed)
         {
-            _agentPaneLog("[FRE] Showing problem: "
-                + std::string(shellIntegFailed ? "ShellIntegration" : "Hooks"));
+            _agentPaneLog("[FRE] Showing problem: ShellIntegration");
             co_await winrt::resume_foreground(Dispatcher());
             auto self = weak.get();
             if (!self) co_return;
 
             _ShowProblem(shellIntegEpBlocked ? FreProblemKind::ShellIntegrationExecutionPolicy
-                                             : shellIntegFailed ? FreProblemKind::ShellIntegration
-                                                                : FreProblemKind::Hooks);
+                                             : FreProblemKind::ShellIntegration);
             co_return;
         }
 

@@ -62,7 +62,6 @@ namespace winrt::TerminalApp::implementation
             NodeInstall = 2, // hard prerequisite — winget OpenJS.NodeJS.LTS
             ShellIntegrationExecutionPolicy = 3, // optional feature — error detection blocked by PowerShell execution policy
             ShellIntegration = 4, // optional feature — error detection (generic install failure)
-            Hooks = 5, // optional feature — session management
         };
 
         // Show a single problem: set the error message + manual-fix link, then
@@ -88,11 +87,6 @@ namespace winrt::TerminalApp::implementation
         // Run a winget install synchronously on a background thread.
         // Returns true on success.
         static winrt::Windows::Foundation::IAsyncOperation<bool> _WingetInstallAsync(winrt::hstring packageId);
-
-        // Run wta.exe hooks install on a background thread.
-        // Returns true on success.
-        static winrt::Windows::Foundation::IAsyncOperation<bool> _InstallHooksAsync(winrt::hstring agentId);
-
 
         // Perform the full save + install flow asynchronously.
         winrt::Windows::Foundation::IAsyncAction _SaveAndInstallAsync();
