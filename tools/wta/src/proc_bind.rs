@@ -187,7 +187,10 @@ fn read_remote_bytes(handle: isize, address: usize, len: usize) -> Option<Vec<u8
 fn read_process_env_block(pid: u32) -> Option<String> {
     let handle = ProcHandle::open(pid)?;
     let pbi = basic_information(handle.0)?;
-    let pp = read_remote_ptr(handle.0, pbi.peb_base_address + PEB_OFFSET_PROCESS_PARAMETERS)?;
+    let pp = read_remote_ptr(
+        handle.0,
+        pbi.peb_base_address + PEB_OFFSET_PROCESS_PARAMETERS,
+    )?;
     let env_addr = read_remote_ptr(handle.0, pp + RUPP_OFFSET_ENVIRONMENT)?;
     let mut env_size = read_remote_ptr(handle.0, pp + RUPP_OFFSET_ENVIRONMENT_SIZE)?;
     if env_size == 0 || env_size > MAX_ENV_BYTES {
@@ -320,16 +323,27 @@ pub fn file_holders(path: &Path) -> Vec<u32> {
         // First call probes the required array length.
         // SAFETY: null array with count 0 is the documented probe form.
         let probe = unsafe {
-            RmGetList(session, &mut needed, &mut count, std::ptr::null_mut(), &mut reason)
+            RmGetList(
+                session,
+                &mut needed,
+                &mut count,
+                std::ptr::null_mut(),
+                &mut reason,
+            )
         };
         if (probe == 0 || probe == ERROR_MORE_DATA) && needed > 0 {
             // SAFETY: zeroed RmProcessInfo is valid POD; vec has `needed` slots.
-            let mut arr: Vec<RmProcessInfo> =
-                vec![unsafe { std::mem::zeroed() }; needed as usize];
+            let mut arr: Vec<RmProcessInfo> = vec![unsafe { std::mem::zeroed() }; needed as usize];
             count = needed;
             // SAFETY: arr has capacity `count`; out-params valid.
             let got = unsafe {
-                RmGetList(session, &mut needed, &mut count, arr.as_mut_ptr(), &mut reason)
+                RmGetList(
+                    session,
+                    &mut needed,
+                    &mut count,
+                    arr.as_mut_ptr(),
+                    &mut reason,
+                )
             };
             if got == 0 {
                 for info in arr.iter().take(count as usize) {
@@ -379,11 +393,8 @@ mod tests {
     use super::*;
 
     fn tmp_dir(label: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "wta-proc-bind-{}-{}",
-            label,
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("wta-proc-bind-{}-{}", label, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

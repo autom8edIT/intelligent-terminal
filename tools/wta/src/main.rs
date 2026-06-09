@@ -478,7 +478,6 @@ enum Command {
     },
 }
 
-
 /// Subcommands for `wta sessions`.
 #[derive(Subcommand, Debug)]
 enum SessionsAction {
@@ -516,9 +515,9 @@ enum SessionsOriginArg {
 impl SessionsOriginArg {
     fn to_filter(self) -> agent_sessions::OriginFilter {
         match self {
-            SessionsOriginArg::Shell     => agent_sessions::OriginFilter::ShellOnly,
+            SessionsOriginArg::Shell => agent_sessions::OriginFilter::ShellOnly,
             SessionsOriginArg::AgentPane => agent_sessions::OriginFilter::AgentPaneOnly,
-            SessionsOriginArg::All       => agent_sessions::OriginFilter::All,
+            SessionsOriginArg::All => agent_sessions::OriginFilter::All,
         }
     }
 }
@@ -873,7 +872,11 @@ async fn main() -> Result<()> {
         Some(Command::ProbeModels { agent }) => run_probe_models(&agent).await,
 
         // ── proc_bind diagnostics ──
-        Some(Command::BindProbe { pid, file, lock_dir }) => {
+        Some(Command::BindProbe {
+            pid,
+            file,
+            lock_dir,
+        }) => {
             run_bind_probe(pid, file, lock_dir);
             Ok(())
         }
@@ -1194,7 +1197,6 @@ async fn get_first_tab_id(channel: &CliChannel, window_id: &str) -> Result<Strin
         .ok_or_else(|| anyhow::anyhow!("{}", t!("output.no_tabs_in_window", window_id = window_id)))
 }
 
-
 // ─── sessions CLI helpers ───────────────────────────────────────────────────
 
 const MASTER_NOT_RUNNING: &str = "wta-master not running. Start Windows Terminal first.";
@@ -1249,9 +1251,10 @@ async fn fetch_sessions_from_master(
     let (read_half, write_half) = tokio::io::split(pipe);
     let outgoing = write_half.compat_write();
     let incoming = read_half.compat();
-    let (conn, handle_io) = acp::ClientSideConnection::new(SessionsCliClient, outgoing, incoming, |fut| {
-        tokio::task::spawn_local(fut);
-    });
+    let (conn, handle_io) =
+        acp::ClientSideConnection::new(SessionsCliClient, outgoing, incoming, |fut| {
+            tokio::task::spawn_local(fut);
+        });
     tokio::task::spawn_local(async move {
         let _ = handle_io.await;
     });
@@ -1334,7 +1337,11 @@ fn format_sessions_table(sessions: &[session_registry::SessionInfo]) -> String {
     ));
     for session in sessions {
         let sid = session.session_id.to_string();
-        let short_sid = if sid.len() > 24 { &sid[..24] } else { sid.as_str() };
+        let short_sid = if sid.len() > 24 {
+            &sid[..24]
+        } else {
+            sid.as_str()
+        };
         out.push_str(&format!(
             "{:<24} {:<10} {:<10} {:<10} {:<20} {:<20} {}\n",
             short_sid,
@@ -1350,15 +1357,17 @@ fn format_sessions_table(sessions: &[session_registry::SessionInfo]) -> String {
 }
 
 fn status_label(status: Option<&agent_sessions::AgentStatus>) -> String {
-    status.map(|s| format!("{s:?}")).unwrap_or_else(|| "-".to_string())
+    status
+        .map(|s| format!("{s:?}"))
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn cli_source_label(source: Option<&agent_sessions::CliSource>) -> String {
     match source {
-        Some(agent_sessions::CliSource::Claude)  => "Claude".to_string(),
-        Some(agent_sessions::CliSource::Codex)   => "Codex".to_string(),
+        Some(agent_sessions::CliSource::Claude) => "Claude".to_string(),
+        Some(agent_sessions::CliSource::Codex) => "Codex".to_string(),
         Some(agent_sessions::CliSource::Copilot) => "Copilot".to_string(),
-        Some(agent_sessions::CliSource::Gemini)  => "Gemini".to_string(),
+        Some(agent_sessions::CliSource::Gemini) => "Gemini".to_string(),
         Some(agent_sessions::CliSource::Unknown(s)) if !s.is_empty() => s.clone(),
         _ => "-".to_string(),
     }
@@ -1372,8 +1381,8 @@ fn cli_source_label(source: Option<&agent_sessions::CliSource>) -> String {
 fn origin_label(origin: Option<&agent_sessions::SessionOrigin>) -> &'static str {
     match origin {
         Some(agent_sessions::SessionOrigin::AgentPane) => "AgentPane",
-        Some(agent_sessions::SessionOrigin::Unknown)   => "Shell",
-        None                                           => "-",
+        Some(agent_sessions::SessionOrigin::Unknown) => "Shell",
+        None => "-",
     }
 }
 
@@ -1637,7 +1646,12 @@ async fn run_delegate(
     cwd: Option<&str>,
 ) -> Result<()> {
     // Log the prompt length, not the text — the prompt is user content.
-    tracing::info!(prompt_chars = prompt.map(|p| p.chars().count()), agent = agent_cmd, cwd, "run_delegate started");
+    tracing::info!(
+        prompt_chars = prompt.map(|p| p.chars().count()),
+        agent = agent_cmd,
+        cwd,
+        "run_delegate started"
+    );
     tracing::trace!(target: "delegate.content", prompt = ?prompt, "run_delegate prompt");
 
     let (debug_tx, _) = tokio::sync::mpsc::unbounded_channel::<app::DebugMessage>();
@@ -1993,16 +2007,28 @@ async fn connect_to_wt_protocol(
 /// Pure diagnostics — used to validate binding against live agent CLIs.
 fn run_bind_probe(pid: Option<u32>, file: Option<String>, lock_dir: Option<String>) {
     if let Some(pid) = pid {
-        println!("parent_pid({pid})        = {:?}", proc_bind::parent_pid(pid));
-        println!("wt_session_for_pid({pid}) = {:?}", proc_bind::wt_session_for_pid(pid));
+        println!(
+            "parent_pid({pid})        = {:?}",
+            proc_bind::parent_pid(pid)
+        );
+        println!(
+            "wt_session_for_pid({pid}) = {:?}",
+            proc_bind::wt_session_for_pid(pid)
+        );
     }
     if let Some(file) = file {
         let p = std::path::Path::new(&file);
-        println!("file_holders({file})     = {:?}", proc_bind::file_holders(p));
+        println!(
+            "file_holders({file})     = {:?}",
+            proc_bind::file_holders(p)
+        );
     }
     if let Some(dir) = lock_dir {
         let p = std::path::Path::new(&dir);
-        println!("copilot_pid_from_lock({dir}) = {:?}", proc_bind::copilot_pid_from_lock(p));
+        println!(
+            "copilot_pid_from_lock({dir}) = {:?}",
+            proc_bind::copilot_pid_from_lock(p)
+        );
     }
 }
 
