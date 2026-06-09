@@ -449,6 +449,9 @@ enum Command {
         action: SessionsAction,
     },
 
+    /// Diagnostics: run the session watcher and print emitted SessionEvents.
+    WatchProbe,
+
     /// Diagnostics: exercise the proc_bind binding primitives.
     BindProbe {
         /// PID to read parent pid + WT_SESSION env from.
@@ -871,6 +874,12 @@ async fn main() -> Result<()> {
 
         // ── ACP model list probe ──
         Some(Command::ProbeModels { agent }) => run_probe_models(&agent).await,
+
+        // ── session_watcher diagnostics ──
+        Some(Command::WatchProbe) => {
+            run_watch_probe();
+            Ok(())
+        }
 
         // ── proc_bind diagnostics ──
         Some(Command::BindProbe {
@@ -2002,6 +2011,24 @@ async fn connect_to_wt_protocol(
     use shell::wt_channel::CliChannel;
     let channel = CliChannel::connect().await?;
     Ok(channel.with_debug_sender(debug_tx))
+}
+
+/// Run the session watcher synchronously, printing each emitted event. Ctrl+C
+/// to stop. Diagnostics only.
+fn run_watch_probe() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        if let Err(err) = session_watcher::watch(tx) {
+            eprintln!("watcher error: {err}");
+        }
+    });
+    println!("watching… drive a copilot/claude/codex/gemini session, Ctrl+C to stop");
+    for emitted in rx {
+        println!(
+            "{:?} key={} -> {:?}",
+            emitted.cli, emitted.key, emitted.event
+        );
+    }
 }
 
 /// Print the result of each `proc_bind` primitive for the given inputs.
