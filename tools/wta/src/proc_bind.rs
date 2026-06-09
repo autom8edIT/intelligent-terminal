@@ -126,6 +126,104 @@ pub fn parent_pid(pid: u32) -> Option<u32> {
     Some(pbi.inherited_from_unique_process_id as u32)
 }
 
+// x64 PEB offsets, validated 2026-06-09 against live agent CLIs.
+//   PEB + 0x20                      -> ProcessParameters pointer
+//   RTL_USER_PROCESS_PARAMETERS + 0x80   -> Environment pointer
+//   RTL_USER_PROCESS_PARAMETERS + 0x3F0  -> EnvironmentSize (bytes)
+const PEB_OFFSET_PROCESS_PARAMETERS: usize = 0x20;
+const RUPP_OFFSET_ENVIRONMENT: usize = 0x80;
+const RUPP_OFFSET_ENVIRONMENT_SIZE: usize = 0x3F0;
+// Cap an implausible EnvironmentSize so a corrupt read can't allocate wildly.
+const MAX_ENV_BYTES: usize = 1 << 20;
+
+/// Read a pointer-sized value (`usize`) from another process's address space.
+fn read_remote_ptr(handle: isize, address: usize) -> Option<usize> {
+    let mut buf = [0u8; std::mem::size_of::<usize>()];
+    let mut read: usize = 0;
+    // SAFETY: handle is valid; buf is sized exactly size_of::<usize>().
+    let ok = unsafe {
+        ReadProcessMemory(
+            handle,
+            address,
+            buf.as_mut_ptr() as *mut core::ffi::c_void,
+            buf.len(),
+            &mut read,
+        )
+    };
+    if ok != 0 && read == buf.len() {
+        Some(usize::from_ne_bytes(buf))
+    } else {
+        None
+    }
+}
+
+/// Read `len` bytes from another process's address space.
+fn read_remote_bytes(handle: isize, address: usize, len: usize) -> Option<Vec<u8>> {
+    let mut buf = vec![0u8; len];
+    let mut read: usize = 0;
+    // SAFETY: handle is valid; buf has capacity `len`.
+    let ok = unsafe {
+        ReadProcessMemory(
+            handle,
+            address,
+            buf.as_mut_ptr() as *mut core::ffi::c_void,
+            len,
+            &mut read,
+        )
+    };
+    if ok != 0 {
+        buf.truncate(read);
+        Some(buf)
+    } else {
+        None
+    }
+}
+
+/// Read and decode the full environment block of `pid` as a single string
+/// with embedded NUL separators (one `NAME=VALUE` entry per NUL-delimited
+/// segment). Returns `None` if the process can't be opened or the PEB walk
+/// fails.
+fn read_process_env_block(pid: u32) -> Option<String> {
+    let handle = ProcHandle::open(pid)?;
+    let pbi = basic_information(handle.0)?;
+    let pp = read_remote_ptr(handle.0, pbi.peb_base_address + PEB_OFFSET_PROCESS_PARAMETERS)?;
+    let env_addr = read_remote_ptr(handle.0, pp + RUPP_OFFSET_ENVIRONMENT)?;
+    let mut env_size = read_remote_ptr(handle.0, pp + RUPP_OFFSET_ENVIRONMENT_SIZE)?;
+    if env_size == 0 || env_size > MAX_ENV_BYTES {
+        env_size = 1 << 16;
+    }
+    let raw = read_remote_bytes(handle.0, env_addr, env_size)?;
+    // The block is UTF-16LE; build a u16 vec from byte pairs, then decode.
+    let utf16: Vec<u16> = raw
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    Some(String::from_utf16_lossy(&utf16))
+}
+
+/// Read environment variable `name` (case-insensitive) from `pid`'s PEB.
+/// Returns `None` if the process is inaccessible or the variable is unset.
+pub fn env_var_for_pid(pid: u32, name: &str) -> Option<String> {
+    let block = read_process_env_block(pid)?;
+    let prefix = format!("{}=", name).to_ascii_lowercase();
+    for entry in block.split('\0') {
+        if entry.len() <= name.len() {
+            continue;
+        }
+        if entry[..name.len() + 1].to_ascii_lowercase() == prefix {
+            return Some(entry[name.len() + 1..].to_string());
+        }
+    }
+    None
+}
+
+/// Convenience wrapper: read `WT_SESSION` (the hosting pane's GUID) from a
+/// process's PEB. Every CLI process WT launches inherits this, so it is the
+/// cheapest path from a bound pid to its pane.
+pub fn wt_session_for_pid(pid: u32) -> Option<String> {
+    env_var_for_pid(pid, "WT_SESSION")
+}
+
 /// Parse Copilot's in-use marker. Copilot writes a zero-byte file named
 /// `inuse.<pid>.lock` into its session-state directory while a session is
 /// live; the owning process id is encoded in the file name. Returns the
@@ -212,5 +310,21 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         assert_eq!(got, Some(std::process::id()));
+    }
+
+    #[test]
+    fn env_var_for_pid_reads_child_environment() {
+        let mut child = spawn_probe_child(&[("WTA_TEST_BIND", "marker-value-42")], None);
+        let pid = child.id();
+        // Give the child a moment to finish initializing its PEB.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let got = env_var_for_pid(pid, "WTA_TEST_BIND");
+        let got_ci = env_var_for_pid(pid, "wta_test_bind"); // case-insensitive name
+        let missing = env_var_for_pid(pid, "WTA_NOT_SET_XYZ");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(got.as_deref(), Some("marker-value-42"));
+        assert_eq!(got_ci.as_deref(), Some("marker-value-42"));
+        assert_eq!(missing, None);
     }
 }
