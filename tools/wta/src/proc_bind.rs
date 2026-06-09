@@ -205,20 +205,34 @@ fn read_process_env_block(pid: u32) -> Option<String> {
     Some(String::from_utf16_lossy(&utf16))
 }
 
+/// Find the value of env var `name` (ASCII-case-insensitive on the name) in a
+/// decoded environment block — a string of `NAME=VALUE` entries separated by
+/// NUL. Pure + panic-free: matches the `name=` prefix by bytes so a non-ASCII
+/// character straddling the boundary can never trigger a char-boundary slice
+/// panic. Extracted from `env_var_for_pid` so it can be unit-tested directly.
+fn find_env_value(block: &str, name: &str) -> Option<String> {
+    let prefix_len = name.len() + 1; // "name="
+    for entry in block.split('\0') {
+        let bytes = entry.as_bytes();
+        if bytes.len() < prefix_len {
+            continue;
+        }
+        // Compare the "name=" prefix by bytes (ASCII-case-insensitive on the
+        // name; the trailing '=' matches itself). Never slices a &str.
+        let (head, sep) = bytes.split_at(name.len());
+        if sep.first() == Some(&b'=') && head.eq_ignore_ascii_case(name.as_bytes()) {
+            // The value starts right after the ASCII '=', a valid boundary.
+            return Some(entry[prefix_len..].to_string());
+        }
+    }
+    None
+}
+
 /// Read environment variable `name` (case-insensitive) from `pid`'s PEB.
 /// Returns `None` if the process is inaccessible or the variable is unset.
 pub fn env_var_for_pid(pid: u32, name: &str) -> Option<String> {
     let block = read_process_env_block(pid)?;
-    let prefix = format!("{}=", name).to_ascii_lowercase();
-    for entry in block.split('\0') {
-        if entry.len() <= name.len() {
-            continue;
-        }
-        if entry[..name.len() + 1].to_ascii_lowercase() == prefix {
-            return Some(entry[name.len() + 1..].to_string());
-        }
-    }
-    None
+    find_env_value(&block, name)
 }
 
 /// Convenience wrapper: read `WT_SESSION` (the hosting pane's GUID) from a
@@ -482,6 +496,30 @@ mod tests {
             std::process::id(),
             holders
         );
+    }
+
+    #[test]
+    fn find_env_value_basic_and_case_insensitive() {
+        let block = "FOO=1\0WT_SESSION=abc-123\0BAR=2\0";
+        assert_eq!(find_env_value(block, "WT_SESSION").as_deref(), Some("abc-123"));
+        assert_eq!(find_env_value(block, "wt_session").as_deref(), Some("abc-123"));
+        assert_eq!(find_env_value(block, "MISSING"), None);
+    }
+
+    #[test]
+    fn find_env_value_non_ascii_entry_does_not_panic() {
+        // An entry whose name has a multi-byte char straddling byte index
+        // name.len() must NOT panic (regression for the char-boundary bug).
+        // "123456789€" is 9 ASCII bytes + a 3-byte '€' (bytes 9..12).
+        let block = "123456789\u{20ac}=value\0WT_SESSION=guid-42\0";
+        // The query length 10 (WT_SESSION) lands inside '€' of the first entry.
+        assert_eq!(find_env_value(block, "WT_SESSION").as_deref(), Some("guid-42"));
+    }
+
+    #[test]
+    fn find_env_value_empty_value() {
+        let block = "EMPTY=\0X=1\0";
+        assert_eq!(find_env_value(block, "EMPTY").as_deref(), Some(""));
     }
 
     #[test]
