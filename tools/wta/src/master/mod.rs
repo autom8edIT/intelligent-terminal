@@ -1562,6 +1562,42 @@ async fn run_master_loop(cli: Cli, pipe_name: String) -> Result<()> {
         }
     });
 
+    // ── Hookless Class-B session watcher ──────────────────────────────
+    // A blocking `notify` watcher runs on its own OS thread; a bridge thread
+    // forwards emitted events into this LocalSet via a tokio channel, where
+    // they're applied to master's registry (same reducer as session_hook).
+    {
+        let (sync_tx, sync_rx) = std::sync::mpsc::channel::<crate::session_watcher::Emitted>();
+        std::thread::Builder::new()
+            .name("wta-session-watch".into())
+            .spawn(move || {
+                if let Err(err) = crate::session_watcher::watch(sync_tx) {
+                    tracing::warn!(target: "session_watcher", error = %err, "watcher exited");
+                }
+            })
+            .ok();
+
+        let (async_tx, mut async_rx) =
+            tokio::sync::mpsc::unbounded_channel::<crate::session_watcher::Emitted>();
+        std::thread::Builder::new()
+            .name("wta-session-watch-bridge".into())
+            .spawn(move || {
+                for emitted in sync_rx {
+                    if async_tx.send(emitted).is_err() {
+                        break;
+                    }
+                }
+            })
+            .ok();
+
+        let inner_for_watch = Arc::clone(&inner);
+        tokio::task::spawn_local(async move {
+            while let Some(emitted) = async_rx.recv().await {
+                apply_watcher_event(&inner_for_watch, emitted).await;
+            }
+        });
+    }
+
     // WT event subscriber: drive PaneClosed / ConnectionFailed into the
     // master registry directly off WT's `connection_state` events. This
     // is the fallback for cases where no helper publishes the event —
@@ -2096,6 +2132,43 @@ async fn handle_session_hook(
     }
 
     Ok(crate::session_registry::build_session_hook_response(applied))
+}
+
+/// Apply one watcher-emitted session event to master's registry and, if it
+/// changed state, broadcast `sessions/changed` so helpers refetch. Mirrors
+/// `handle_session_hook` but for the in-process file watcher (no ext-request
+/// round-trip). `SessionStarted` synthesis + pane binding happens in
+/// `ensure_watched_session_row` before the activity event is applied.
+async fn apply_watcher_event(
+    state: &MasterStateInner,
+    emitted: crate::session_watcher::Emitted,
+) {
+    ensure_watched_session_row(state, &emitted).await;
+    let applied = state.registry.apply_event(emitted.event).await;
+    if applied {
+        broadcast_ext_to_helpers(
+            state,
+            crate::session_registry::build_sessions_changed_notification(),
+        )
+        .await;
+    }
+}
+
+/// Ensure master's registry has a row for the event's session key, creating a
+/// minimal one on first sight. Pane binding is added in Plan C Task 3.
+async fn ensure_watched_session_row(
+    state: &MasterStateInner,
+    emitted: &crate::session_watcher::Emitted,
+) {
+    let sid = acp::SessionId::new(emitted.key.clone());
+    if state.registry.lookup(&sid).await.is_none() {
+        let mut info =
+            crate::session_registry::SessionInfo::new(sid, std::path::PathBuf::new());
+        info.cli_source = Some(emitted.cli.clone());
+        info.status = Some(crate::agent_sessions::AgentStatus::Idle);
+        info.origin = Some(crate::agent_sessions::SessionOrigin::Unknown);
+        state.registry.upsert(info).await;
+    }
 }
 
 /// Master-side WT event subscriber. Bridges `connection_state`
