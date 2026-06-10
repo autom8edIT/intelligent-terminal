@@ -681,6 +681,10 @@ fn load_codex(home: &Path) -> Vec<AgentSession> {
                     if !name.starts_with("rollout-") || !name.ends_with(".jsonl") { continue; }
                     if !codex_session_has_real_content(&path) { continue; }
                     let Some(meta) = read_codex_session_meta(&path) else { continue; };
+                    // Skip Codex internal multi-agent subagent forks: they get
+                    // their own rollout file but inherit the parent's history
+                    // (same title) and are not user-facing sessions.
+                    if meta.is_subagent { continue; }
                     let title = codex_title_from_file(&path)
                         .unwrap_or_else(|| short_id(&meta.id, "codex"));
                     let last_activity_at = meta.timestamp
@@ -712,9 +716,10 @@ fn load_codex(home: &Path) -> Vec<AgentSession> {
 }
 
 struct CodexSessionMeta {
-    id:        String,
-    cwd:       PathBuf,
-    timestamp: Option<SystemTime>,
+    id:          String,
+    cwd:         PathBuf,
+    timestamp:   Option<SystemTime>,
+    is_subagent: bool,
 }
 
 fn read_codex_session_meta(path: &Path) -> Option<CodexSessionMeta> {
@@ -728,10 +733,31 @@ fn read_codex_session_meta(path: &Path) -> Option<CodexSessionMeta> {
     let payload = v.get("payload")?;
     let ts_str = payload.get("timestamp").and_then(|s| s.as_str());
     Some(CodexSessionMeta {
-        id:        payload.get("id")?.as_str()?.to_string(),
-        cwd:       PathBuf::from(payload.get("cwd")?.as_str()?),
-        timestamp: ts_str.and_then(parse_iso_to_system_time),
+        id:          payload.get("id")?.as_str()?.to_string(),
+        cwd:         PathBuf::from(payload.get("cwd")?.as_str()?),
+        timestamp:   ts_str.and_then(parse_iso_to_system_time),
+        is_subagent: codex_payload_is_subagent(payload),
     })
+}
+
+/// True if a Codex rollout record is the `session_meta` of an internal
+/// multi-agent subagent / forked thread. Codex's `multi_agent_v1` / `spawn_agent`
+/// tool forks a child thread that gets its own `rollout-*.jsonl` (carrying
+/// `source.subagent` in its meta) and inherits the parent's full history — so it
+/// shows the same first user message / title. It is a codex-internal worker, not
+/// a user-facing session, and must not surface as its own session row.
+pub(crate) fn codex_record_is_subagent_meta(v: &serde_json::Value) -> bool {
+    v.get("type").and_then(|t| t.as_str()) == Some("session_meta")
+        && v.get("payload").map(codex_payload_is_subagent).unwrap_or(false)
+}
+
+/// True if a Codex `session_meta` payload's `source` is the subagent variant
+/// (`{"subagent": …}`) rather than a top-level session (`"cli"` / `"user"`).
+pub(crate) fn codex_payload_is_subagent(payload: &serde_json::Value) -> bool {
+    payload
+        .get("source")
+        .and_then(|s| s.get("subagent"))
+        .is_some()
 }
 
 fn codex_session_has_real_content(path: &Path) -> bool {
@@ -2267,6 +2293,14 @@ mod tests {
 \"originator\":\"codex-tui\",\"cli_version\":\"0.1.0\",\"source\":\"cli\"}}}}\n")
     }
 
+    fn codex_subagent_meta_line(id: &str, parent: &str, ts: &str, cwd: &str) -> String {
+        format!(
+            "{{\"timestamp\":\"{ts}\",\"type\":\"session_meta\",\
+\"payload\":{{\"id\":\"{id}\",\"forked_from_id\":\"{parent}\",\"timestamp\":\"{ts}\",\"cwd\":\"{cwd}\",\
+\"originator\":\"codex-tui\",\"cli_version\":\"0.1.0\",\
+\"source\":{{\"subagent\":{{\"thread_spawn\":{{\"parent_thread_id\":\"{parent}\",\"depth\":1}}}}}}}}}}\n")
+    }
+
     fn codex_user_msg_line(ts: &str, text: &str) -> String {
         format!(
             "{{\"timestamp\":\"{ts}\",\"type\":\"event_msg\",\
@@ -2299,6 +2333,42 @@ mod tests {
         write_file(&path, &codex_meta_line(id, "2026-05-28T11:00:00Z", "C:/x"));
         assert_eq!(load_codex(&home).len(), 0, "phantom (meta-only) must be filtered out");
         let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn load_codex_skips_subagent_fork() {
+        // Codex's multi_agent_v1/spawn_agent forks a child thread that gets its
+        // own rollout (source.subagent) and inherits the parent's first user
+        // message — so it has an identical title. It is a codex-internal worker,
+        // not a user session, and must not appear as a (duplicate) row.
+        let home = tmp_root("load-codex-subagent");
+        let parent = "11111111-2222-3333-4444-555555555555";
+        let child  = "99999999-2222-3333-4444-555555555555";
+        let pp = codex_session_path(&home, "2026", "06", "10", "2026-06-10T13-14-32", parent);
+        write_file(
+            &pp,
+            &(codex_meta_line(parent, "2026-06-10T13:14:32Z", "C:/w")
+                + &codex_user_msg_line("2026-06-10T13:14:43Z", "start new tab agent pane session")),
+        );
+        let cp = codex_session_path(&home, "2026", "06", "10", "2026-06-10T13-15-12", child);
+        write_file(
+            &cp,
+            &(codex_subagent_meta_line(child, parent, "2026-06-10T13:15:12Z", "C:/w")
+                + &codex_user_msg_line("2026-06-10T13:15:12Z", "start new tab agent pane session")),
+        );
+
+        let rows = load_codex(&home);
+        assert_eq!(rows.len(), 1, "subagent fork must be filtered, got {:?}", rows);
+        assert_eq!(rows[0].key, parent, "only the top-level session should survive");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn codex_payload_is_subagent_discriminates_source() {
+        let cli = serde_json::json!({ "source": "cli" });
+        assert!(!codex_payload_is_subagent(&cli), "top-level source=\"cli\" is not a subagent");
+        let sub = serde_json::json!({ "source": { "subagent": { "thread_spawn": { "depth": 1 } } } });
+        assert!(codex_payload_is_subagent(&sub), "source.subagent must be detected");
     }
 
     #[test]

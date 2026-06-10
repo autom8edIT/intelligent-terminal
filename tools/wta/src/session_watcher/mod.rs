@@ -54,6 +54,10 @@ pub(crate) struct Progress {
     offset: u64,
     /// Message count for Gemini's snapshot model.
     gemini_msgs: usize,
+    /// Set once if this file is a Codex multi-agent subagent fork — its records
+    /// are then ignored wholesale (it inherits the parent's history and is not a
+    /// user-facing session, so surfacing it would duplicate the parent's row).
+    ignored: bool,
 }
 
 /// Process one changed file path into emitted events, advancing `progress`.
@@ -63,6 +67,10 @@ pub fn process_change(path: &Path, progress: &mut HashMap<PathBuf, Progress>) ->
         return Vec::new();
     };
     let entry = progress.entry(path.to_path_buf()).or_default();
+    if entry.ignored {
+        // A Codex subagent fork detected on a previous read — skip wholesale.
+        return Vec::new();
+    }
     let mut out = Vec::new();
 
     match disc.cli {
@@ -115,6 +123,16 @@ pub fn process_change(path: &Path, progress: &mut HashMap<PathBuf, Progress>) ->
                 let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
                     continue;
                 };
+                // A Codex multi-agent subagent fork carries `source.subagent` in
+                // its session_meta (always the first record). Mark the file
+                // ignored and drop everything: it inherits the parent's history,
+                // so tracking it would duplicate the parent's row.
+                if matches!(disc.cli, CliSource::Codex)
+                    && crate::history_loader::codex_record_is_subagent_meta(&val)
+                {
+                    entry.ignored = true;
+                    return Vec::new();
+                }
                 let events = match disc.cli {
                     CliSource::Copilot => classify_copilot::classify(&val, &disc.key),
                     CliSource::Claude => classify_claude::classify(&val, &disc.key),
@@ -180,11 +198,13 @@ pub(crate) fn seed_existing_progress_in(
                             Progress {
                                 offset: 0,
                                 gemini_msgs: gemini_msg_count(&path),
+                                ..Default::default()
                             }
                         } else {
                             Progress {
                                 offset: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
                                 gemini_msgs: 0,
+                                ..Default::default()
                             }
                         };
                         progress.insert(path, prog);
@@ -463,6 +483,42 @@ mod tests {
         let out = process_change(&path, &mut progress);
         assert_eq!(out.len(), 1, "a new file must be read from offset 0");
         assert!(matches!(out[0].event, SessionEvent::ToolStarting { .. }));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn process_change_ignores_codex_subagent_rollout() {
+        // Codex's multi_agent_v1/spawn_agent forks a child thread with its own
+        // rollout (source.subagent) that inherits the parent's history — it must
+        // never surface as its own (duplicate) row.
+        let root = std::env::temp_dir().join(format!("wta-subagent-{}", std::process::id()));
+        let dir = root.join("2026").join("06").join("10");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path =
+            dir.join("rollout-2026-06-10T13-15-12-99999999-2222-3333-4444-555555555555.jsonl");
+        std::fs::write(
+            &path,
+            b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"99999999-2222-3333-4444-555555555555\",\"forked_from_id\":\"p\",\"source\":{\"subagent\":{\"thread_spawn\":{\"depth\":1}}}}}\n\
+              {\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n",
+        )
+        .unwrap();
+
+        let mut progress = HashMap::new();
+        let out = process_change(&path, &mut progress);
+        assert!(out.is_empty(), "subagent rollout must emit nothing, got {:?}", out);
+
+        // Even after the subagent does work, it stays ignored.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n")
+            .unwrap();
+        assert!(
+            process_change(&path, &mut progress).is_empty(),
+            "a file flagged as a subagent stays ignored on later reads"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
