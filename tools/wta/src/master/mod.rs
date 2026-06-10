@@ -201,6 +201,13 @@ struct MasterStateInner {
     /// don't recognize (e.g. `--agent codex` — tracked in CliSource::Unknown
     /// but not surfaced as a known session management filter).
     pub(crate) cli_source: Option<crate::agent_sessions::CliSource>,
+    /// The raw, user-configured agent launcher string (`cli.agent`), e.g.
+    /// `wsl.exe -d Ubuntu -- copilot --acp --stdio`. Kept verbatim (not the
+    /// normalized `cli_source`) so `new_session` / `load_session` can detect
+    /// a WSL launcher and translate the incoming Windows `cwd` into the
+    /// distro's POSIX namespace before forwarding to the agent CLI. See
+    /// `protocol::acp::wsl_path`.
+    pub(crate) agent_cmd: String,
     /// Per-helper crash-recovery metadata, keyed by `HelperId`.
     ///
     /// Populated/refreshed by the `new_session` + `load_session`
@@ -769,6 +776,18 @@ impl acp::Agent for HelperHandler {
         // in the same place as the routing entry.
         let mut args = args;
         let wta_meta = crate::session_registry::extract_wta_meta(&mut args.meta);
+        // Rewrite the incoming cwd into something the agent CLI can accept.
+        // For a WSL agent this translates a Windows path (or junk
+        // `C:\WINDOWS\system32`) into the distro's POSIX namespace; for a
+        // native agent it swaps junk for `%USERPROFILE%`. Runs on a blocking
+        // thread because it may shell out to `wsl.exe`. See `wsl_path`.
+        let agent_cmd = self.state.agent_cmd.clone();
+        let raw_cwd = args.cwd.clone();
+        args.cwd = tokio::task::spawn_blocking(move || {
+            crate::protocol::acp::wsl_path::resolve_session_cwd(Some(&raw_cwd), &agent_cmd)
+        })
+        .await
+        .unwrap_or_else(|_| args.cwd.clone());
         let cwd_for_registry = args.cwd.clone();
         tracing::info!(
             target: "master",
@@ -886,6 +905,15 @@ impl acp::Agent for HelperHandler {
         let mut args = args;
         let wta_meta = crate::session_registry::extract_wta_meta(&mut args.meta);
         let session_id = args.session_id.clone();
+        // Mirror `new_session`: a resumed WSL session must also carry a
+        // POSIX cwd, or the agent CLI rejects the Windows path.
+        let agent_cmd = self.state.agent_cmd.clone();
+        let raw_cwd = args.cwd.clone();
+        args.cwd = tokio::task::spawn_blocking(move || {
+            crate::protocol::acp::wsl_path::resolve_session_cwd(Some(&raw_cwd), &agent_cmd)
+        })
+        .await
+        .unwrap_or_else(|_| args.cwd.clone());
         let cwd_for_registry = args.cwd.clone();
         tracing::info!(
             target: "master",
@@ -1512,6 +1540,7 @@ async fn run_master_loop(cli: Cli, pipe_name: String) -> Result<()> {
         wt,
         cached_init_resp: OnceLock::new(),
         cli_source,
+        agent_cmd: cli.agent.clone(),
         helper_meta: Mutex::new(HashMap::new()),
     });
 
@@ -2537,6 +2566,7 @@ mod tests {
             wt: None,
             cached_init_resp: OnceLock::new(),
             cli_source: Some(crate::agent_sessions::CliSource::Copilot),
+            agent_cmd: "copilot".to_string(),
             helper_meta: Mutex::new(HashMap::new()),
         })
     }
@@ -3342,6 +3372,7 @@ mod tests {
             wt: Some(wt),
             cached_init_resp: OnceLock::new(),
             cli_source: Some(crate::agent_sessions::CliSource::Copilot),
+            agent_cmd: "copilot".to_string(),
             helper_meta: Mutex::new(HashMap::new()),
         })
     }

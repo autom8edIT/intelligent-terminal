@@ -3350,9 +3350,21 @@ async fn run_inner(
     // Create session — also with a timeout.
     let _ = event_tx.send(AppEvent::ConnectionStage("Creating session...".to_string()));
     startup_probe.log("Creating session");
-    let cwd = active_pane_cwd
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    // Resolve the cwd we hand the agent's `session/new`. For a WSL agent this
+    // translates the Windows pane cwd into the distro's POSIX namespace (or
+    // falls back to the distro `$HOME`); for a native agent it swaps a junk
+    // launcher dir for `%USERPROFILE%`. The *spawn* cwd above intentionally
+    // keeps the raw Windows path — the immediate child is `wsl.exe`, a Windows
+    // process, so its working directory must stay a Windows directory.
+    let cwd = {
+        let raw = active_pane_cwd.clone();
+        let agent_cmd_owned = agent_cmd.to_string();
+        tokio::task::spawn_blocking(move || {
+            crate::protocol::acp::wsl_path::resolve_session_cwd(raw.as_deref(), &agent_cmd_owned)
+        })
+        .await
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
+    };
     startup_probe.log(&format!("Using session cwd={}", cwd.display()));
     let session_future = conn.new_session(acp::NewSessionRequest::new(cwd));
     let session = tokio::time::timeout(std::time::Duration::from_secs(15), session_future)
