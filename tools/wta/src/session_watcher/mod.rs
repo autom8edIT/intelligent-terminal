@@ -15,9 +15,10 @@ pub mod classify_copilot;
 pub mod classify_gemini;
 pub mod discover;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Read the bytes appended to `path` since byte offset `from`, returning the
 /// decoded text and the new end offset. Used for the append-only CLIs.
@@ -144,6 +145,113 @@ pub fn watched_roots() -> Vec<PathBuf> {
 
 use std::sync::mpsc::Sender;
 
+/// Seed per-file progress to each existing session file's current end, so the
+/// watcher only processes content appended *after* it starts. Without this, the
+/// first `notify` event for a pre-existing historical file (which the OS can
+/// deliver spuriously — e.g. an indexer/AV touch, or a delayed
+/// ReadDirectoryChangesW batch) would make `process_change` replay that file's
+/// entire record stream from offset 0. Each replayed record revives its
+/// historical Class-B session and re-broadcasts `sessions/changed`, flooding
+/// master with thousands of redundant notifications and stalling live updates.
+///
+/// Files created *after* the watcher starts are not seeded (not present here),
+/// so their first sighting is still read from offset 0 — correctly catching a
+/// new session's opening `session_meta` / `task_started` records.
+pub(crate) fn seed_existing_progress_in(
+    roots: &[PathBuf],
+    progress: &mut HashMap<PathBuf, Progress>,
+) {
+    for root in roots {
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                match entry.file_type() {
+                    Ok(ft) if ft.is_dir() => stack.push(path),
+                    Ok(_) => {
+                        let Some(disc) = discover::identify(&path) else {
+                            continue;
+                        };
+                        let prog = if matches!(disc.cli, CliSource::Gemini) {
+                            // Gemini's snapshot model counts messages, not bytes.
+                            Progress {
+                                offset: 0,
+                                gemini_msgs: gemini_msg_count(&path),
+                            }
+                        } else {
+                            Progress {
+                                offset: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                                gemini_msgs: 0,
+                            }
+                        };
+                        progress.insert(path, prog);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// Current message count in a Gemini snapshot file (the last non-empty
+/// `$set.messages` array). `0` on any read/parse failure.
+fn gemini_msg_count(path: &Path) -> usize {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return 0;
+    };
+    let Some(last) = text.lines().rev().find(|l| !l.trim().is_empty()) else {
+        return 0;
+    };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(last) else {
+        return 0;
+    };
+    val.get("$set")
+        .and_then(|s| s.get("messages"))
+        .and_then(|m| m.as_array())
+        .or_else(|| val.get("messages").and_then(|m| m.as_array()))
+        .map(|a| a.len())
+        .unwrap_or(0)
+}
+
+/// Mark/unmark a session file as **hot** — i.e. belonging to a session that is
+/// currently mid-turn (WORKING/ATTENTION) and therefore the only kind of row a
+/// dropped completion event could strand. A file goes hot when it emits a
+/// start/notification event and cold when it emits a completion. The periodic
+/// sweep re-reads only the hot set, so its cost scales with *active* sessions
+/// rather than with the (mostly historical, long-idle) tracked-file count.
+fn update_hot(hot: &mut HashSet<PathBuf>, path: &Path, event: &SessionEvent) {
+    match event {
+        SessionEvent::ToolStarting { .. } | SessionEvent::Notification { .. } => {
+            hot.insert(path.to_path_buf());
+        }
+        SessionEvent::ToolCompleted { .. } | SessionEvent::SessionStopped { .. } => {
+            hot.remove(path);
+        }
+        _ => {}
+    }
+}
+
+/// Run [`process_change`] on `path`, update the hot-set from each emitted event,
+/// and forward the event on `tx`. Returns `Err(())` once the receiver is gone so
+/// the caller can stop the watch loop.
+fn process_and_send(
+    path: &Path,
+    progress: &mut HashMap<PathBuf, Progress>,
+    hot: &mut HashSet<PathBuf>,
+    tx: &Sender<Emitted>,
+) -> Result<(), ()> {
+    for emitted in process_change(path, progress) {
+        update_hot(hot, path, &emitted.event);
+        if tx.send(emitted).is_err() {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
 /// Spawn a blocking `notify` watcher over the four roots. Each emitted event
 /// is sent on `tx`. Runs until `tx` is dropped or the watcher errors.
 ///
@@ -171,23 +279,48 @@ pub fn watch(tx: Sender<Emitted>) -> notify::Result<()> {
     }
 
     let mut progress: HashMap<PathBuf, Progress> = HashMap::new();
-    for res in raw_rx {
-        let event = match res {
-            Ok(e) => e,
-            Err(err) => {
-                tracing::warn!(target: "session_watcher", error = %err, "notify error");
-                continue;
-            }
-        };
-        for path in event.paths {
-            for emitted in process_change(&path, &mut progress) {
-                if tx.send(emitted).is_err() {
-                    return Ok(()); // receiver gone
+    // Skip every record that already existed when we started watching — only
+    // track genuinely new activity. See `seed_existing_progress_in`.
+    seed_existing_progress_in(&watched_roots(), &mut progress);
+    // Files whose session is currently mid-turn (WORKING/ATTENTION). See
+    // `update_hot` — the periodic sweep below re-reads only these.
+    let mut hot: HashSet<PathBuf> = HashSet::new();
+
+    // notify (ReadDirectoryChangesW) is an *edge* signal, not a per-record queue:
+    // it coalesces consecutive writes to one file and never guarantees a
+    // notification arrives after the final write is durable. The last record of a
+    // turn — Codex `task_complete` / Copilot `assistant.turn_end` (→ IDLE) — is
+    // the most exposed: it's the file's last write before the session goes quiet,
+    // so if its event is coalesced/missed there is no later write to re-trigger a
+    // read and the row stays stuck on WORKING. Guard with a periodic catch-up
+    // sweep that re-runs the incremental `process_change` — but ONLY over `hot`
+    // files (sessions currently mid-turn). When nothing is working the sweep is a
+    // no-op, so the cost scales with active sessions, not with the (mostly
+    // historical, long-idle) tracked-file count.
+    const SWEEP_INTERVAL: Duration = Duration::from_secs(3);
+    loop {
+        match raw_rx.recv_timeout(SWEEP_INTERVAL) {
+            Ok(Ok(event)) => {
+                for path in event.paths {
+                    if process_and_send(&path, &mut progress, &mut hot, &tx).is_err() {
+                        return Ok(()); // receiver gone
+                    }
                 }
             }
+            Ok(Err(err)) => {
+                tracing::warn!(target: "session_watcher", error = %err, "notify error");
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let hot_paths: Vec<PathBuf> = hot.iter().cloned().collect();
+                for path in hot_paths {
+                    if process_and_send(&path, &mut progress, &mut hot, &tx).is_err() {
+                        return Ok(()); // receiver gone
+                    }
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -267,5 +400,111 @@ mod tests {
         let second = process_change(&path, &mut progress);
         assert_eq!(second.len(), 1, "the completed record must now classify (not be lost)");
         assert!(matches!(second[0].event, SessionEvent::ToolCompleted { .. }));
+    }
+
+    #[test]
+    fn seed_skips_preexisting_history_then_tracks_new_appends() {
+        // A pre-existing Codex rollout (history) must be seeded to EOF so it is
+        // NOT replayed from offset 0 — the bug that flooded master with revive
+        // broadcasts. New content appended after seeding is still tracked.
+        let root = std::env::temp_dir().join(format!("wta-seed-{}", std::process::id()));
+        let day = root.join("2026").join("06").join("10");
+        std::fs::create_dir_all(&day).unwrap();
+        let path =
+            day.join("rollout-2026-06-10T00-00-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        std::fs::write(
+            &path,
+            b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n\
+              {\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"shell\"}}\n",
+        )
+        .unwrap();
+
+        let mut progress = HashMap::new();
+        seed_existing_progress_in(&[root.clone()], &mut progress);
+
+        // History is skipped — no replay on the first change.
+        let replay = process_change(&path, &mut progress);
+        assert!(
+            replay.is_empty(),
+            "seeded historical file must not replay, got {:?}",
+            replay
+        );
+
+        // A genuinely new appended record IS processed.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n")
+            .unwrap();
+        let fresh = process_change(&path, &mut progress);
+        assert_eq!(fresh.len(), 1, "new appended record must be classified");
+        assert!(matches!(fresh[0].event, SessionEvent::ToolCompleted { .. }));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn seed_does_not_skip_files_created_after_start() {
+        // A file absent at seed time (new session created after the watcher
+        // started) is not seeded, so it's read in full on first sight.
+        let root = std::env::temp_dir().join(format!("wta-seed-new-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut progress = HashMap::new();
+        seed_existing_progress_in(&[root.clone()], &mut progress); // empty root
+
+        let path =
+            root.join("rollout-2026-06-10T00-00-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        std::fs::write(
+            &path,
+            b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n",
+        )
+        .unwrap();
+        let out = process_change(&path, &mut progress);
+        assert_eq!(out.len(), 1, "a new file must be read from offset 0");
+        assert!(matches!(out[0].event, SessionEvent::ToolStarting { .. }));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn hot_set_tracks_working_then_clears_on_completion() {
+        // The sweep re-reads only "hot" files (sessions mid-turn). A turn start
+        // marks the file hot; a mid-turn permission prompt keeps it hot; the
+        // turn-completing event clears it so an idle session is never swept.
+        let mut hot: HashSet<PathBuf> = HashSet::new();
+        let p = PathBuf::from("rollout-x.jsonl");
+
+        update_hot(
+            &mut hot,
+            &p,
+            &SessionEvent::ToolStarting {
+                key: "k".to_string(),
+                tool_name: String::new(),
+            },
+        );
+        assert!(hot.contains(&p), "task_started must mark the file hot");
+
+        update_hot(
+            &mut hot,
+            &p,
+            &SessionEvent::Notification {
+                key: "k".to_string(),
+                message: "permission".to_string(),
+            },
+        );
+        assert!(hot.contains(&p), "an Attention prompt keeps the file hot");
+
+        update_hot(
+            &mut hot,
+            &p,
+            &SessionEvent::ToolCompleted {
+                key: "k".to_string(),
+            },
+        );
+        assert!(
+            !hot.contains(&p),
+            "task_complete must clear the file so an idle session isn't swept"
+        );
     }
 }

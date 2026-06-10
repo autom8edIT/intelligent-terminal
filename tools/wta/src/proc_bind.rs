@@ -57,6 +57,8 @@ extern "system" {
 extern "system" {
     fn OpenProcess(desired_access: u32, inherit: i32, pid: u32) -> isize;
     fn CloseHandle(handle: isize) -> i32;
+    fn GetExitCodeProcess(handle: isize, exit_code: *mut u32) -> i32;
+    fn GetLastError() -> u32;
     fn ReadProcessMemory(
         handle: isize,
         base_address: usize,
@@ -64,6 +66,37 @@ extern "system" {
         size: usize,
         bytes_read: *mut usize,
     ) -> i32;
+}
+
+// PROCESS_QUERY_LIMITED_INFORMATION — the lightest right that still lets us
+// read a process's exit code; works on same-user processes we can't open with
+// the heavier PROCESS_ACCESS mask.
+const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+const STILL_ACTIVE: u32 = 259;
+const ERROR_ACCESS_DENIED: u32 = 5;
+
+/// Whether `pid` refers to a still-running process. Returns `false` only when
+/// the process has exited or never existed; a process that exists but can't be
+/// opened (access denied, e.g. elevation) is reported **alive** so the caller
+/// never reaps a live session by mistake. Used by master's Class-B liveness
+/// poll to demote shell-pane sessions whose CLI was `Ctrl+C`'d — those CLIs
+/// write no "session ended" record, so process death is the only signal.
+pub fn pid_alive(pid: u32) -> bool {
+    // SAFETY: query-only access right; OpenProcess returns 0 (NULL) on failure.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle == 0 {
+        // SAFETY: GetLastError only reads the thread-local last-error code.
+        let err = unsafe { GetLastError() };
+        // ACCESS_DENIED means the process exists but is unqueryable → alive.
+        // Any other error (typically ERROR_INVALID_PARAMETER) → no such pid.
+        return err == ERROR_ACCESS_DENIED;
+    }
+    let mut code: u32 = 0;
+    // SAFETY: `handle` is a valid process handle; `code` is a valid out-param.
+    let ok = unsafe { GetExitCodeProcess(handle, &mut code) };
+    // SAFETY: `handle` came from OpenProcess and is closed exactly once here.
+    unsafe { CloseHandle(handle) };
+    ok != 0 && code == STILL_ACTIVE
 }
 
 /// RAII wrapper so we never leak a process handle across an early return.
@@ -668,5 +701,20 @@ mod tests {
         // No handle held -> Restart Manager reports no holders.
         let holders = file_holders(&path);
         assert!(holders.is_empty(), "expected no holders, got {:?}", holders);
+    }
+
+    #[test]
+    fn pid_alive_true_for_self_false_for_dead() {
+        // Our own process is alive.
+        assert!(pid_alive(std::process::id()));
+        // Spawn a child, kill it, confirm it reports dead.
+        let mut child = spawn_probe_child(&[], None);
+        let pid = child.id();
+        assert!(pid_alive(pid), "freshly spawned child should be alive");
+        let _ = child.kill();
+        let _ = child.wait();
+        // Give the OS a moment to tear the process down.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!pid_alive(pid), "killed child should report dead");
     }
 }

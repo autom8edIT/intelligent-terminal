@@ -813,6 +813,22 @@ pub fn codex_title_for_key(home: &Path, key: &str) -> Option<String> {
     codex_title_from_file(&path)
 }
 
+/// Read a Codex session's working directory from its rollout `session_meta`
+/// record (always the first line). Shell-pane Codex rows have no path-encoded
+/// cwd (unlike Claude), and Codex writes no title until the user's first
+/// message — so without this the row would have an empty cwd and the session
+/// view's cwd-basename title fallback would render a placeholder for the ~20s
+/// before that first message. Returns `None` if the file/field is absent.
+pub(crate) fn codex_cwd_from_rollout(path: &Path) -> Option<PathBuf> {
+    let first = stream_jsonl_lines(path, CLASSIFY_SCAN_BYTES_CAP)?.next()?;
+    let v: serde_json::Value = serde_json::from_str(&first).ok()?;
+    let cwd = v.get("payload")?.get("cwd")?.as_str()?;
+    if cwd.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(cwd))
+}
+
 /// Locate the rollout file for a given session UUID.
 ///
 /// Defensive walking: only an unreadable ROOT (`~/.codex/sessions`) returns
@@ -1421,6 +1437,29 @@ mod tests {
         assert_eq!(parse_simple_yaml(text, "summary_count").as_deref(), Some("0"));
         // Querying a nonexistent prefix must not partial-match a longer key.
         assert_eq!(parse_simple_yaml(text, "summa"), None);
+    }
+
+    #[test]
+    fn codex_cwd_from_rollout_reads_session_meta() {
+        let dir = tmp_root("codex-cwd");
+        let path = dir.join("rollout-x.jsonl");
+        write_file(
+            &path,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"abc\",\"cwd\":\"C:\\\\Users\\\\yuazha\"}}\n\
+             {\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n",
+        );
+        assert_eq!(
+            codex_cwd_from_rollout(&path),
+            Some(PathBuf::from("C:\\Users\\yuazha"))
+        );
+    }
+
+    #[test]
+    fn codex_cwd_from_rollout_none_when_absent() {
+        let dir = tmp_root("codex-cwd-none");
+        let path = dir.join("rollout-y.jsonl");
+        write_file(&path, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"abc\"}}\n");
+        assert_eq!(codex_cwd_from_rollout(&path), None);
     }
 
     #[test]

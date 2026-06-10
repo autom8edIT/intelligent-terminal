@@ -1816,7 +1816,7 @@ pub(crate) fn session_info_to_agent_session(
         pane_session_id: info.pane_session_id.clone(),
         window_id: None,
         tab_id: None,
-        title: info.title.clone().unwrap_or_else(|| "—".to_string()),
+        title: info.title.clone().unwrap_or_default(),
         cwd: info.cwd.clone(),
         started_at: last_activity_at,
         last_activity_at,
@@ -9088,6 +9088,20 @@ mod tests {
             s.cli_source,
             crate::agent_sessions::CliSource::Unknown(ref v) if v.is_empty()
         ));
+    }
+
+    #[test]
+    fn session_info_to_agent_session_empty_title_when_none() {
+        // Regression: a master row with no title must convert to an EMPTY
+        // title (not a literal "—"), so the session view's display_title can
+        // fall back to the cwd basename. A shell-pane Codex session has no
+        // title until the user's first message; pinning it to "—" was the bug.
+        let info = crate::session_registry::SessionInfo::new(
+            agent_client_protocol::SessionId::new("sid-codex"),
+            std::path::PathBuf::from("C:\\Users\\yuazha"),
+        );
+        let s = crate::app::session_info_to_agent_session(&info);
+        assert!(s.title.is_empty(), "title should be empty, got {:?}", s.title);
     }
 
     fn test_app_with_master_rx() -> (

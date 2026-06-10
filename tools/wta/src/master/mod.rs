@@ -1568,6 +1568,26 @@ async fn run_master_loop(cli: Cli, pipe_name: String) -> Result<()> {
         });
     }
 
+    // ── Class-B liveness poll ───────────────────────────────────────────
+    // Shell-pane CLIs (codex/claude/gemini) write no "session ended" record
+    // and don't all hold a lock file, so a `Ctrl+C` leaves the row stuck at
+    // its last status. Poll the bound pids every few seconds and end any whose
+    // owning process has exited. Each tick is cheap — an O(1) `OpenProcess`
+    // per bound Class-B session (~tens of microseconds) — so the fixed 5s
+    // interval adds no meaningful idle cost. `Skip` missed ticks so a busy
+    // executor never queues a backlog of polls.
+    {
+        let inner_for_reap = Arc::clone(&inner);
+        tokio::task::spawn_local(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                reap_dead_class_b_sessions(&inner_for_reap).await;
+            }
+        });
+    }
+
     // WT event subscriber: drive PaneClosed / ConnectionFailed into the
     // master registry directly off WT's `connection_state` events. This
     // is the fallback for cases where no helper publishes the event —
@@ -2130,59 +2150,180 @@ async fn apply_watcher_event(
 }
 
 /// Ensure master's registry has a row for the event's session key, creating a
-/// minimal one (with a best-effort pane binding) on first sight. Binding per
-/// the spec's Decision #3: Copilot=lock, Codex=Restart Manager,
-/// Claude=cwd-correlation, Gemini=unbound (cwd not path-encoded). All resolver
-/// calls are best-effort — a failed bind never blocks row creation, it just
-/// leaves `pane_session_id = None`.
+/// minimal one (with a best-effort pane binding) on first sight, OR reviving a
+/// Class-B (shell-pane) row the user just resumed. Binding per the spec's
+/// Decision #3: Copilot=lock, Codex=Restart Manager, Claude=cwd-correlation,
+/// Gemini=unbound (cwd not path-encoded). All resolver calls are best-effort —
+/// a failed bind never blocks row creation/revival, it just leaves
+/// `pane_session_id = None`.
+///
+/// Revival: a resumed shell-pane session is `Historical` (from the startup
+/// history scan) or `Ended`; the watcher event flips it back to `Idle` and
+/// rebinds its pane so the activity event applied immediately after can mark it
+/// `Working`. This is done here, in the watcher path, rather than by loosening
+/// the shared reducer's terminal-state guard, so Class-A agent-pane ghost rows
+/// stay protected.
 async fn ensure_watched_session_row(
     state: &MasterStateInner,
     emitted: &crate::session_watcher::Emitted,
 ) {
-    use crate::agent_sessions::CliSource;
+    use crate::agent_sessions::{AgentStatus, SessionOrigin};
     let sid = acp::SessionId::new(emitted.key.clone());
-    if state.registry.lookup(&sid).await.is_some() {
-        return;
-    }
-
     let home = std::env::var("USERPROFILE")
         .map(std::path::PathBuf::from)
         .unwrap_or_default();
 
-    let (pane, cwd): (Option<String>, std::path::PathBuf) = match &emitted.cli {
+    match state.registry.lookup(&sid).await {
+        None => {
+            // First sight: create the row with a best-effort pane binding.
+            let (pane, pid, cwd) = resolve_watched_pane_pid_cwd(&home, emitted);
+            let mut info = crate::session_registry::SessionInfo::new(sid, cwd);
+            info.cli_source = Some(emitted.cli.clone());
+            info.status = Some(AgentStatus::Idle);
+            info.origin = Some(SessionOrigin::Unknown);
+            info.pane_session_id = pane;
+            info.bound_pid = pid;
+            state.registry.upsert(info).await;
+        }
+        Some(existing) => {
+            // Revive a Class-B (non-agent-pane) row that the user just resumed
+            // in a shell pane: it's Historical (from the startup history scan)
+            // or Ended (pane previously closed). Rebind its pane and clear the
+            // terminal status to Idle so the activity event applied right after
+            // this can mark it Working. Doing the revival here — in the watcher
+            // path — keeps the shared reducer's terminal-state guard untouched,
+            // so Class-A agent-pane ghost rows stay protected.
+            let is_class_b = existing.origin != Some(SessionOrigin::AgentPane);
+            let is_terminal = matches!(
+                existing.status,
+                Some(AgentStatus::Historical | AgentStatus::Ended)
+            );
+            if is_class_b && is_terminal {
+                let (pane, pid, _cwd) = resolve_watched_pane_pid_cwd(&home, emitted);
+                let mut revived = existing;
+                revived.status = Some(AgentStatus::Idle);
+                // Only overwrite the pane binding / pid when we resolved a
+                // fresh one; never clobber a good binding with None.
+                if pane.is_some() {
+                    revived.pane_session_id = pane;
+                }
+                if pid.is_some() {
+                    revived.bound_pid = pid;
+                }
+                revived.last_error = None;
+                revived.attention_reason = None;
+                revived.current_tool = None;
+                state.registry.upsert(revived).await;
+            }
+            // Class-A rows, and already-live Class-B rows, are left as-is.
+        }
+    }
+}
+
+/// Best-effort `(pane GUID, owner pid, cwd)` for a watched session, per the
+/// spec's Decision #3 binding strategy. All resolver calls are best-effort — a
+/// failed bind yields `pane = None` / `pid = None` and never blocks row
+/// creation/revival. The pid feeds master's Class-B liveness poll.
+fn resolve_watched_pane_pid_cwd(
+    home: &std::path::Path,
+    emitted: &crate::session_watcher::Emitted,
+) -> (Option<String>, Option<u32>, std::path::PathBuf) {
+    use crate::agent_sessions::CliSource;
+    match &emitted.cli {
         CliSource::Copilot => {
-            let dir = crate::history_loader::copilot_session_dir_for_key(&home, &emitted.key);
-            let pane = crate::session_watcher::bind::bind_copilot(&dir);
-            (pane, emitted.cwd.clone().unwrap_or_default())
+            let dir = crate::history_loader::copilot_session_dir_for_key(home, &emitted.key);
+            let (pane, pid) = crate::session_watcher::bind::bind_copilot(&dir);
+            (pane, pid, emitted.cwd.clone().unwrap_or_default())
         }
         CliSource::Codex => {
-            match crate::history_loader::find_codex_rollout_by_id(&home, &emitted.key) {
-                Some(path) => (
-                    crate::session_watcher::bind::bind_codex(&path),
-                    emitted.cwd.clone().unwrap_or_default(),
-                ),
-                None => (None, emitted.cwd.clone().unwrap_or_default()),
+            match crate::history_loader::find_codex_rollout_by_id(home, &emitted.key) {
+                Some(path) => {
+                    let (pane, pid) = crate::session_watcher::bind::bind_codex(&path);
+                    // Codex's emitted.cwd is None (not path-encoded); read it
+                    // from the rollout's session_meta so the row has a
+                    // cwd-basename title fallback before the user's first
+                    // message (which is what the title is derived from) lands.
+                    let cwd = crate::history_loader::codex_cwd_from_rollout(&path)
+                        .or_else(|| emitted.cwd.clone())
+                        .unwrap_or_default();
+                    (pane, pid, cwd)
+                }
+                None => (None, None, emitted.cwd.clone().unwrap_or_default()),
             }
         }
         CliSource::Claude => match &emitted.cwd {
-            Some(cwd) => (
-                crate::session_watcher::bind::bind_by_cwd(&emitted.cli, cwd),
-                cwd.clone(),
-            ),
-            None => (None, std::path::PathBuf::new()),
+            Some(cwd) => {
+                let (pane, pid) = crate::session_watcher::bind::bind_by_cwd(&emitted.cli, cwd);
+                (pane, pid, cwd.clone())
+            }
+            None => (None, None, std::path::PathBuf::new()),
         },
         // Gemini's cwd is not path-encoded (MVP: unbound); Unknown likewise.
         CliSource::Gemini | CliSource::Unknown(_) => {
-            (None, emitted.cwd.clone().unwrap_or_default())
+            (None, None, emitted.cwd.clone().unwrap_or_default())
         }
-    };
+    }
+}
 
-    let mut info = crate::session_registry::SessionInfo::new(sid, cwd);
-    info.cli_source = Some(emitted.cli.clone());
-    info.status = Some(crate::agent_sessions::AgentStatus::Idle);
-    info.origin = Some(crate::agent_sessions::SessionOrigin::Unknown);
-    info.pane_session_id = pane;
-    state.registry.upsert(info).await;
+/// Demote shell-pane (Class-B) sessions whose owning CLI process has exited
+/// without writing a "session ended" record — e.g. the user `Ctrl+C`'d a
+/// `codex` / `claude` / `gemini` running directly in a pane. Those CLIs leave
+/// the rollout/transcript file frozen at its last turn, so process death is the
+/// only end signal; master polls the bound pids and ends any that are gone.
+///
+/// Agent-pane (Class-A) sessions are managed by the ACP / alive-mirror path and
+/// are never touched here. Rows without a `bound_pid` (binding failed, or
+/// Gemini which is unbound) can't be polled and are left as-is. Returns the
+/// number of sessions reaped (for the caller / tests).
+async fn reap_dead_class_b_sessions(state: &MasterStateInner) -> usize {
+    use crate::agent_sessions::{AgentStatus, SessionOrigin};
+    let dead: Vec<String> = state
+        .registry
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|s| s.origin != Some(SessionOrigin::AgentPane))
+        .filter(|s| {
+            matches!(
+                s.status,
+                Some(AgentStatus::Working | AgentStatus::Idle | AgentStatus::Attention)
+            )
+        })
+        .filter_map(|s| s.bound_pid.map(|pid| (s.session_id.0.to_string(), pid)))
+        .filter(|(_, pid)| !crate::proc_bind::pid_alive(*pid))
+        .map(|(key, _)| key)
+        .collect();
+
+    if dead.is_empty() {
+        return 0;
+    }
+
+    let mut reaped = 0;
+    for key in &dead {
+        let applied = state
+            .registry
+            .apply_event(crate::agent_sessions::SessionEvent::SessionStopped {
+                key: key.clone(),
+                reason: "process exited".to_string(),
+            })
+            .await;
+        if applied {
+            reaped += 1;
+            tracing::info!(
+                target: "session_watcher",
+                session_id = %key,
+                "reaped Class-B session: owning process exited"
+            );
+        }
+    }
+    if reaped > 0 {
+        broadcast_ext_to_helpers(
+            state,
+            crate::session_registry::build_sessions_changed_notification(),
+        )
+        .await;
+    }
+    reaped
 }
 
 /// Master-side WT event subscriber. Bridges `connection_state`
@@ -3740,6 +3881,236 @@ mod tests {
         })
         .await;
         assert!(!upgraded);
+    }
+
+    // ── ensure_watched_session_row: Class-B resume revival ──────────
+
+    async fn seed_session_row(
+        state: &MasterStateInner,
+        key: &str,
+        origin: crate::agent_sessions::SessionOrigin,
+        status: crate::agent_sessions::AgentStatus,
+    ) {
+        let mut info = crate::session_registry::SessionInfo::new(
+            acp::SessionId::new(key.to_string()),
+            std::path::PathBuf::from("C:\\repo"),
+        );
+        info.cli_source = Some(crate::agent_sessions::CliSource::Codex);
+        info.origin = Some(origin);
+        info.status = Some(status);
+        state.registry.upsert(info).await;
+    }
+
+    fn codex_emitted(key: &str) -> crate::session_watcher::Emitted {
+        crate::session_watcher::Emitted {
+            cli: crate::agent_sessions::CliSource::Codex,
+            key: key.to_string(),
+            cwd: None,
+            event: crate::agent_sessions::SessionEvent::ToolStarting {
+                key: key.to_string(),
+                tool_name: String::new(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn ensure_row_revives_class_b_historical_session() {
+        // A shell-pane (Class B) session the user resumed is Historical from
+        // the startup history scan. The watcher's first event must revive it
+        // (Historical -> Idle) so the following activity event can mark it
+        // Working — otherwise the reducer's terminal-state guard keeps it
+        // stuck at "no status".
+        let state = make_state();
+        seed_session_row(
+            &state,
+            "sid-resumed",
+            crate::agent_sessions::SessionOrigin::Unknown,
+            crate::agent_sessions::AgentStatus::Historical,
+        )
+        .await;
+
+        ensure_watched_session_row(&state, &codex_emitted("sid-resumed")).await;
+
+        let row = state
+            .registry
+            .lookup(&acp::SessionId::new("sid-resumed".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(row.status, Some(crate::agent_sessions::AgentStatus::Idle));
+    }
+
+    #[tokio::test]
+    async fn ensure_row_does_not_revive_agent_pane_session() {
+        // Class A (agent pane) terminal rows must NOT be revived by a watcher
+        // event — that's the ghost-row case the reducer guard protects
+        // against. Keep the revival scoped to Class B.
+        let state = make_state();
+        seed_session_row(
+            &state,
+            "sid-agent",
+            crate::agent_sessions::SessionOrigin::AgentPane,
+            crate::agent_sessions::AgentStatus::Historical,
+        )
+        .await;
+
+        ensure_watched_session_row(&state, &codex_emitted("sid-agent")).await;
+
+        let row = state
+            .registry
+            .lookup(&acp::SessionId::new("sid-agent".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(
+            row.status,
+            Some(crate::agent_sessions::AgentStatus::Historical),
+            "Class A agent-pane rows must stay terminal"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_row_leaves_live_class_b_session_untouched() {
+        // A live (non-terminal) Class-B row must not be re-bound or reset on
+        // every event — revival applies only to terminal rows.
+        let state = make_state();
+        let mut info = crate::session_registry::SessionInfo::new(
+            acp::SessionId::new("sid-live".to_string()),
+            std::path::PathBuf::from("C:\\repo"),
+        );
+        info.cli_source = Some(crate::agent_sessions::CliSource::Codex);
+        info.origin = Some(crate::agent_sessions::SessionOrigin::Unknown);
+        info.status = Some(crate::agent_sessions::AgentStatus::Working);
+        info.pane_session_id = Some("pane-live".to_string());
+        state.registry.upsert(info).await;
+
+        ensure_watched_session_row(&state, &codex_emitted("sid-live")).await;
+
+        let row = state
+            .registry
+            .lookup(&acp::SessionId::new("sid-live".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(row.status, Some(crate::agent_sessions::AgentStatus::Working));
+        assert_eq!(row.pane_session_id.as_deref(), Some("pane-live"));
+    }
+
+    // ── reap_dead_class_b_sessions: Ctrl+C liveness poll ────────────
+
+    async fn seed_row_with_pid(
+        state: &MasterStateInner,
+        key: &str,
+        origin: crate::agent_sessions::SessionOrigin,
+        status: crate::agent_sessions::AgentStatus,
+        pid: Option<u32>,
+    ) {
+        let mut info = crate::session_registry::SessionInfo::new(
+            acp::SessionId::new(key.to_string()),
+            std::path::PathBuf::from("C:\\repo"),
+        );
+        info.cli_source = Some(crate::agent_sessions::CliSource::Codex);
+        info.origin = Some(origin);
+        info.status = Some(status);
+        info.bound_pid = pid;
+        state.registry.upsert(info).await;
+    }
+
+    // A pid that is essentially guaranteed not to exist, so pid_alive is false.
+    const DEAD_PID: u32 = 0x7FFF_FFF0;
+
+    #[tokio::test]
+    async fn reap_ends_class_b_with_dead_pid() {
+        let state = make_state();
+        seed_row_with_pid(
+            &state,
+            "sid-dead",
+            crate::agent_sessions::SessionOrigin::Unknown,
+            crate::agent_sessions::AgentStatus::Idle,
+            Some(DEAD_PID),
+        )
+        .await;
+
+        let reaped = reap_dead_class_b_sessions(&state).await;
+        assert_eq!(reaped, 1);
+
+        let row = state
+            .registry
+            .lookup(&acp::SessionId::new("sid-dead".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(row.status, Some(crate::agent_sessions::AgentStatus::Ended));
+    }
+
+    #[tokio::test]
+    async fn reap_keeps_class_b_with_live_pid() {
+        let state = make_state();
+        // Our own process is alive — the session must survive the poll.
+        seed_row_with_pid(
+            &state,
+            "sid-alive",
+            crate::agent_sessions::SessionOrigin::Unknown,
+            crate::agent_sessions::AgentStatus::Working,
+            Some(std::process::id()),
+        )
+        .await;
+
+        let reaped = reap_dead_class_b_sessions(&state).await;
+        assert_eq!(reaped, 0);
+
+        let row = state
+            .registry
+            .lookup(&acp::SessionId::new("sid-alive".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(row.status, Some(crate::agent_sessions::AgentStatus::Working));
+    }
+
+    #[tokio::test]
+    async fn reap_ignores_agent_pane_sessions() {
+        // Class A (agent pane) rows are managed by the ACP / alive-mirror path;
+        // the liveness poll must never touch them even with a dead pid.
+        let state = make_state();
+        seed_row_with_pid(
+            &state,
+            "sid-a",
+            crate::agent_sessions::SessionOrigin::AgentPane,
+            crate::agent_sessions::AgentStatus::Idle,
+            Some(DEAD_PID),
+        )
+        .await;
+
+        let reaped = reap_dead_class_b_sessions(&state).await;
+        assert_eq!(reaped, 0);
+
+        let row = state
+            .registry
+            .lookup(&acp::SessionId::new("sid-a".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(row.status, Some(crate::agent_sessions::AgentStatus::Idle));
+    }
+
+    #[tokio::test]
+    async fn reap_ignores_rows_without_bound_pid() {
+        // A Class-B row we couldn't bind to a pid (or Gemini, which is unbound)
+        // can't be polled, so it's left alone.
+        let state = make_state();
+        seed_row_with_pid(
+            &state,
+            "sid-nopid",
+            crate::agent_sessions::SessionOrigin::Unknown,
+            crate::agent_sessions::AgentStatus::Idle,
+            None,
+        )
+        .await;
+
+        let reaped = reap_dead_class_b_sessions(&state).await;
+        assert_eq!(reaped, 0);
+
+        let row = state
+            .registry
+            .lookup(&acp::SessionId::new("sid-nopid".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(row.status, Some(crate::agent_sessions::AgentStatus::Idle));
     }
 
     #[tokio::test]

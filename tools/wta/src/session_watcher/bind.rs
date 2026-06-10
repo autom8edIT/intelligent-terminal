@@ -40,16 +40,25 @@ pub fn correlate_by_cwd(candidates: &[Candidate], target: &Path) -> Option<u32> 
     }
 }
 
-/// Resolve the pane GUID hosting a Copilot session via its lock file, then PEB.
-pub fn bind_copilot(session_dir: &Path) -> Option<String> {
-    let pid = proc_bind::copilot_pid_from_lock(session_dir)?;
-    proc_bind::wt_session_for_pid(pid)
+/// Resolve the `(pane GUID, owner pid)` of a Copilot session via its lock file,
+/// then the pane GUID from that pid's PEB. The pid is returned for liveness
+/// polling; the pane may be `None` if the PEB read fails even when the pid is
+/// known.
+pub fn bind_copilot(session_dir: &Path) -> (Option<String>, Option<u32>) {
+    let Some(pid) = proc_bind::copilot_pid_from_lock(session_dir) else {
+        return (None, None);
+    };
+    (proc_bind::wt_session_for_pid(pid), Some(pid))
 }
 
-/// Resolve the pane GUID hosting a Codex session via Restart Manager, then PEB.
-pub fn bind_codex(rollout_path: &Path) -> Option<String> {
-    let pid = proc_bind::file_owner_pid(rollout_path)?;
-    proc_bind::wt_session_for_pid(pid)
+/// Resolve the `(pane GUID, owner pid)` of a Codex session via Restart Manager,
+/// then the pane GUID from that pid's PEB. See [`bind_copilot`] for the
+/// pane-vs-pid contract.
+pub fn bind_codex(rollout_path: &Path) -> (Option<String>, Option<u32>) {
+    let Some(pid) = proc_bind::file_owner_pid(rollout_path) else {
+        return (None, None);
+    };
+    (proc_bind::wt_session_for_pid(pid), Some(pid))
 }
 
 /// Process exe names to enumerate per CLI when correlating by cwd. Copilot
@@ -76,13 +85,16 @@ pub fn gather_candidates(cli: &CliSource) -> Vec<Candidate> {
     out
 }
 
-/// Resolve the pane GUID hosting `cli`'s session, given the session's cwd
-/// (path-encoded; available for Claude). Returns `None` when there is no
-/// unique cwd match. For Copilot/Codex use [`bind_copilot`]/[`bind_codex`].
-pub fn bind_by_cwd(cli: &CliSource, session_cwd: &Path) -> Option<String> {
+/// Resolve the `(pane GUID, owner pid)` hosting `cli`'s session, given the
+/// session's cwd (path-encoded; available for Claude). Returns `(None, None)`
+/// when there is no unique cwd match. For Copilot/Codex use
+/// [`bind_copilot`]/[`bind_codex`].
+pub fn bind_by_cwd(cli: &CliSource, session_cwd: &Path) -> (Option<String>, Option<u32>) {
     let candidates = gather_candidates(cli);
-    let pid = correlate_by_cwd(&candidates, session_cwd)?;
-    proc_bind::wt_session_for_pid(pid)
+    let Some(pid) = correlate_by_cwd(&candidates, session_cwd) else {
+        return (None, None);
+    };
+    (proc_bind::wt_session_for_pid(pid), Some(pid))
 }
 
 #[cfg(test)]
@@ -137,6 +149,9 @@ mod tests {
     #[test]
     fn bind_by_cwd_none_without_candidates() {
         // No exe_names -> no candidates -> never binds, regardless of cwd.
-        assert_eq!(bind_by_cwd(&CliSource::Copilot, Path::new(r"C:\whatever")), None);
+        assert_eq!(
+            bind_by_cwd(&CliSource::Copilot, Path::new(r"C:\whatever")),
+            (None, None)
+        );
     }
 }
