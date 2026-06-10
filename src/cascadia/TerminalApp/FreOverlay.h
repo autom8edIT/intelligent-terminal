@@ -6,6 +6,8 @@
 #include "FreAgentEntry.g.h"
 #include "FreOverlay.g.h"
 
+#include <mutex>
+
 namespace winrt::TerminalApp::implementation
 {
     struct FreAgentEntry : FreAgentEntryT<FreAgentEntry>
