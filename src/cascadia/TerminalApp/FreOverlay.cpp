@@ -438,10 +438,17 @@ namespace winrt::TerminalApp::implementation
     // sees a warm source manifest cache and skips the 3-20s refresh step.
     // Gated on whether the install would actually run (Copilot or Node
     // missing) AND winget being available. Single-flight per process —
-    // re-entrant Initialize() calls and multi-window FRE coalesce onto
+    // reentrant Initialize() calls and multi-window FRE coalesce onto
     // one running prewarm. The Save handler awaits s_prewarmAction before
-    // its own winget call (see _SaveAndInstallAsync), guaranteeing the
-    // two winget operations never run concurrently.
+    // its own winget call (see _SaveAndInstallAsync); in practice the
+    // two winget operations never run concurrently. Exception: if
+    // _RunPrewarmAsync hits its 120s timeout, it returns while the
+    // underlying `winget source update` may still be running in the
+    // background. We accept this tradeoff because killing winget
+    // mid-write risks corrupting its source DB, and 120s timeouts are
+    // very rare in practice. A future migration of the prewarm to the
+    // COM `RefreshPackageCatalogAsync` API would eliminate this race
+    // entirely.
 
     void FreOverlay::_MaybeStartPrewarm(bool copilotMissing, bool nodeMissing)
     {
@@ -941,6 +948,18 @@ namespace winrt::TerminalApp::implementation
         // available before kicking off the install — otherwise the user
         // gets a generic "install failed" error that wrongly points at
         // the package's docs instead of the winget setup docs.
+        //
+        // Note: `_IsWingetInstalled()` checks for `winget.exe` on PATH,
+        // which is the CLI's App Execution Alias. `_WingetInstallAsync`
+        // itself now uses the WinGet COM API and does not strictly
+        // require the alias to be on PATH (only AppInstaller / the COM
+        // server). In practice the alias and the COM server are
+        // installed/uninstalled together with AppInstaller, so this
+        // check still correctly distinguishes "winget environment
+        // present" from "winget environment absent" in 99%+ of cases.
+        // The edge case (alias disabled while AppInstaller present) is
+        // rare enough that incorrectly showing WingetMissing is
+        // acceptable; the user docs still apply.
         if (needsCopilot || needsNode)
         {
             if (!_IsWingetInstalled())
@@ -952,7 +971,7 @@ namespace winrt::TerminalApp::implementation
 
             // ── Await any in-flight pre-warm before kicking off install ──
             // The Initialize() handler may have started a `winget source
-            // update` in the background. Winget's intra-process
+            // update` in the background. WinGet's intra-process
             // coordination across concurrent operations is not a
             // guaranteed contract — we serialise here to avoid two
             // winget instances stepping on each other. Snapshot the
