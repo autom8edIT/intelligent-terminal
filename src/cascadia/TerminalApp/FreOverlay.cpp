@@ -11,6 +11,7 @@
 #include "../inc/ShellIntegration.h"
 #include "../inc/RtlHelper.h"
 #include "AgentPaneLog.h"
+#include "WindowsPackageManagerFactory.h"
 
 #include <winrt/Windows.UI.Xaml.Documents.h>
 #include <mutex>
@@ -522,115 +523,234 @@ namespace winrt::TerminalApp::implementation
     }
 
     // ── WinGet install helper ───────────────────────────────────────────
+    //
+    // Installs a package via the WinGet COM/WinRT API
+    // (`Microsoft.Management.Deployment.PackageManager`) instead of
+    // shelling out to `winget.exe`.
+    //
+    // Why this matters:
+    //
+    // The CLI path doesn't work for us. winget.exe, when launched from
+    // a packaged GUI parent (which IT is), runs through an App Execution
+    // Alias activation that breaks stdio inheritance — child writes
+    // nothing to whatever pipe/file we redirect to. We verified across
+    // 6 spawn variants (NUL stdin, pipe stdin, GetStdHandle stdin,
+    // combined vs split pipes, plus `cmd.exe /c "winget … > tempfile 2>&1"`)
+    // that the captured output is consistently 0 bytes for real failures.
+    // This is a Microsoft design limitation, not a winget bug:
+    // packaged-from-packaged stdio inheritance is documented as unsupported
+    // (see https://github.com/microsoft/winget-cli/issues/504).
+    //
+    // The COM API bypasses the alias activation entirely — it calls
+    // AppInstaller's out-of-proc COM server directly via CoCreateInstance
+    // (CLSCTX_LOCAL_SERVER, no child process spawn). We get back a
+    // structured InstallResult with InstallResultStatus, ExtendedErrorCode
+    // (the same HRESULT that the CLI would have printed), and
+    // InstallerErrorCode — far better diagnostics than the CLI ever gave
+    // us, and reliably available from packaged context.
+
+    namespace
+    {
+        using namespace winrt::Microsoft::Management::Deployment;
+
+        // Enum-to-string helpers — log values are human-readable instead
+        // of bare ints, so anyone reading the log can grep the winmd /
+        // PackageManager.idl directly without an enum reference table.
+
+        constexpr const char* ConnectStatusName(ConnectResultStatus s) noexcept
+        {
+            switch (s)
+            {
+            case ConnectResultStatus::Ok: return "Ok";
+            case ConnectResultStatus::CatalogError: return "CatalogError";
+            case ConnectResultStatus::SourceAgreementsNotAccepted: return "SourceAgreementsNotAccepted";
+            default: return "Unknown";
+            }
+        }
+
+        constexpr const char* FindStatusName(FindPackagesResultStatus s) noexcept
+        {
+            switch (s)
+            {
+            case FindPackagesResultStatus::Ok: return "Ok";
+            case FindPackagesResultStatus::BlockedByPolicy: return "BlockedByPolicy";
+            case FindPackagesResultStatus::CatalogError: return "CatalogError";
+            case FindPackagesResultStatus::InvalidOptions: return "InvalidOptions";
+            case FindPackagesResultStatus::InternalError: return "InternalError";
+            default: return "Unknown";
+            }
+        }
+
+        constexpr const char* InstallStatusName(InstallResultStatus s) noexcept
+        {
+            switch (s)
+            {
+            case InstallResultStatus::Ok: return "Ok";
+            case InstallResultStatus::BlockedByPolicy: return "BlockedByPolicy";
+            case InstallResultStatus::CatalogError: return "CatalogError";
+            case InstallResultStatus::InternalError: return "InternalError";
+            case InstallResultStatus::InvalidOptions: return "InvalidOptions";
+            case InstallResultStatus::DownloadError: return "DownloadError";
+            case InstallResultStatus::InstallError: return "InstallError";
+            case InstallResultStatus::ManifestError: return "ManifestError";
+            case InstallResultStatus::NoApplicableInstallers: return "NoApplicableInstallers";
+            case InstallResultStatus::NoApplicableUpgrade: return "NoApplicableUpgrade";
+            case InstallResultStatus::PackageAgreementsNotAccepted: return "PackageAgreementsNotAccepted";
+            default: return "Unknown";
+            }
+        }
+    }
 
     IAsyncOperation<bool> FreOverlay::_WingetInstallAsync(winrt::hstring packageId)
     {
+        using namespace winrt::Microsoft::Management::Deployment;
+
         // Copy packageId before switching threads (coroutine parameter safety)
-        auto id = std::wstring{ packageId };
+        auto id = winrt::hstring{ packageId };
 
         co_await winrt::resume_background();
 
-        auto cmdline = fmt::format(
-            L"winget install --id {} --exact --silent "
-            L"--source winget "
-            L"--accept-source-agreements --accept-package-agreements "
-            L"--disable-interactivity",
-            id);
-
-        // Create a pipe to capture winget's combined stdout+stderr for
-        // diagnostic logging. The pipe is inheritable so the child
-        // process writes directly to it.
-        SECURITY_ATTRIBUTES sa{};
-        sa.nLength = sizeof(sa);
-        sa.bInheritHandle = TRUE;
-        HANDLE hReadPipe = nullptr, hWritePipe = nullptr;
-        const bool hasPipe = CreatePipe(&hReadPipe, &hWritePipe, &sa, 0);
-        if (hasPipe)
+        try
         {
-            // Prevent the read end from being inherited by the child.
-            SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+            // ── 1. Activate the out-of-proc PackageManager COM server ──
+            const PackageManager pm = WindowsPackageManagerFactory::CreatePackageManager();
+
+            // ── 2. Connect to the winget catalog ──
+            // Mirror the pattern used by `TerminalPage._FindPackageAsync`:
+            // up to 3 attempts to absorb transient connection flakes.
+            // Set AcceptSourceAgreements(true) — equivalent to the CLI's
+            // --accept-source-agreements; without this, first-time winget
+            // users (no prior agreement acceptance recorded) would hit
+            // SourceAgreementsNotAccepted and be unable to install.
+            auto catalogRef = pm.GetPredefinedPackageCatalog(PredefinedPackageCatalog::OpenWindowsCatalog);
+            catalogRef.AcceptSourceAgreements(true);
+
+            ConnectResult connectResult{ nullptr };
+            for (int attempt = 0; attempt < 3; ++attempt)
+            {
+                connectResult = catalogRef.Connect();
+                if (connectResult.Status() == ConnectResultStatus::Ok)
+                {
+                    break;
+                }
+            }
+            if (connectResult.Status() != ConnectResultStatus::Ok)
+            {
+                _agentPaneLog(fmt::format(
+                    "[FRE] winget catalog connect failed: {} (status={})",
+                    ConnectStatusName(connectResult.Status()),
+                    static_cast<int>(connectResult.Status())));
+                co_return false;
+            }
+
+            // ── 3. Find the package by exact ID ──
+            auto filter = WindowsPackageManagerFactory::CreatePackageMatchFilter();
+            filter.Field(PackageMatchField::Id);
+            filter.Option(PackageFieldMatchOption::Equals);
+            filter.Value(id);
+
+            auto findOpts = WindowsPackageManagerFactory::CreateFindPackagesOptions();
+            findOpts.Filters().Append(filter);
+            findOpts.ResultLimit(1);
+
+            const auto findResult = co_await connectResult.PackageCatalog().FindPackagesAsync(findOpts);
+
+            if (findResult.Status() != FindPackagesResultStatus::Ok)
+            {
+                _agentPaneLog(fmt::format(
+                    "[FRE] winget FindPackages failed: {} (status={})",
+                    FindStatusName(findResult.Status()),
+                    static_cast<int>(findResult.Status())));
+                co_return false;
+            }
+            if (findResult.Matches().Size() == 0)
+            {
+                _agentPaneLog("[FRE] winget package not found: " + winrt::to_string(id));
+                co_return false;
+            }
+
+            const CatalogPackage package = findResult.Matches().GetAt(0).CatalogPackage();
+
+            // ── 4. Configure install options and kick off install ──
+            auto installOpts = WindowsPackageManagerFactory::CreateInstallOptions();
+            installOpts.AcceptPackageAgreements(true);
+            installOpts.PackageInstallMode(PackageInstallMode::Silent);
+            installOpts.PackageInstallScope(PackageInstallScope::Any);
+
+            const auto installOp = pm.InstallPackageAsync(package, installOpts);
+
+            // ── 5. Bounded wait for install to complete ──
+            // The COM API has no built-in timeout. Without one, a stuck
+            // broker / unreachable installer would freeze the FRE Save
+            // flow indefinitely. We allow up to 20 min (observed cold
+            // installs are ~5-6 min, so 20 min covers the P99 with a
+            // ~3x safety margin); at the 5 min mark we log a heads-up
+            // so anyone tailing the log can tell "still running" apart
+            // from "deadlocked".
+            constexpr DWORD kInstallSoftWarnMs = 5 * 60 * 1000;  // 5 min
+            constexpr DWORD kInstallHardCapMs = 20 * 60 * 1000;  // 20 min
+            const auto startTick = GetTickCount64();
+            bool warnedSoft = false;
+            while (installOp.Status() == winrt::Windows::Foundation::AsyncStatus::Started)
+            {
+                const auto elapsed = GetTickCount64() - startTick;
+                if (!warnedSoft && elapsed > kInstallSoftWarnMs)
+                {
+                    _agentPaneLog("[FRE] winget install: still running after 5 min, will hard-cancel at 20 min");
+                    warnedSoft = true;
+                }
+                if (elapsed > kInstallHardCapMs)
+                {
+                    _agentPaneLog("[FRE] winget install: hard timeout after 20 min, cancelling");
+                    installOp.Cancel();
+                    co_return false;
+                }
+                co_await winrt::resume_after(std::chrono::milliseconds(500));
+            }
+            const auto installResult = installOp.GetResults();
+
+            const auto status = installResult.Status();
+            const auto exHr = installResult.ExtendedErrorCode();
+            const auto installerErr = installResult.InstallerErrorCode();
+
+            if (status != InstallResultStatus::Ok)
+            {
+                _agentPaneLog(fmt::format(
+                    "[FRE] winget install failed: {} (status={}) hr=0x{:08X} installerErr={}",
+                    InstallStatusName(status),
+                    static_cast<int>(status),
+                    static_cast<uint32_t>(exHr),
+                    installerErr));
+                co_return false;
+            }
+
+            // Surface RebootRequired so the caller / log readers can see
+            // it. GitHub.Copilot never sets this; some MSI-style packages
+            // (e.g. Node.js LTS) theoretically might. We still return
+            // true because the install itself succeeded — the caller's
+            // post-install steps (PATH refresh, hook install) may or may
+            // not work fully until reboot, but that's the caller's call
+            // and we shouldn't fail an otherwise-successful install.
+            if (installResult.RebootRequired())
+            {
+                _agentPaneLog("[FRE] winget install: ok (reboot required)");
+            }
+
+            co_return true;
         }
-
-        STARTUPINFOW si{};
-        si.cb = sizeof(si);
-        si.dwFlags = STARTF_USESHOWWINDOW;
-        si.wShowWindow = SW_HIDE;
-        if (hasPipe)
+        catch (const winrt::hresult_error& e)
         {
-            si.dwFlags |= STARTF_USESTDHANDLES;
-            si.hStdOutput = hWritePipe;
-            si.hStdError = hWritePipe;
-            si.hStdInput = nullptr;
-        }
-        PROCESS_INFORMATION pi{};
-
-        auto success = CreateProcessW(
-            nullptr,
-            cmdline.data(),
-            nullptr, nullptr, hasPipe ? TRUE : FALSE,
-            CREATE_NO_WINDOW,
-            nullptr, nullptr, &si, &pi);
-
-        // Close the write end in the parent so ReadFile sees EOF
-        // when the child exits.
-        if (hWritePipe)
-        {
-            CloseHandle(hWritePipe);
-            hWritePipe = nullptr;
-        }
-
-        if (!success)
-        {
-            _agentPaneLog("[FRE] winget CreateProcess failed: GetLastError=" + std::to_string(GetLastError()));
-            if (hReadPipe) CloseHandle(hReadPipe);
+            _agentPaneLog(fmt::format(
+                "[FRE] winget exception: hr=0x{:08X} msg={}",
+                static_cast<uint32_t>(e.code().value),
+                winrt::to_string(e.message())));
             co_return false;
         }
-
-        // Wait for the child process first, then drain any remaining
-        // pipe output. This avoids the synchronous ReadFile blocking
-        // indefinitely if winget spawns child processes that inherit
-        // the pipe handle and outlive winget itself.
-        WaitForSingleObject(pi.hProcess, 300000); // 5 min timeout
-
-        // Drain pipe output (non-blocking — child has exited, so the
-        // write end is closed and ReadFile will see EOF promptly).
-        // Keep only the last ~500 bytes to cap memory usage.
-        static constexpr size_t kMaxOutput = 500;
-        std::string output;
-        if (hasPipe && hReadPipe)
+        catch (...)
         {
-            char buf[512];
-            DWORD bytesRead = 0;
-            while (ReadFile(hReadPipe, buf, sizeof(buf) - 1, &bytesRead, nullptr) && bytesRead > 0)
-            {
-                buf[bytesRead] = '\0';
-                output += buf;
-                // Keep only the tail
-                if (output.size() > kMaxOutput * 2)
-                    output = output.substr(output.size() - kMaxOutput);
-            }
-            CloseHandle(hReadPipe);
-            hReadPipe = nullptr;
+            LOG_CAUGHT_EXCEPTION();
+            co_return false;
         }
-
-        DWORD exitCode = 1;
-        GetExitCodeProcess(pi.hProcess, &exitCode);
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-
-        // Log the result — truncate output to avoid unbounded log growth.
-        if (exitCode != 0)
-        {
-            // Trim trailing whitespace
-            while (!output.empty() && (output.back() == '\n' || output.back() == '\r' || output.back() == ' '))
-                output.pop_back();
-            // Cap at 500 chars
-            if (output.size() > 500)
-                output = output.substr(output.size() - 500);
-            _agentPaneLog("[FRE] winget exit=" + std::to_string(exitCode) + " output: " + output);
-        }
-
-        co_return exitCode == 0;
     }
 
 
