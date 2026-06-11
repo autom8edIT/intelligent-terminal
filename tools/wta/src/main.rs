@@ -1236,7 +1236,8 @@ async fn fetch_sessions_from_master(
         let _ = handle_io.await;
     });
 
-    conn.initialize(
+    let init_started = std::time::Instant::now();
+    let init_result = conn.initialize(
         acp::InitializeRequest::new(acp::ProtocolVersion::V1)
             .client_capabilities(acp::ClientCapabilities::new())
             .client_info(
@@ -1244,8 +1245,13 @@ async fn fetch_sessions_from_master(
                     .title("Windows Terminal Agent sessions CLI"),
             ),
     )
-    .await
-    .map_err(|_| anyhow::anyhow!(MASTER_NOT_RUNNING))?;
+    .await;
+    telemetry::log_acp_initialize_complete(
+        init_started.elapsed().as_secs_f64() * 1000.0,
+        init_result.is_ok(),
+        "SessionsCli",
+    );
+    init_result.map_err(|_| anyhow::anyhow!(MASTER_NOT_RUNNING))?;
 
     let req = session_registry::build_sessions_list_request();
     let resp = conn

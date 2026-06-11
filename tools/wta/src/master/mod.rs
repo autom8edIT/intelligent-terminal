@@ -701,22 +701,33 @@ impl HelperHandler {
         timeout: std::time::Duration,
     ) -> acp::Result<acp::NewSessionResponse> {
         let timeout_secs = timeout.as_secs();
-        tokio::time::timeout(timeout, self.agent_conn.new_session(args))
-            .await
-            .map_err(|_| {
-                let message = format!("agent CLI session/new timed out after {timeout_secs}s");
-                tracing::error!(
-                    target: "master",
-                    step = "helper→agent",
-                    op = "new_session",
-                    helper_id = ?self.helper_id,
-                    timeout_secs,
-                    "agent CLI session/new timed out"
-                );
-                acp::Error::new(-32603, message.clone()).data(serde_json::json!({
-                    "message": message
-                }))
-            })?
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(timeout, self.agent_conn.new_session(args)).await;
+        let session_id = result
+            .as_ref()
+            .ok()
+            .and_then(|inner| inner.as_ref().ok())
+            .map(|resp| resp.session_id.to_string());
+        crate::telemetry::log_acp_new_session_complete(
+            session_id.as_deref(),
+            started.elapsed().as_secs_f64() * 1000.0,
+            matches!(result, Ok(Ok(_))),
+            "MasterForward",
+        );
+        result.map_err(|_| {
+            let message = format!("agent CLI session/new timed out after {timeout_secs}s");
+            tracing::error!(
+                target: "master",
+                step = "helper→agent",
+                op = "new_session",
+                helper_id = ?self.helper_id,
+                timeout_secs,
+                "agent CLI session/new timed out"
+            );
+            acp::Error::new(-32603, message.clone()).data(serde_json::json!({
+                "message": message
+            }))
+        })?
     }
 }
 
@@ -752,7 +763,14 @@ impl acp::Agent for HelperHandler {
                     helper_id = ?self.helper_id,
                     "cached_init_resp missing; falling back to live agent initialize"
                 );
-                self.agent_conn.initialize(args).await
+                let started = std::time::Instant::now();
+                let result = self.agent_conn.initialize(args).await;
+                crate::telemetry::log_acp_initialize_complete(
+                    started.elapsed().as_secs_f64() * 1000.0,
+                    result.is_ok(),
+                    "MasterFallback",
+                );
+                result
             }
         }
     }
@@ -1647,7 +1665,8 @@ async fn run_master_loop(cli: Cli, pipe_name: String) -> Result<()> {
 
     // 3. Initialize the agent CLI once at master startup.
     let init_timeout_secs = if is_npx { 60 } else { 15 };
-    let init_resp = tokio::time::timeout(
+    let init_started = std::time::Instant::now();
+    let init_result = tokio::time::timeout(
         std::time::Duration::from_secs(init_timeout_secs),
         agent_conn.initialize(
             acp::InitializeRequest::new(acp::ProtocolVersion::V1)
@@ -1658,22 +1677,28 @@ async fn run_master_loop(cli: Cli, pipe_name: String) -> Result<()> {
                 ),
         ),
     )
-    .await
-    .map_err(|_| {
-        tracing::error!(
-            target: "master",
-            timeout_secs = init_timeout_secs,
-            "ACP initialize timed out — agent CLI did not respond"
-        );
-        anyhow!(
-            "ACP initialize timed out after {}s — agent CLI did not respond",
-            init_timeout_secs
-        )
-    })?
-    .map_err(|e| {
-        tracing::error!(target: "master", error = %e, "ACP initialize failed");
-        anyhow!("ACP initialize failed: {e}")
-    })?;
+    .await;
+    crate::telemetry::log_acp_initialize_complete(
+        init_started.elapsed().as_secs_f64() * 1000.0,
+        matches!(init_result, Ok(Ok(_))),
+        "MasterStartup",
+    );
+    let init_resp = init_result
+        .map_err(|_| {
+            tracing::error!(
+                target: "master",
+                timeout_secs = init_timeout_secs,
+                "ACP initialize timed out — agent CLI did not respond"
+            );
+            anyhow!(
+                "ACP initialize timed out after {}s — agent CLI did not respond",
+                init_timeout_secs
+            )
+        })?
+        .map_err(|e| {
+            tracing::error!(target: "master", error = %e, "ACP initialize failed");
+            anyhow!("ACP initialize failed: {e}")
+        })?;
     tracing::info!(
         target: "master",
         ?init_resp,
