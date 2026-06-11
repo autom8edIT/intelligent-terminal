@@ -222,7 +222,14 @@ fn is_junk(path: &Path) -> bool {
 }
 
 fn user_profile_dir() -> PathBuf {
+    // Match WTA's home resolution convention (USERPROFILE → HOME; see
+    // history_loader::home_dir) before the last-resort process cwd. Skipping
+    // empty values matters: an unset USERPROFILE must not let us fall through
+    // to `current_dir()` (which can be C:\WINDOWS\system32 for the packaged
+    // helper) — that would re-seed the junk dir we're trying to avoid.
     std::env::var_os("USERPROFILE")
+        .filter(|v| !v.is_empty())
+        .or_else(|| std::env::var_os("HOME").filter(|v| !v.is_empty()))
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
 }
