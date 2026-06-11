@@ -3352,12 +3352,12 @@ async fn run_inner(
     .await
     {
         Ok(Ok(resp)) => {
-            let cwds: Vec<String> = resp
+            let cwd_values: Vec<String> = resp
                 .sessions
                 .iter()
                 .map(|s| s.cwd.to_string_lossy().into_owned())
                 .collect();
-            cwd_format::detect_format(cwds.iter().map(String::as_str))
+            cwd_format::detect_format(cwd_values.iter().map(String::as_str))
         }
         _ => None,
     };

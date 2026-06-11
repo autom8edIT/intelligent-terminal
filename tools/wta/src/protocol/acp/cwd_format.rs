@@ -51,6 +51,11 @@ pub fn classify(path: &Path) -> Option<PathFormat> {
     if s.starts_with('/') {
         return Some(PathFormat::Posix);
     }
+    // UNC / extended-length forms — all absolute Windows paths:
+    // `\\server\share`, `\\?\C:\…`, `\\?\UNC\…`, `\\wsl$\…`.
+    if s.starts_with("\\\\") {
+        return Some(PathFormat::Windows);
+    }
     // Drive-letter form: `C:\…` or `C:/…` or bare `C:`.
     let b = s.as_bytes();
     if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
@@ -59,11 +64,14 @@ pub fn classify(path: &Path) -> Option<PathFormat> {
     None
 }
 
-/// Learn the agent's namespace from the cwds it reports in `session/list`.
-/// Returns the format of the first classifiable entry, or `None` when the
-/// list is empty / inconclusive (caller then tries both formats).
-pub fn detect_format<'a>(session_cwds: impl IntoIterator<Item = &'a str>) -> Option<PathFormat> {
-    session_cwds
+/// Learn the agent's namespace from the cwd values it reports in
+/// `session/list`. Returns the format of the first classifiable entry, or
+/// `None` when the list is empty / inconclusive (caller then tries both
+/// formats).
+pub fn detect_format<'a>(
+    session_cwd_values: impl IntoIterator<Item = &'a str>,
+) -> Option<PathFormat> {
+    session_cwd_values
         .into_iter()
         .find_map(|c| classify(Path::new(c)))
 }
@@ -99,7 +107,7 @@ pub fn to_windows_format(path: &Path) -> PathBuf {
 
 /// Idempotent conversion to a POSIX path:
 /// * already POSIX → unchanged;
-/// * Windows drive path `C:\a\b` → `/mnt/c/a/b` (standard WSL automount,
+/// * Windows drive path `C:\a\b` → `/mnt/c/a/b` (standard WSL auto-mount,
 ///   distro-independent — no shell-out needed);
 /// * indeterminate → `/tmp`.
 pub fn to_linux_format(path: &Path) -> PathBuf {
@@ -155,7 +163,7 @@ pub fn looks_like_cwd_error(haystack: &str) -> bool {
     h.contains("absolute")
         || h.contains("does not exist")
         || h.contains("cannot be accessed")
-        || h.contains("directory")
+        || h.contains("not a directory")
 }
 
 // --- internals ---------------------------------------------------------
@@ -232,18 +240,55 @@ fn path_eq_ci(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, MutexGuard};
+
+    // Serializes + restores process-wide env mutations so parallel tests
+    // don't clobber each other's USERPROFILE/SystemRoot. The guard restores
+    // prior values on drop (incl. during panic-unwind from a failed assert).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        saved: Vec<(String, Option<OsString>)>,
+        _lock: MutexGuard<'static, ()>,
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (k, old) in &self.saved {
+                match old {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+    fn scoped_env(vars: &[(&str, &str)]) -> EnvGuard {
+        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = vars
+            .iter()
+            .map(|(k, _)| (k.to_string(), std::env::var_os(k)))
+            .collect();
+        for (k, v) in vars {
+            std::env::set_var(k, v);
+        }
+        EnvGuard { saved, _lock: lock }
+    }
 
     #[test]
     fn classify_basic() {
         assert_eq!(classify(Path::new(r"C:\foo")), Some(PathFormat::Windows));
         assert_eq!(classify(Path::new("/home/u")), Some(PathFormat::Posix));
         assert_eq!(classify(Path::new("/mnt/c/foo")), Some(PathFormat::Posix));
+        // UNC / extended-length are Windows, not None.
+        assert_eq!(classify(Path::new(r"\\server\share")), Some(PathFormat::Windows));
+        assert_eq!(classify(Path::new(r"\\?\C:\foo")), Some(PathFormat::Windows));
+        assert_eq!(classify(Path::new(r"\\wsl$\Ubuntu\home\u")), Some(PathFormat::Windows));
         assert_eq!(classify(Path::new("")), None);
         assert_eq!(classify(Path::new("relative\\path")), None);
     }
 
     #[test]
-    fn detect_format_from_session_cwds() {
+    fn detect_format_from_session_cwd_values() {
         assert_eq!(
             detect_format(["/home/yeelam", "/mnt/c/x"]),
             Some(PathFormat::Posix)
@@ -273,7 +318,7 @@ mod tests {
 
     #[test]
     fn to_windows_is_idempotent_and_converts() {
-        std::env::set_var("USERPROFILE", r"C:\Users\tester");
+        let _g = scoped_env(&[("USERPROFILE", r"C:\Users\tester")]);
         // already windows → unchanged
         assert_eq!(
             to_windows_format(Path::new(r"Q:\official")),
@@ -297,8 +342,7 @@ mod tests {
 
     #[test]
     fn pick_value_drops_junk() {
-        std::env::set_var("SystemRoot", r"C:\Windows");
-        std::env::set_var("USERPROFILE", r"C:\Users\tester");
+        let _g = scoped_env(&[("SystemRoot", r"C:\Windows"), ("USERPROFILE", r"C:\Users\tester")]);
         assert_eq!(
             pick_value(Some(Path::new(r"C:\WINDOWS\system32"))),
             PathBuf::from(r"C:\Users\tester")
@@ -335,7 +379,7 @@ mod tests {
 
     #[test]
     fn build_attempts_windows_target() {
-        std::env::set_var("USERPROFILE", r"C:\Users\tester");
+        let _g = scoped_env(&[("USERPROFILE", r"C:\Users\tester")]);
         assert_eq!(
             build_attempts(Path::new(r"Q:\repo"), Some(PathFormat::Windows)),
             vec![PathBuf::from(r"Q:\repo")]
@@ -349,7 +393,7 @@ mod tests {
 
     #[test]
     fn build_attempts_unknown_target_tries_both() {
-        std::env::set_var("USERPROFILE", r"C:\Users\tester");
+        let _g = scoped_env(&[("USERPROFILE", r"C:\Users\tester")]);
         // windows value, unknown → windows, then linux, then /tmp
         let got = build_attempts(Path::new(r"Q:\repo"), None);
         assert_eq!(

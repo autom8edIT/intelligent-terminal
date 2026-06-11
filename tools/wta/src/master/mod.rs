@@ -204,7 +204,7 @@ struct MasterStateInner {
     /// but not surfaced as a known session management filter).
     pub(crate) cli_source: Option<crate::agent_sessions::CliSource>,
     /// The agent's working-directory namespace (Windows vs POSIX), learned
-    /// once at startup from the agent's own `session/list` cwds. Used by
+    /// once at startup from the agent's own `session/list` cwd values. Used by
     /// `new_session` / `load_session` to convert the incoming cwd into a
     /// form the agent accepts (e.g. a WSL agent needs `/mnt/c/…`, not
     /// `C:\WINDOWS\system32`). `None` when the agent reports no sessions or
@@ -1783,18 +1783,18 @@ async fn run_master_loop(cli: Cli, pipe_name: String) -> Result<()> {
     .await
     {
         Ok(Ok(resp)) => {
-            let cwds: Vec<String> = resp
+            let cwd_values: Vec<String> = resp
                 .sessions
                 .iter()
                 .map(|s| s.cwd.to_string_lossy().into_owned())
                 .collect();
             let fmt = crate::protocol::acp::cwd_format::detect_format(
-                cwds.iter().map(String::as_str),
+                cwd_values.iter().map(String::as_str),
             );
             tracing::info!(
                 target: "master",
                 ?fmt,
-                sessions = cwds.len(),
+                sessions = cwd_values.len(),
                 "detected agent cwd format from session/list"
             );
             fmt
