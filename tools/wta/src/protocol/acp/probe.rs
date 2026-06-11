@@ -143,6 +143,15 @@ pub async fn probe_models(agent_cmd: &str) -> Result<ProbeResult> {
         init_started.elapsed().as_secs_f64() * 1000.0,
         matches!(init_result, Ok(Ok(_))),
         "Probe",
+        match &init_result {
+            Ok(Ok(_)) => "",
+            Ok(Err(_)) => "AcpError",
+            Err(_) => "Timeout",
+        },
+        match &init_result {
+            Ok(Err(e)) => e.code.into(),
+            _ => 0,
+        },
     );
     let _init_resp = init_result
         .map_err(|_| {
@@ -171,6 +180,15 @@ pub async fn probe_models(agent_cmd: &str) -> Result<ProbeResult> {
         session_started.elapsed().as_secs_f64() * 1000.0,
         matches!(session_result, Ok(Ok(_))),
         "Probe",
+        match &session_result {
+            Ok(Ok(_)) => "",
+            Ok(Err(_)) => "AcpError",
+            Err(_) => "Timeout",
+        },
+        match &session_result {
+            Ok(Err(e)) => e.code.into(),
+            _ => 0,
+        },
     );
     let session_resp = session_result
         .map_err(|_| anyhow!("new_session timed out after 10s during probe"))?

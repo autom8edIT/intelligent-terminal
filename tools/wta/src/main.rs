@@ -1250,6 +1250,12 @@ async fn fetch_sessions_from_master(
         init_started.elapsed().as_secs_f64() * 1000.0,
         init_result.is_ok(),
         "SessionsCli",
+        if init_result.is_ok() { "" } else { "AcpError" },
+        init_result
+            .as_ref()
+            .err()
+            .map(|e| e.code.into())
+            .unwrap_or(0),
     );
     init_result.map_err(|_| anyhow::anyhow!(MASTER_NOT_RUNNING))?;
 

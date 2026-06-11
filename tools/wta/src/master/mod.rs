@@ -708,11 +708,18 @@ impl HelperHandler {
             .ok()
             .and_then(|inner| inner.as_ref().ok())
             .map(|resp| resp.session_id.to_string());
+        let (failure_kind, acp_error_code) = match &result {
+            Ok(Ok(_)) => ("", 0),
+            Ok(Err(e)) => ("AcpError", e.code.into()),
+            Err(_) => ("Timeout", 0),
+        };
         crate::telemetry::log_acp_new_session_complete(
             session_id.as_deref(),
             started.elapsed().as_secs_f64() * 1000.0,
             matches!(result, Ok(Ok(_))),
             "MasterForward",
+            failure_kind,
+            acp_error_code,
         );
         result.map_err(|_| {
             let message = format!("agent CLI session/new timed out after {timeout_secs}s");
@@ -769,6 +776,8 @@ impl acp::Agent for HelperHandler {
                     started.elapsed().as_secs_f64() * 1000.0,
                     result.is_ok(),
                     "MasterFallback",
+                    if result.is_ok() { "" } else { "AcpError" },
+                    result.as_ref().err().map(|e| e.code.into()).unwrap_or(0),
                 );
                 result
             }
@@ -1682,6 +1691,15 @@ async fn run_master_loop(cli: Cli, pipe_name: String) -> Result<()> {
         init_started.elapsed().as_secs_f64() * 1000.0,
         matches!(init_result, Ok(Ok(_))),
         "MasterStartup",
+        match &init_result {
+            Ok(Ok(_)) => "",
+            Ok(Err(_)) => "AcpError",
+            Err(_) => "Timeout",
+        },
+        match &init_result {
+            Ok(Err(e)) => e.code.into(),
+            _ => 0,
+        },
     );
     let init_resp = init_result
         .map_err(|_| {

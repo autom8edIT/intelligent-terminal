@@ -2073,6 +2073,22 @@ fn elapsed_ms_since(start: std::time::Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
 }
 
+fn acp_result_failure_fields<T>(result: &acp::Result<T>) -> (&'static str, i32) {
+    match result {
+        Ok(_) => ("", 0),
+        Err(e) => ("AcpError", e.code.into()),
+    }
+}
+
+fn timeout_result_failure_fields<T>(
+    result: &std::result::Result<acp::Result<T>, tokio::time::error::Elapsed>,
+) -> (&'static str, i32) {
+    match result {
+        Ok(inner) => acp_result_failure_fields(inner),
+        Err(_) => ("Timeout", 0),
+    }
+}
+
 fn log_acp_initialize_timeout_result(
     route: &str,
     started: std::time::Instant,
@@ -2081,10 +2097,13 @@ fn log_acp_initialize_timeout_result(
         tokio::time::error::Elapsed,
     >,
 ) {
+    let (failure_kind, acp_error_code) = timeout_result_failure_fields(result);
     crate::telemetry::log_acp_initialize_complete(
         elapsed_ms_since(started),
         matches!(result, Ok(Ok(_))),
         route,
+        failure_kind,
+        acp_error_code,
     );
 }
 
@@ -2094,11 +2113,14 @@ fn log_acp_new_session_result(
     result: &acp::Result<acp::NewSessionResponse>,
 ) {
     let session_id = result.as_ref().ok().map(|resp| resp.session_id.to_string());
+    let (failure_kind, acp_error_code) = acp_result_failure_fields(result);
     crate::telemetry::log_acp_new_session_complete(
         session_id.as_deref(),
         elapsed_ms_since(started),
         result.is_ok(),
         route,
+        failure_kind,
+        acp_error_code,
     );
 }
 
@@ -2115,11 +2137,14 @@ fn log_acp_new_session_timeout_result(
         .ok()
         .and_then(|inner| inner.as_ref().ok())
         .map(|resp| resp.session_id.to_string());
+    let (failure_kind, acp_error_code) = timeout_result_failure_fields(result);
     crate::telemetry::log_acp_new_session_complete(
         session_id.as_deref(),
         elapsed_ms_since(started),
         matches!(result, Ok(Ok(_))),
         route,
+        failure_kind,
+        acp_error_code,
     );
 }
 
