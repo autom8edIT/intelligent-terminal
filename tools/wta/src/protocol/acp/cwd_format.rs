@@ -222,16 +222,25 @@ fn is_junk(path: &Path) -> bool {
 }
 
 fn user_profile_dir() -> PathBuf {
-    // Match WTA's home resolution convention (USERPROFILE → HOME; see
-    // history_loader::home_dir) before the last-resort process cwd. Skipping
-    // empty values matters: an unset USERPROFILE must not let us fall through
-    // to `current_dir()` (which can be C:\WINDOWS\system32 for the packaged
-    // helper) — that would re-seed the junk dir we're trying to avoid.
-    std::env::var_os("USERPROFILE")
-        .filter(|v| !v.is_empty())
-        .or_else(|| std::env::var_os("HOME").filter(|v| !v.is_empty()))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+    // This helper is the *Windows-namespace* fallback, so it must always
+    // return a Windows path and never the junk launcher dir. Resolution:
+    //   1. USERPROFILE (the normal case).
+    //   2. HOME, but only if it's Windows-looking — a POSIX HOME (e.g. Git
+    //      Bash's `/home/u`) would violate the contract, so it's skipped.
+    //   3. %SystemDrive%\ (e.g. `C:\`) — a guaranteed-valid Windows dir.
+    //      Deliberately NOT `current_dir()`, which can be C:\WINDOWS\system32
+    //      for the packaged helper (the very junk we're avoiding).
+    if let Some(p) = std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()) {
+        return PathBuf::from(p);
+    }
+    if let Some(h) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+        let home = PathBuf::from(h);
+        if classify(&home) == Some(PathFormat::Windows) {
+            return home;
+        }
+    }
+    let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+    PathBuf::from(format!("{drive}\\"))
 }
 
 fn path_eq_ci(a: &Path, b: &Path) -> bool {
@@ -368,6 +377,20 @@ mod tests {
             pick_value(Some(Path::new("/home/yeelam"))),
             PathBuf::from("/home/yeelam")
         );
+    }
+
+    #[test]
+    fn user_profile_dir_always_returns_windows_path() {
+        // USERPROFILE empty + a POSIX HOME must NOT yield the POSIX HOME or a
+        // junk current_dir; it falls back to %SystemDrive%\ (a Windows path).
+        let _g = scoped_env(&[
+            ("USERPROFILE", ""),
+            ("HOME", "/home/u"),
+            ("SystemDrive", "C:"),
+        ]);
+        let got = user_profile_dir();
+        assert_eq!(classify(&got), Some(PathFormat::Windows));
+        assert_eq!(got, PathBuf::from(r"C:\"));
     }
 
     #[test]
