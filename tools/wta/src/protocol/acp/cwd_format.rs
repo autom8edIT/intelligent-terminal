@@ -334,10 +334,10 @@ mod tests {
     #[test]
     fn windows_linux_round_trips() {
         // A real drive path survives a round trip through both converters.
-        let win = Path::new(r"C:\repo\sub");
+        let win = Path::new(r"C:\Users\me");
         let posix = to_linux_format(win);
-        assert_eq!(posix, PathBuf::from("/mnt/c/repo/sub"));
-        assert_eq!(to_windows_format(&posix), PathBuf::from(r"C:\repo\sub"));
+        assert_eq!(posix, PathBuf::from("/mnt/c/Users/me"));
+        assert_eq!(to_windows_format(&posix), PathBuf::from(r"C:\Users\me"));
         // bare drive
         assert_eq!(to_linux_format(Path::new("C:")), PathBuf::from("/mnt/c"));
     }
