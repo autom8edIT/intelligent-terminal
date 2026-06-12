@@ -178,3 +178,37 @@ fn busy_different_pane_is_dropped() {
         "different-pane re-trigger while busy must not submit a new turn"
     );
 }
+
+/// End-to-end negative: a *successful* command (osc:133;D;0) routed through the
+/// real `handle_event` dispatcher must classify as silent and never arm
+/// autofix. This is the "successful commands ignored" half of the detection
+/// contract — `classify_wt_event`'s exit-code split is unit-tested separately,
+/// this asserts the dispatcher honors it.
+#[test]
+fn success_exit_code_does_not_arm_autofix() {
+    let mut app = test_app();
+    app.state = ConnectionState::Connected;
+    app.autofix_enabled = true;
+    let pane = "abcdef00-1111-2222-3333-444444444444";
+
+    app.handle_event(AppEvent::WtEvent {
+        method: "vt_sequence".to_string(),
+        pane_id: pane.to_string(),
+        tab_id: Some("tab-success".to_string()),
+        params: serde_json::json!({
+            "session_id": pane,
+            "sequence": "osc:133;D;0",
+        }),
+    });
+
+    assert!(
+        app.tab_sessions
+            .values()
+            .all(|t| t.autofix.pane_id.is_none()),
+        "a successful command (exit 0) must not arm autofix"
+    );
+    assert!(
+        app.tab_sessions.values().all(|t| t.turn.is_idle()),
+        "a successful command (exit 0) must not submit an autofix turn"
+    );
+}
