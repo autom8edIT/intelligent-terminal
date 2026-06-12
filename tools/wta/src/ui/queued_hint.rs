@@ -75,7 +75,16 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         format!("{prefix}{truncated}"),
         theme::DIM,
     ));
-    frame.render_widget(Paragraph::new(line), area);
+    // Match the alignment convention of every other one-line hint
+    // (recommendations::render_hint, agents_view::render_footer_hint, etc.):
+    // honor the active locale's reading direction so RTL locales right-align
+    // the indicator. The 2-cell left padding above is a stylistic indent for
+    // LTR; the wider RTL bidi-reordering polish is the deferred work flagged
+    // in the PR description's "Out of scope" section.
+    frame.render_widget(
+        Paragraph::new(line).alignment(crate::rtl::text_alignment()),
+        area,
+    );
 }
 
 fn truncate_to_width(text: &str, max_cells: usize) -> String {
