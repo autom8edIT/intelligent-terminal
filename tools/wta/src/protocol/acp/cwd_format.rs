@@ -56,10 +56,15 @@ pub fn classify(path: &Path) -> Option<PathFormat> {
     if s.starts_with("\\\\") {
         return Some(PathFormat::Windows);
     }
-    // Drive-letter form: `C:\…` or `C:/…` or bare `C:`.
+    // Drive-letter form. Absolute only: `C:`, `C:\…`, `C:/…`. A
+    // drive-relative path like `C:foo` is NOT absolute, so it's left
+    // indeterminate (None) and handled by the fallback ladder.
     let b = s.as_bytes();
     if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
-        return Some(PathFormat::Windows);
+        if b.len() == 2 || b[2] == b'\\' || b[2] == b'/' {
+            return Some(PathFormat::Windows);
+        }
+        return None;
     }
     None
 }
@@ -315,6 +320,8 @@ mod tests {
         assert_eq!(classify(Path::new(r"\\wsl$\Ubuntu\home\u")), Some(PathFormat::Windows));
         assert_eq!(classify(Path::new("")), None);
         assert_eq!(classify(Path::new("relative\\path")), None);
+        // drive-relative C:foo is not absolute → None
+        assert_eq!(classify(Path::new(r"C:foo")), None);
     }
 
     #[test]

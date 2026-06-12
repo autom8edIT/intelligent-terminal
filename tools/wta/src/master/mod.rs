@@ -653,7 +653,7 @@ fn is_cwd_error(e: &acp::Error) -> bool {
 /// or the last error when all attempts are exhausted / a non-cwd error
 /// occurs. Pure orchestration over an injected `forward`, so it's unit-
 /// testable without a live agent connection.
-async fn try_session_cwds<R, F, Fut>(
+async fn try_session_cwd_candidates<R, F, Fut>(
     attempts: &[std::path::PathBuf],
     mut forward: F,
 ) -> acp::Result<(R, std::path::PathBuf)>
@@ -687,7 +687,7 @@ where
 }
 
 /// Forward one `session/new` to the agent with a hard timeout. Free function
-/// (not a method) so callers can hand it owned captures into `try_session_cwds`
+/// (not a method) so callers can hand it owned captures into `try_session_cwd_candidates`
 /// without borrowing `&self` across awaits.
 async fn forward_new_session(
     conn: &acp::ClientSideConnection,
@@ -885,7 +885,7 @@ impl acp::Agent for HelperHandler {
             let conn = Arc::clone(&self.agent_conn);
             let helper_id = self.helper_id;
             let base = args.clone();
-            let (resp, winning_cwd) = try_session_cwds(&attempts, move |cwd| {
+            let (resp, winning_cwd) = try_session_cwd_candidates(&attempts, move |cwd| {
                 let conn = Arc::clone(&conn);
                 let mut a = base.clone();
                 a.cwd = cwd;
@@ -2843,7 +2843,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn try_session_cwds_retries_only_on_cwd_errors() {
+    async fn try_session_cwd_candidates_retries_only_on_cwd_errors() {
         use std::cell::RefCell;
         let attempts = vec![
             PathBuf::from(r"C:\repo"),
@@ -2853,7 +2853,7 @@ mod tests {
 
         // Fails the first attempt with a cwd-style error, succeeds on the 2nd.
         let seen = RefCell::new(Vec::<PathBuf>::new());
-        let (resp, winning) = try_session_cwds(&attempts, |cwd| {
+        let (resp, winning) = try_session_cwd_candidates(&attempts, |cwd| {
             seen.borrow_mut().push(cwd.clone());
             async move {
                 if cwd == PathBuf::from(r"C:\repo") {
@@ -2871,7 +2871,7 @@ mod tests {
 
         // A non-cwd error is NOT retried: stops immediately and surfaces it.
         let calls = RefCell::new(0u32);
-        let err = try_session_cwds::<String, _, _>(&attempts, |_cwd| {
+        let err = try_session_cwd_candidates::<String, _, _>(&attempts, |_cwd| {
             *calls.borrow_mut() += 1;
             async move { Err(acp::Error::new(-32000, "authentication required")) }
         })
