@@ -73,6 +73,24 @@ or manual sign-off (see `doc\release-automation-plan.md`).
 | Autofix reducer | `tools\wta\src\app\autofix.rs` | **0 tests — gap** |
 | RTL | `src\cascadia\ut_app\RtlHelperTests.cpp`, `tools\wta\src\rtl.rs` | present |
 
+## Implementation status (this branch)
+
+The following `[UT+]` items have been implemented and are passing:
+
+- **Autofix reducer** (`tools/wta/src/autofix_tests.rs`, 6 tests): cold-start `state != Connected` drop, missing-`tab_id` drop, suggest-mode Detected-without-submit, busy same-pane re-emit vs different-pane drop, success-exit-code does-not-arm.
+- **Default agent keybindings** (`KeyBindingsTests::DefaultAgentKeybindings`): `ctrl+shift+.`/`i`/`/`, `alt+shift+b`/`/` → correct action IDs, asserted against real `LoadDefaults()`.
+- **Built-in agent settings round-trip** (`CustomAgentAndPolicyTests`, 6 tests): built-in agent/model/pane-position/autofix round-trip + default resolution + `EffectiveAutoFixEnabled` false when detection off.
+- **Slash dispatch** (`slash_command_tests.rs`, 8 tests): `/sessions`, `/restart`, `/fix` (idle + busy), `/model` (none/bare/direct).
+
+Verified **already covered**, no new tests needed:
+
+- **`classify_wt_event`** exit-code split and connection-state classification (existing `app::tests`).
+- **Hooks auto-upgrade decision** (`agent_hooks_installer.rs`: `decide_upgrade` not-installed/disabled/version-compare + `upgrade_state` cache round-trip).
+
+Deferred:
+
+- **Localization presence lint** — a strict `tools/wta/locales/*.yml` parity test would be red today: `commands.fix.summary` is missing from all 88 locale files and ~6 more keys lag per-locale (translation-pipeline lag). Route the missing keys through the loc pipeline first, then add the parity test.
+
 ## Recommended new UT work (the `[UT+]` backlog)
 
 Priority order:

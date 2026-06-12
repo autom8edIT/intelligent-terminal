@@ -44,11 +44,11 @@ Use this checklist to validate and sign off an Intelligent Terminal release. Eac
 
 ### FRE automatic error settings
 
-- [ ] `[UT+]` `[E2E]` **Automatic error detection off:** Turning detection off disables error-event monitoring behavior and disables dependent suggestion UI. _(UT: `EffectiveAutoFixEnabled` + autofix reducer gate.)_
-- [ ] `[UT+]` `[E2E]` **Automatic error detection on:** Turning detection on enables shell failure detection when shell integration is available.
-- [ ] `[UT+]` `[E2E]` **Automatic error suggestion off:** Detection can remain on while LLM-powered suggestions are off; failures do not trigger an agent suggestion. _(UT: autofix reducer no-LLM path.)_
-- [ ] `[UT+]` `[E2E]` **Automatic error suggestion on:** With detection on and suggestion on, failures can trigger autofix suggestions.
-- [ ] `[UT~]` `[E2E]` **Detection/suggestion dependency:** Suggestion cannot be enabled when detection is off; the UI state is visually clear. _(UT: effective-value logic.)_
+- [ ] `[UT✓]` `[E2E]` **Automatic error detection off:** Turning detection off disables error-event monitoring behavior and disables dependent suggestion UI. _(UT: `EffectiveAutoFixEnabled` + autofix reducer gate.)_
+- [ ] `[UT✓]` `[E2E]` **Automatic error detection on:** Turning detection on enables shell failure detection when shell integration is available.
+- [ ] `[UT✓]` `[E2E]` **Automatic error suggestion off:** Detection can remain on while LLM-powered suggestions are off; failures do not trigger an agent suggestion. _(UT: autofix reducer no-LLM path.)_
+- [ ] `[UT✓]` `[E2E]` **Automatic error suggestion on:** With detection on and suggestion on, failures can trigger autofix suggestions.
+- [ ] `[UT✓]` `[E2E]` **Detection/suggestion dependency:** Suggestion cannot be enabled when detection is off; the UI state is visually clear. _(UT: `EffectiveAutoFixFalseWhenDetectionOff`.)_
 - [ ] `[UT+]` **Settings persist:** Detection and suggestion choices persist after restart. _(UT: settings round-trip.)_
 
 ### FRE session management
@@ -92,10 +92,10 @@ Use this checklist to validate and sign off an Intelligent Terminal release. Eac
 ### Opening, hiding, and focus
 
 - [ ] `[E2E]` **Button opens pane:** The AI assistant button opens the agent pane.
-- [ ] `[UT+]` `[E2E]` **Hotkey opens pane:** `Ctrl+Shift+.` opens the agent pane. _(UT: `ctrl+shift+.` → `openAgentPane` binding.)_
+- [ ] `[UT✓]` `[E2E]` **Hotkey opens pane:** `Ctrl+Shift+.` opens the agent pane. _(UT: `DefaultAgentKeybindings` binding; open behavior E2E.)_
 - [ ] `[E2E]` **Button hides pane:** The button hides/stashes the agent pane without killing the session.
 - [ ] `[E2E]` **Hotkey hides pane:** `Ctrl+Shift+.` hides/stashes the agent pane without killing the session.
-- [ ] `[UT+]` `[E2E]` **Focus hotkey works:** `Ctrl+Shift+I` focuses the agent pane when available. _(UT: `ctrl+shift+i` → `focusAgentPane` binding.)_
+- [ ] `[UT✓]` `[E2E]` **Focus hotkey works:** `Ctrl+Shift+I` focuses the agent pane when available. _(UT: `DefaultAgentKeybindings` binding; focus behavior E2E.)_
 - [ ] `[E2E]` **Different positions work:** Open/hide/focus works for bottom, right, left, and top pane positions.
 - [ ] `[E2E]` **Stash preserves chat:** Hiding and restoring the pane preserves helper process, connection state, and chat history.
 - [ ] `[E2E]` **Tab close cleans up:** Closing the owning tab cleans up the helper and does not leave a broken pane.
@@ -129,17 +129,17 @@ Use this checklist to validate and sign off an Intelligent Terminal release. Eac
 - [ ] `[UT✓]` **`/help` works:** Shows available commands.
 - [ ] `[UT✓]` **`/clear` works:** Clears chat view as expected without breaking the session.
 - [ ] `[UT✓]` **`/new` works:** Starts a fresh session.
-- [ ] `[UT+]` **`/fix` works:** Runs manual autofix using recent terminal context. _(UT: classify covered; add dispatch.)_
-- [ ] `[UT+]` **`/restart` works:** Restarts the agent stack and reconnects to a clean session. _(UT: classify covered; add dispatch.)_
+- [ ] `[UT✓]` **`/fix` works:** Runs manual autofix using recent terminal context. _(UT: classify + `slash_fix_when_idle_submits_autofix_turn` / `slash_fix_while_busy_does_not_resubmit`.)_
+- [ ] `[UT✓]` **`/restart` works:** Restarts the agent stack and reconnects to a clean session. _(UT: `slash_restart_resets_connection_and_clears_sessions`.)_
 - [ ] `[UT✓]` **`/stop` works:** Stops/cancels an in-progress turn.
-- [ ] `[UT+]` **`/sessions` works:** Switches to session-management view. _(UT: classify covered; add dispatch.)_
-- [ ] `[UT~]` `[E2E]` **`/model` works:** Opens/selects model where supported; unsupported agents fail gracefully. _(UT: classify; picker is E2E.)_
+- [ ] `[UT✓]` **`/sessions` works:** Switches to session-management view. _(UT: `slash_sessions_opens_agents_view`.)_
+- [ ] `[UT✓]` `[E2E]` **`/model` works:** Opens/selects model where supported; unsupported agents fail gracefully. _(UT: `slash_model_*`; picker render is E2E.)_
 - [ ] `[UT✓]` **Unknown slash command is safe:** Unknown `/command` does not lose user input or crash.
 - [ ] `[E2E]` **Esc/back navigation works:** User can return from popups/session/model views to chat.
 
 ### Chat/session view switching
 
-- [ ] `[UT+]` `[E2E]` **Session view opens from chat:** `/sessions`, session button, or `Ctrl+Shift+/` opens the session view. _(UT: `/sessions` classify + `ctrl+shift+/` binding.)_
+- [ ] `[UT✓]` `[E2E]` **Session view opens from chat:** `/sessions`, session button, or `Ctrl+Shift+/` opens the session view. _(UT: `slash_sessions_opens_agents_view` + `DefaultAgentKeybindings`.)_
 - [ ] `[E2E]` **Chat view restores:** User can return to chat view after opening session view.
 - [ ] `[E2E]` **View switch preserves input:** Draft prompt text is not unexpectedly lost when switching views.
 - [ ] `[E2E]` **View switch preserves connection:** Agent connection state remains correct after switching views.
@@ -152,13 +152,13 @@ Use this checklist to validate and sign off an Intelligent Terminal release. Eac
 
 - [ ] `[E2E]` **PowerShell shell integration installed:** Supported PowerShell profiles emit command-finished events.
 - [ ] `[E2E]` **Missing shell integration is safe:** Without shell integration, failures do not crash or produce broken UI.
-- [ ] `[UT+]` **Failure detection works:** A failing command emits an event and is detected by Intelligent Terminal. _(UT: `classify_wt_event`.)_
-- [ ] `[UT+]` **Successful commands ignored:** Successful commands do not trigger autofix. _(UT: `classify_wt_event`.)_
-- [ ] `[UT+]` **Detection off suppresses autofix:** With automatic error detection off, failures do not trigger autofix. _(UT: autofix reducer.)_
-- [ ] `[UT+]` **Detection on observes failures:** With detection on, failure notifications are observed. _(UT: autofix reducer.)_
-- [ ] `[UT+]` **Suggestion off suppresses LLM call:** With suggestion off, detection can show any expected local UI but does not ask the agent for a fix. _(UT: reducer no-LLM path.)_
-- [ ] `[UT+]` **Suggestion on triggers LLM call:** With suggestion on and a connected helper, an autofix suggestion is requested. _(UT: reducer submit path.)_
-- [ ] `[UT+]` `[E2E]` **Cold-start behavior is acceptable:** If failure happens before the helper is connected, UI stays stable and no stale suggestion appears later. _(UT: `state != Connected` early-return.)_
+- [ ] `[UT✓]` **Failure detection works:** A failing command emits an event and is detected by Intelligent Terminal. _(UT: `classify_wt_event`.)_
+- [ ] `[UT✓]` **Successful commands ignored:** Successful commands do not trigger autofix. _(UT: `classify_wt_event` + `success_exit_code_does_not_arm_autofix`.)_
+- [ ] `[UT✓]` **Detection off suppresses autofix:** With automatic error detection off, failures do not trigger autofix. _(UT: autofix reducer.)_
+- [ ] `[UT✓]` **Detection on observes failures:** With detection on, failure notifications are observed. _(UT: autofix reducer.)_
+- [ ] `[UT✓]` **Suggestion off suppresses LLM call:** With suggestion off, detection can show any expected local UI but does not ask the agent for a fix. _(UT: `suggestion_off_emits_detected_without_submitting_turn`.)_
+- [ ] `[UT✓]` **Suggestion on triggers LLM call:** With suggestion on and a connected helper, an autofix suggestion is requested. _(UT: reducer submit path.)_
+- [ ] `[UT✓]` **Cold-start behavior is acceptable:** If failure happens before the helper is connected, UI stays stable and no stale suggestion appears later. _(UT: `cold_start_drops_autofix_when_not_connected`.)_
 
 ### Autofix with agent pane
 
@@ -167,8 +167,8 @@ Use this checklist to validate and sign off an Intelligent Terminal release. Eac
 - [ ] `[E2E]` **Autofix opens/restores UI correctly:** Suggestion UI appears in the expected pane/tab and does not steal unrelated focus unexpectedly.
 - [ ] `[E2E]` **Insert suggestion works:** Suggested fix can be inserted into the source pane.
 - [ ] `[E2E]` **Run suggestion works:** Suggested fix can be run in the source pane.
-- [ ] `[UT+]` `[E2E]` **Reject/dismiss works:** User can dismiss an autofix suggestion without side effects. _(UT: clear/reset state.)_
-- [ ] `[UT+]` `[E2E]` **Autofix target pane is correct:** Failure in one pane does not offer/run a fix in the wrong pane. _(UT: target-tab routing.)_
+- [ ] `[UT✓]` `[E2E]` **Reject/dismiss works:** User can dismiss an autofix suggestion without side effects. _(UT: `trigger_echo_pane_clears_when_state_returns_to_idle`.)_
+- [ ] `[UT✓]` `[E2E]` **Autofix target pane is correct:** Failure in one pane does not offer/run a fix in the wrong pane. _(UT: target-tab routing — busy-pane tests + `autofix_still_triggers_for_non_agent_pane`.)_
 - [ ] `[E2E]` `[MANUAL]` **Autofix with Copilot works:** Copilot returns a useful suggestion.
 - [ ] `[E2E]` `[MANUAL]` **Autofix with Claude works:** Claude returns a useful suggestion.
 - [ ] `[E2E]` `[MANUAL]` **Autofix with Codex works:** Codex returns a useful suggestion.
@@ -189,7 +189,7 @@ Use this checklist to validate and sign off an Intelligent Terminal release. Eac
 ### Surfaces
 
 - [ ] `[E2E]` **Session button works:** The session-management button opens the session view.
-- [ ] `[UT+]` `[E2E]` **Hotkey works:** `Ctrl+Shift+/` opens the session view. _(UT: `ctrl+shift+/` → `openAgentSessions` binding.)_
+- [ ] `[UT✓]` `[E2E]` **Hotkey works:** `Ctrl+Shift+/` opens the session view. _(UT: `DefaultAgentKeybindings` binding; open behavior E2E.)_
 - [ ] `[UT✓]` `[E2E]` **Slash command works:** `/sessions` opens the session view. _(UT: `/sessions` classify.)_
 - [ ] `[UT+]` `[E2E]` **Command action works:** The `openAgentSessions` action opens the session view. _(UT: action parse/binding.)_
 - [ ] `[E2E]` **Session view empty state works:** Empty/no-session state is useful and not visually broken.
@@ -228,11 +228,11 @@ Use this checklist to validate and sign off an Intelligent Terminal release. Eac
 
 **Feature definition:** Delegate mode launches a separate agent task from the current terminal context/cwd, without using the interactive agent pane chat.
 
-- [ ] `[UT+]` `[E2E]` **`Alt+Shift+B` launches background delegate:** Shortcut opens a new delegate agent/task. _(UT: `alt+shift+b` → `openBackgroundAgent` binding.)_
+- [ ] `[UT✓]` `[E2E]` **`Alt+Shift+B` launches background delegate:** Shortcut opens a new delegate agent/task. _(UT: `DefaultAgentKeybindings` binding; launch E2E.)_
 - [ ] `[UT~]` `[E2E]` **Delegate cwd is correct:** The delegate starts with the current pane's working directory.
 - [ ] `[UT✓]` `[E2E]` **Delegate provider is correct:** The launched delegate uses the configured delegate agent, not the agent-pane provider unless they are intentionally the same. _(UT: `EffectiveDelegateAgent`.)_
 - [ ] `[UT✓]` `[E2E]` **Delegate model is correct:** The launched delegate uses the configured delegate model. _(UT: command construction.)_
-- [ ] `[UT+]` `[E2E]` **`Alt+Shift+/` opens agent delegation palette:** Shortcut opens command palette in agent-delegation mode. _(UT: `alt+shift+/` binding to delegation launch mode.)_
+- [ ] `[UT✓]` `[E2E]` **`Alt+Shift+/` opens agent delegation palette:** Shortcut opens command palette in agent-delegation mode. _(UT: `DefaultAgentKeybindings` binding; palette E2E.)_
 - [ ] `[E2E]` **Command palette prompt launches delegate:** Typing a request and pressing Enter creates a delegate task.
 - [ ] `[E2E]` **Command palette cancel is safe:** Esc/cancel closes the palette without launching a delegate.
 - [ ] `[E2E]` `[MANUAL]` **Delegate with Copilot works:** Copilot delegate task starts and responds.
@@ -294,9 +294,9 @@ Use this checklist to validate and sign off an Intelligent Terminal release. Eac
 - [ ] `[E2E]` **Gemini hook install works:** Gemini hook is installed or reports why it cannot be installed.
 - [ ] `[E2E]` **Codex hook behavior is understood:** Codex hook/session support is tested according to the current implementation.
 - [ ] `[E2E]` **Hook remove works:** Removing a hook disables future session tracking for that CLI.
-- [ ] `[UT~]` `[E2E]` **Disabled plugin is respected:** Disabled agent plugin is skipped and not force-enabled. _(UT: skip-decision logic.)_
-- [ ] `[UT+]` `[E2E]` **Hook auto-upgrade works:** After package upgrade, previously installed hooks are updated silently when bundle version changes. _(UT: bundle-version compare decision.)_
-- [ ] `[UT~]` `[E2E]` **Opt-in preserved:** Auto-upgrade does not install hooks into a CLI the user never opted into. _(UT: opt-in skip logic.)_
+- [ ] `[UT✓]` `[E2E]` **Disabled plugin is respected:** Disabled agent plugin is skipped and not force-enabled. _(UT: `decide_skip_when_disabled`.)_
+- [ ] `[UT✓]` `[E2E]` **Hook auto-upgrade works:** After package upgrade, previously installed hooks are updated silently when bundle version changes. _(UT: `decide_upgrade` + `upgrade_state` round-trip.)_
+- [ ] `[UT✓]` `[E2E]` **Opt-in preserved:** Auto-upgrade does not install hooks into a CLI the user never opted into. _(UT: `decide_skip_when_not_installed`.)_
 - [ ] `[E2E]` **Hook logs are available:** Hook decisions and failures are visible in the expected WTA log files.
 
 ## 9. Packaging, process, and protocol integration
