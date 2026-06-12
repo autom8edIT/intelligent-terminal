@@ -57,13 +57,12 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     // very narrow panes (`area.width < HORIZONTAL_PADDING + 1`) we'd
     // otherwise pass 0 to `truncate_to_width` and get an empty string,
     // making the indicator a row of pure padding. Floor the budget at 1
-    // whenever there's at least 1 cell available so the truncation marker
-    // is always visible — `truncate_to_width(_, 1)` emits a bare `…`.
-    let budget = if area.width == 0 {
-        0
-    } else {
-        (area.width as usize).saturating_sub(HORIZONTAL_PADDING as usize).max(1)
-    };
+    // so the truncation marker is always visible — `truncate_to_width(_, 1)`
+    // emits a bare `…`. (The `area.width == 0` case is already short-circuited
+    // by the early return above.)
+    let budget = (area.width as usize)
+        .saturating_sub(HORIZONTAL_PADDING as usize)
+        .max(1);
     let truncated = truncate_to_width(&text, budget);
     // Clamp the left padding to whatever room is left after the truncated
     // body — in very narrow terminals padding shrinks to 0 so the marker
