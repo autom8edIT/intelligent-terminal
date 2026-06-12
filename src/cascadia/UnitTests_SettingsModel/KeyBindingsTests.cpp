@@ -40,6 +40,7 @@ namespace SettingsModelUnitTests
         TEST_METHOD(TestMoveTabArgs);
         TEST_METHOD(TestGetKeyBindingForAction);
         TEST_METHOD(KeybindingsWithoutVkey);
+        TEST_METHOD(DefaultAgentKeybindings);
     };
 
     void KeyBindingsTests::KeyChords()
@@ -769,6 +770,31 @@ namespace SettingsModelUnitTests
             const auto& kbd{ actionMap->GetKeyBindingForAction(L"Test.CmdPal") };
             VerifyKeyChordEquality({ VirtualKeyModifiers::Control | VirtualKeyModifiers::Shift, static_cast<int32_t>('P'), 0 }, kbd);
         }
+    }
+
+    void KeyBindingsTests::DefaultAgentKeybindings()
+    {
+        // Pin the default agent shortcut bindings shipped in defaults.json so a
+        // future edit that drops or remaps one of these surfaces here rather
+        // than as a silent regression. Chords are built with the same
+        // KeyChordSerialization parser defaults.json goes through, and we assert
+        // the resolved command's stable ID.
+        const auto settings{ CascadiaSettings::LoadDefaults() };
+        const auto actionMap{ settings.ActionMap() };
+
+        auto verifyBinding = [&](std::wstring_view keys, std::wstring_view expectedId) {
+            const auto chord{ KeyChordSerialization::FromString(winrt::hstring{ keys }) };
+            VERIFY_IS_NOT_NULL(chord, NoThrowString().Format(L"chord must parse: %.*s", static_cast<int>(keys.size()), keys.data()));
+            const auto& cmd{ actionMap.GetActionByKeyChord(chord) };
+            VERIFY_IS_NOT_NULL(cmd, NoThrowString().Format(L"a default command must be bound to %.*s", static_cast<int>(keys.size()), keys.data()));
+            VERIFY_ARE_EQUAL(winrt::hstring{ expectedId }, cmd.ID());
+        };
+
+        verifyBinding(L"ctrl+shift+period", L"Terminal.OpenAgentPane");
+        verifyBinding(L"ctrl+shift+i", L"Terminal.FocusAgentPane");
+        verifyBinding(L"ctrl+shift+/", L"Terminal.OpenAgentSessions");
+        verifyBinding(L"alt+shift+b", L"Terminal.OpenBackgroundAgent");
+        verifyBinding(L"alt+shift+/", L"Terminal.OpenAgentDelegation");
     }
 
     void KeyBindingsTests::LayerScancodeKeybindings()
