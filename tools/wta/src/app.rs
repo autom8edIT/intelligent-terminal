@@ -6913,8 +6913,7 @@ impl App {
                 }
                 let _tab = self.current_tab();
                 tracing::debug!(target: "autofix", input_empty = _tab.input.is_empty(), state = ?self.state, has_recs = _tab.turn.recommendations().is_some(), autofix_pane = ?_tab.autofix.pane_id, selected_idx = _tab.selected_recommendation, "Enter");
-                if self.current_tab().input.is_empty()
-                    && self.state == ConnectionState::Connected
+                if self.state == ConnectionState::Connected
                     && self.current_tab().turn.recommendations().is_some()
                 {
                     // Card is visible — Enter executes the selected choice.
@@ -6922,31 +6921,49 @@ impl App {
                     // coordinator, transitions the state machine to
                     // `Surfaced{Empty, end_pending preserved}`, and emits
                     // the autofix-cleared bottom-bar event when applicable.
-                    let session_id = self.current_tab().session_id.clone();
-                    if let Some(session_id) = session_id {
-                        let label_choice = self
+                    //
+                    // This intentionally runs even when the input box has
+                    // typed text. When a card surfaces, `input_has_nav_focus`
+                    // locks the input so the user can't type more, but any
+                    // pre-existing draft stays in the buffer. Pressing Enter
+                    // in that state is unambiguous: the user wants to
+                    // execute the visible card action. The draft stays in
+                    // the input untouched — once the card finishes
+                    // (turn → Surfaced{Empty}) `input_has_nav_focus` flips
+                    // back to true and the user can press Enter again to
+                    // send the draft as a normal prompt, or edit/discard it.
+                    //
+                    // Fall back to `DEFAULT_TAB_ID` when no real session_id
+                    // is bound yet — same convention as the queue branch
+                    // below and `cancel_in_flight_turn` — so the state
+                    // machine still advances on this tab even pre-attach.
+                    let session_id = self
+                        .current_tab()
+                        .session_id
+                        .clone()
+                        .unwrap_or_else(|| DEFAULT_TAB_ID.to_string());
+                    let label_choice = self
+                        .selected_recommendation_choice()
+                        .map(|c| c.choice)
+                        .unwrap_or(0);
+                    let insert_only = self.current_tab().selected_button == 1
+                        && self
                             .selected_recommendation_choice()
-                            .map(|c| c.choice)
-                            .unwrap_or(0);
-                        let insert_only = self.current_tab().selected_button == 1
-                            && self
-                                .selected_recommendation_choice()
-                                .map(|c| self.is_send_choice(c))
-                                .unwrap_or(false);
-                        tracing::info!(
-                            target: "autofix",
-                            choice = label_choice,
-                            insert_only,
-                            "Executing choice",
-                        );
-                        let label = if insert_only {
-                            "Inserting"
-                        } else {
-                            "Executing"
-                        };
-                        self.push_execution_info(format!("{} choice {}.", label, label_choice));
-                        self.turn_execute_card(&session_id);
-                    }
+                            .map(|c| self.is_send_choice(c))
+                            .unwrap_or(false);
+                    tracing::info!(
+                        target: "autofix",
+                        choice = label_choice,
+                        insert_only,
+                        "Executing choice",
+                    );
+                    let label = if insert_only {
+                        "Inserting"
+                    } else {
+                        "Executing"
+                    };
+                    self.push_execution_info(format!("{} choice {}.", label, label_choice));
+                    self.turn_execute_card(&session_id);
                 } else if !self.current_tab().input.is_empty() && self.state == ConnectionState::Connected {
                     // Same-tab single-flight: if the turn isn't accepting a
                     // new prompt right now (in-flight, or a card is staged
@@ -6962,20 +6979,11 @@ impl App {
                     // with loadSession replay chunks). Keep both sides
                     // symmetric so Enter and drain agree on what "busy" means.
                     //
-                    // Card-visible is also treated as busy. A staged
-                    // recommendation lives in `Surfaced { end_pending: false }`,
-                    // which `accepts_new_prompt()` reports as accepting — but
-                    // dispatching now would call `turn_submit_prompt`, which
-                    // resets `selected_recommendation`/`messages` and wipes
-                    // the card before the user can Run/Insert/Esc it.
-                    // `drain_pending_prompts` already gates on
-                    // `recommendations().is_some()`; mirror it here so Enter
-                    // queues the typed prompt and the card survives until
-                    // the user dismisses or executes it (the drain then
-                    // promotes the queued prompt automatically).
+                    // Note: `recommendations().is_some()` is handled by the
+                    // card-Enter branch above (which executes the card),
+                    // so we don't need to gate on it here.
                     if !self.current_tab().turn.accepts_new_prompt()
                         || self.current_tab().loading_session
-                        || self.current_tab().turn.recommendations().is_some()
                     {
                         let tab = self.current_tab_mut();
                         if tab.pending_prompts.len() >= PENDING_PROMPT_QUEUE_CAP {
@@ -14460,52 +14468,97 @@ mod tests {
     }
 
     #[test]
-    fn enter_with_card_visible_queues_prompt_and_preserves_card() {
-        // Regression: a Surfaced{ end_pending: false } card was being wiped
-        // by typing+Enter because `accepts_new_prompt()` returns true for
-        // that state. The Enter handler dispatched the prompt, which ran
-        // `turn_submit_prompt` and reset selected_recommendation/messages,
-        // erasing the card the user was about to Run/Insert. Match the
-        // drain gate: card-visible → queue, don't dispatch.
+    fn enter_with_card_visible_and_empty_input_executes_card() {
+        // Baseline: card visible, no draft. Enter executes the card; the
+        // turn transitions Surfaced{Recommendation} → Surfaced{Empty} and
+        // recommendations() becomes None.
         let mut app = test_app();
         app.state = ConnectionState::Connected;
+        app.current_tab_mut().session_id = Some(DEFAULT_TAB_ID.to_string());
         stage_surfaced_recommendation(
             &mut app,
             vec![send_choice("pane-1", "Get-Process | Sort-Object CPU")],
             0,
             None,
         );
-        // Sanity: card is visible AND accepts_new_prompt is true (the bug
-        // precondition). Without the fix, the next Enter would dispatch.
-        assert!(app.current_tab().turn.recommendations().is_some());
-        assert!(app.current_tab().turn.accepts_new_prompt());
+        assert!(app.current_tab().input.is_empty());
 
-        type_text(&mut app, "Give me command for Ram");
         press_enter(&mut app);
 
-        // Card is still surfaced (selected_recommendation untouched).
         assert!(
-            app.current_tab().turn.recommendations().is_some(),
-            "card must survive a queued prompt; got turn={:?}",
+            app.current_tab().turn.recommendations().is_none(),
+            "card must execute (Surfaced{{Recommendation}} → Surfaced{{Empty}}); got {:?}",
             app.current_tab().turn,
         );
         assert!(
             matches!(
                 app.current_tab().turn,
-                TurnState::Surfaced { end_pending: false, .. }
+                TurnState::Surfaced { outcome: TurnOutcome::Empty, .. }
             ),
-            "still Surfaced{{end_pending:false}} (no transition to Submitted); got {:?}",
+            "post-execute turn must be Surfaced{{Empty}}; got {:?}",
             app.current_tab().turn,
         );
-        // Prompt was queued, not dispatched.
-        assert_eq!(app.current_tab().pending_prompts.len(), 1);
-        assert_eq!(
-            app.current_tab().pending_prompts[0].text,
-            "Give me command for Ram"
+        assert!(app.current_tab().pending_prompts.is_empty(),
+            "no queue interaction expected when there's no draft");
+    }
+
+    #[test]
+    fn enter_with_card_visible_and_draft_input_executes_card_preserving_draft() {
+        // Bug report scenario: user typed a follow-up in the input box,
+        // then the agent surfaced a recommendation card. User presses
+        // Enter wanting to execute the card. Pre-fix, the card-Enter
+        // handler required `input.is_empty()`, so Enter fell through
+        // to the prompt-dispatch path which wiped the card and committed
+        // the typed text as a new prompt — the symptom the user reported
+        // as "can't choose execution selection, hang".
+        //
+        // Contract: Enter executes the card; the draft stays in the
+        // input untouched. After the card runs, the user is back in
+        // normal mode with their draft right where they left it and
+        // can edit, send, or discard.
+        let mut app = test_app();
+        app.state = ConnectionState::Connected;
+        app.current_tab_mut().session_id = Some(DEFAULT_TAB_ID.to_string());
+        stage_surfaced_recommendation(
+            &mut app,
+            vec![send_choice("pane-1", "Get-Process | Sort-Object CPU")],
+            0,
+            None,
         );
-        // Input was consumed so the next keystroke lands on an empty line.
-        assert!(app.current_tab().input.is_empty());
-        assert_eq!(app.current_tab().cursor_pos, 0);
+        type_text(&mut app, "Give me command for Ram");
+        let cursor_before = app.current_tab().cursor_pos;
+
+        press_enter(&mut app);
+
+        // Card executed.
+        assert!(
+            app.current_tab().turn.recommendations().is_none(),
+            "card must execute; got {:?}",
+            app.current_tab().turn,
+        );
+        assert!(
+            matches!(
+                app.current_tab().turn,
+                TurnState::Surfaced { outcome: TurnOutcome::Empty, .. }
+            ),
+            "post-execute turn must be Surfaced{{Empty}}; got {:?}",
+            app.current_tab().turn,
+        );
+        // Draft preserved verbatim — no queue interaction, no dispatch,
+        // cursor position unchanged. The user's input intent is intact.
+        assert_eq!(
+            app.current_tab().input, "Give me command for Ram",
+            "draft must stay in input untouched"
+        );
+        assert_eq!(app.current_tab().cursor_pos, cursor_before,
+            "cursor must stay where the user left it");
+        assert!(app.current_tab().pending_prompts.is_empty(),
+            "card-Enter must not interact with the pending-prompts queue");
+        // After the card runs, the input is no longer focus-locked
+        // (recommendations is None), so the next Enter would send the
+        // draft via the normal prompt-dispatch path.
+        assert!(app.current_tab().input_has_nav_focus(),
+            "input must regain nav focus once card-recs are cleared");
     }
 
     #[test]
