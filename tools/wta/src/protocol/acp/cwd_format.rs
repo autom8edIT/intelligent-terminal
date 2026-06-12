@@ -205,8 +205,13 @@ fn mnt_to_windows(posix: &str) -> Option<PathBuf> {
     if !drive.is_ascii_alphabetic() {
         return None;
     }
-    // After the drive letter we expect end-of-string or a `/`.
+    // After the drive letter we require a mountpoint boundary: either
+    // end-of-string (`/mnt/c`) or a `/` (`/mnt/c/...`). Reject things like
+    // `/mnt/cUsers`, which is an unrelated POSIX path, not a WSL mountpoint.
     let after = &rest[1..];
+    if !after.is_empty() && !after.starts_with('/') {
+        return None;
+    }
     let after = after.strip_prefix('/').unwrap_or(after);
     let drive_up = drive.to_ascii_uppercase();
     if after.is_empty() {
@@ -371,6 +376,11 @@ mod tests {
         // non-/mnt posix → %USERPROFILE%
         assert_eq!(
             to_windows_format(Path::new("/home/yeelam")),
+            PathBuf::from(r"C:\Users\tester")
+        );
+        // malformed /mnt (no boundary after drive) is NOT a mountpoint → %USERPROFILE%
+        assert_eq!(
+            to_windows_format(Path::new("/mnt/cUsers")),
             PathBuf::from(r"C:\Users\tester")
         );
     }
