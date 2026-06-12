@@ -14784,4 +14784,196 @@ mod tests {
         assert_eq!(app.tab_sessions["background"].pending_prompts.len(), 1,
             "background tab's queue still intact");
     }
+
+    #[test]
+    fn drain_dispatches_to_multiple_idle_tabs_in_same_tick() {
+        // The cross-tab iteration in `drain_pending_prompts` must visit
+        // every idle tab with a non-empty queue in a single call — not
+        // bail after the first dispatch. Both tabs are background
+        // (neither matches `self.tab_id`) so we exercise the same loop
+        // path that real multi-tab routing takes.
+        let (mut app, mut rx) = test_app_with_prompt_rx();
+        app.state = ConnectionState::Connected;
+        app.pane_id = Some("pane-real".into());
+        app.window_id = Some("win-real".into());
+        app.tab_id = Some("focused-tab".into());
+        for (tab_id, sid, text) in [
+            ("tab-a", "sess-a", "prompt-A"),
+            ("tab-b", "sess-b", "prompt-B"),
+        ] {
+            let tab = app.tab_sessions.entry(tab_id.into()).or_default();
+            tab.session_id = Some(sid.into());
+            tab.pending_prompts.push_back(QueuedPrompt::new(text.into()));
+            app.session_to_tab.insert(sid.into(), tab_id.into());
+        }
+        app.tab_sessions.entry("focused-tab".into()).or_default();
+
+        app.drain_pending_prompts();
+
+        let mut got: Vec<(String, String)> = Vec::new();
+        while let Ok(sub) = rx.try_recv() {
+            let tab = sub
+                .pane_context
+                .as_ref()
+                .and_then(|c| c.tab_id.clone())
+                .expect("pane context tab_id present");
+            got.push((tab, sub.text));
+        }
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("tab-a".to_string(), "prompt-A".to_string()),
+                ("tab-b".to_string(), "prompt-B".to_string()),
+            ],
+            "both idle tabs must dispatch their queued prompt in one drain"
+        );
+        assert!(app.tab_sessions["tab-a"].pending_prompts.is_empty());
+        assert!(app.tab_sessions["tab-b"].pending_prompts.is_empty());
+    }
+
+    #[test]
+    fn drain_dispatches_only_idle_tabs_leaves_busy_tabs_queued() {
+        // A busy tab in the iteration must not steal a dispatch slot or
+        // get its queue popped — the per-tab `accepts_new_prompt()` gate
+        // is what keeps cross-tab fairness honest.
+        let (mut app, mut rx) = test_app_with_prompt_rx();
+        app.state = ConnectionState::Connected;
+        app.pane_id = Some("pane-real".into());
+        app.window_id = Some("win-real".into());
+        app.tab_id = Some("focused-tab".into());
+
+        {
+            let a = app.tab_sessions.entry("tab-a".into()).or_default();
+            a.session_id = Some("sess-a".into());
+            a.pending_prompts.push_back(QueuedPrompt::new("A".into()));
+        }
+        app.session_to_tab.insert("sess-a".into(), "tab-a".into());
+        {
+            let b = app.tab_sessions.entry("tab-b".into()).or_default();
+            b.session_id = Some("sess-b".into());
+            b.pending_prompts.push_back(QueuedPrompt::new("B".into()));
+            b.turn = TurnState::Submitted(SubmittedPrompt {
+                id: 1,
+                text: "in-flight".into(),
+                submitted_at_unix_s: 0.0,
+                autofix: None,
+            });
+        }
+        app.session_to_tab.insert("sess-b".into(), "tab-b".into());
+        app.tab_sessions.entry("focused-tab".into()).or_default();
+
+        app.drain_pending_prompts();
+
+        let sub = rx.try_recv().expect("idle tab dispatched");
+        assert_eq!(sub.text, "A");
+        assert_eq!(
+            sub.pane_context.as_ref().and_then(|c| c.tab_id.clone()),
+            Some("tab-a".into())
+        );
+        assert!(rx.try_recv().is_err(), "busy tab must not dispatch");
+        assert!(app.tab_sessions["tab-a"].pending_prompts.is_empty());
+        assert_eq!(
+            app.tab_sessions["tab-b"].pending_prompts.len(),
+            1,
+            "busy tab's queued prompt is preserved untouched"
+        );
+        assert_eq!(
+            app.tab_sessions["tab-b"].pending_prompts[0].text,
+            "B"
+        );
+    }
+
+    #[test]
+    fn drain_per_tab_fifo_independent_across_tabs() {
+        // Per-tab FIFO with cross-tab fairness: one drain tick pops the
+        // head of every idle tab's queue, leaving the rest in order.
+        // (A second tick can't fire here because `turn_submit_prompt`
+        // flips each tab to `Submitted` — same as the single-tab
+        // `drain_dispatches_queued_prompts_fifo_when_turn_completes` case.)
+        let (mut app, mut rx) = test_app_with_prompt_rx();
+        app.state = ConnectionState::Connected;
+        app.pane_id = Some("pane-real".into());
+        app.window_id = Some("win-real".into());
+        app.tab_id = Some("focused-tab".into());
+        for (tab_id, sid, items) in [
+            ("tab-a", "sess-a", vec!["A1", "A2", "A3"]),
+            ("tab-b", "sess-b", vec!["B1", "B2"]),
+        ] {
+            let tab = app.tab_sessions.entry(tab_id.into()).or_default();
+            tab.session_id = Some(sid.into());
+            for t in items {
+                tab.pending_prompts.push_back(QueuedPrompt::new(t.into()));
+            }
+            app.session_to_tab.insert(sid.into(), tab_id.into());
+        }
+        app.tab_sessions.entry("focused-tab".into()).or_default();
+
+        app.drain_pending_prompts();
+
+        let mut got: Vec<(String, String)> = Vec::new();
+        while let Ok(sub) = rx.try_recv() {
+            let tab = sub
+                .pane_context
+                .as_ref()
+                .and_then(|c| c.tab_id.clone())
+                .expect("pane context tab_id present");
+            got.push((tab, sub.text));
+        }
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("tab-a".to_string(), "A1".to_string()),
+                ("tab-b".to_string(), "B1".to_string()),
+            ],
+            "exactly one (head) dispatch per idle tab in one tick"
+        );
+        let a_remaining: Vec<&str> = app.tab_sessions["tab-a"]
+            .pending_prompts
+            .iter()
+            .map(|q| q.text.as_str())
+            .collect();
+        assert_eq!(a_remaining, vec!["A2", "A3"], "tab-a FIFO preserved");
+        let b_remaining: Vec<&str> = app.tab_sessions["tab-b"]
+            .pending_prompts
+            .iter()
+            .map(|q| q.text.as_str())
+            .collect();
+        assert_eq!(b_remaining, vec!["B2"], "tab-b FIFO preserved");
+    }
+
+    #[test]
+    fn clear_chat_history_on_one_tab_preserves_other_tabs_queue() {
+        // `clear_chat_history` is a per-`TabSession` method; calling it
+        // on one tab's session must never reach into another tab's
+        // queue. Pins the isolation contract used by reset paths.
+        let mut app = test_app();
+        app.state = ConnectionState::Connected;
+        {
+            let a = app.tab_sessions.entry("tab-a".into()).or_default();
+            a.pending_prompts.push_back(QueuedPrompt::new("A1".into()));
+            a.pending_prompts.push_back(QueuedPrompt::new("A2".into()));
+        }
+        {
+            let b = app.tab_sessions.entry("tab-b".into()).or_default();
+            b.pending_prompts.push_back(QueuedPrompt::new("B1".into()));
+        }
+
+        app.tab_sessions
+            .get_mut("tab-a")
+            .expect("tab-a present")
+            .clear_chat_history();
+
+        assert!(
+            app.tab_sessions["tab-a"].pending_prompts.is_empty(),
+            "tab-a queue cleared"
+        );
+        let b_remaining: Vec<&str> = app.tab_sessions["tab-b"]
+            .pending_prompts
+            .iter()
+            .map(|q| q.text.as_str())
+            .collect();
+        assert_eq!(b_remaining, vec!["B1"], "tab-b queue untouched");
+    }
 }
