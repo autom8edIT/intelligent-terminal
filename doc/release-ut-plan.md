@@ -89,7 +89,14 @@ Verified **already covered**, no new tests needed:
 - **`classify_wt_event`** exit-code split and connection-state classification (existing `app::tests`).
 - **Hooks auto-upgrade decision** (`agent_hooks_installer.rs`: `decide_upgrade` not-installed/disabled/version-compare + `upgrade_state` cache round-trip).
 
-`[UT+]` backlog status: **cleared** — every checklist item that was UT-coverable is now `[UT✓]` (or `[UT✓] [E2E]` where only the logic half is a UT). The one item that looked like a settings round-trip but isn't — "Session-management choice persists" — is reclassified `[UT~] [E2E]` because the FRE toggle installs hooks on Save rather than persisting a settings bool (read-back state is parse-tested via `AgentHooksStatusTests`, the persistence itself is E2E).
+`[UT+]` backlog status: **previous round cleared, new items added in the FRE deep-dive.** The original PR-279 `[UT+]` backlog is fully implemented (autofix reducer, default agent keybindings, agent action parse, built-in agent round-trip, slash dispatch, locale key-parity). The FRE deep-dive (this branch) added a new `[UT+]` backlog tied to FRE-specific logic that was missed in the original sweep:
+- `_SetSavingState` form-disable / spinner / Save-re-enable transitions (FRE save progress)
+- `needsNode` gate (`(agentId == "claude" || agentId == "codex") && !_IsNodeInstalled()` — Copilot must never trigger Node install)
+- `_ClassifyWingetHResult` HRESULT → `FreWingetFailureKind` mapping (Network / BlockedByPolicy / PackageNotFound / NoCompatibleInstaller / Generic fall-through)
+- `_IsNetworkLikeHResult` whitelist
+- `FreOverlay_InstallError_*` and `FreOverlay_PackageDisplayName_*` `.resw` locale parity (analogous to WTA YAML `every_locale_has_all_en_us_keys`)
+
+The one item that looked like a settings round-trip but isn't — the FRE "Session management" toggle (now phrased as **"Choice reflected in Settings"** in the checklist) — is `[UT~] [E2E]` because the FRE toggle installs hooks on Save rather than persisting a settings bool (read-back state is parse-tested via `AgentHooksStatusTests`, the persistence itself is E2E).
 
 Localization parity (resolved):
 
@@ -133,17 +140,51 @@ Markers below are what each `release-check-list.md` line should carry. `[UT~]` n
 testable core in parentheses.
 
 ### 0. FRE
-- FRE opens / completes / skip-close / links / save progress — `[E2E]`
-- FRE error messages actionable — `[UT~]` (WTA `classify_acp_error`) + `[E2E]`
-- FRE respects policy locks — `[UT~]` (`IsAgentPolicyLocked`, Effective* gates) + `[E2E]`
-- FRE RTL/localized layout — `[UT~]` (`IsRtlLocale`) + `[MANUAL]`
-- Agent selection (Copilot no-install/preinstalled, Claude, Codex, Gemini, unavailable) — `[UT~]` (registry + policy filter) + `[E2E]`
-- Agent selection persists — `[UT+]` (settings round-trip)
-- Detection off/on, suggestion off/on — `[UT+]` (`EffectiveAutoFixEnabled` + persistence) + `[E2E]`
-- Detection/suggestion dependency — `[UT~]` (effective logic) + `[E2E]`
-- Settings persist — `[UT+]`
-- Session management off/on, hints, install failure, persist — `[UT~]` (hooks status parse, persistence) + `[E2E]`
-- Pane position bottom/right/left/top — `[E2E]`; position persists — `[UT+]`
+
+Mapping mirrors the 11 subsections in `release-check-list.md § 0`.
+
+**FRE shell**
+- FRE opens / trigger condition / completes / survives tab-window-close / privacy links / completion opens agent pane — `[E2E]`
+- FRE save progress (`_SetSavingState` transitions) — `[UT+]` + `[E2E]`
+- FRE respects policy locks — `[UT~]` (`IsAgentPolicyLockedTracksAllowedAgents`, `IsCustomAgentPolicyLockedTracksBlocked`) + `[E2E]`
+- FRE RTL/localized layout — `[UT~]` (`IsRtlLocale` via `RtlHelperTests`) + `[MANUAL]`
+- All FRE choices persist across restart — `[UT✓]` (`BuiltInAcpAgentRoundtrips`, `AgentPanePositionRoundtripsAndDefaults`, `AutoErrorSettingsRoundtrip`) + `[E2E]` (cross-restart end-to-end)
+
+**FRE agent selection**
+- FRE lists only built-in ACP agents (custom agents filtered) — `[E2E]`
+- Copilot no-install / preinstalled, Claude / Codex / Gemini installed, unavailable non-Copilot agents — `[UT~]` (registry + policy filter via `FilteredAcpAgents`) + `[E2E]`
+- NodeJS install only triggers for Claude/Codex (Copilot never invokes `_WingetInstallAsync(OpenJS.NodeJS.LTS)`) — `[UT+]` + `[E2E]`
+
+**FRE automatic error settings**
+- Detection off/on, suggestion off/on, dependency — `[UT✓]` (`EffectiveAutoFixFalseWhenDetectionOff` covers `EffectiveAutoFixEnabled` reducer gate; `_UpdateSuggestionEnabledState` toggles `AutoErrorToggle.IsEnabled`) + `[E2E]`
+
+**FRE prewarm**
+- Prewarm gate (`_MaybeStartPrewarm`), 120s timeout non-fatal, Save awaits `s_prewarmAction`, multi-window single-flight via `s_prewarmMutex` — all `[E2E]`
+
+**FRE winget install — pre-flight gate**
+- WingetMissing hard gate (`FreProblemKind::WingetMissing = 0`, abort before any winget call) — `[E2E]`
+
+**FRE winget install — failure-kind messages**
+- 7 `FreWingetFailureKind` values × kind-specific localized template — each `[UT+]` (`_ClassifyWingetHResult` / `_IsNetworkLikeHResult` branch tests) + `[E2E]` (per-kind reproducer)
+
+**FRE winget install — diagnostics & robustness**
+- DiagOutputDir log capture on failure (25 MB/file, 50 MB total caps), tab/window close during install (PR #262 dispatcher capture + open prewarm-await lifetime bug), `FreProblemKind` priority semantics — `[E2E]` with `[UT~]` on the priority enum + abort-vs-toggle-off logic
+- RebootRequired install outcome (known limitation, no UI surface) — `[MANUAL]`
+
+**FRE shell integration**
+- PowerShell shell integration installs (pwsh7 + Windows PowerShell, ExecutionPolicy variant), bash/WSL best-effort — `[E2E]` (XAML wiring and Save re-enable behavior are not unit-testable)
+
+**FRE agent hooks (session-management toggle)**
+- Toggle off (does not call `_InstallHooksAsync`; hint row stays hidden) — `[UT~]` (toggle-state gate) + `[E2E]`
+- Toggle on / hook hints visibility / Node prereq hint (`AgentInstallHintRow` for Claude/Codex regardless of Node install state) — `[E2E]`
+- Hook install failure surfaces `FreOverlay_InstallErrorHooks` and toggles off Session Management (FRE uses static text, does NOT call `wta hooks status --json`) — `[E2E]`
+- Choice reflected in Settings via `wta hooks status --json` — `[UT~]` (`AgentHooksStatusTests`) + `[E2E]`
+
+**FRE agent pane position**
+- All four positions work, position persists — `[UT✓]` (`AgentPanePositionRoundtripsAndDefaults`) + `[E2E]`
+
+**FRE localization**
+- All non-en-US `.resw` locales have parity with en-US for `FreOverlay_InstallError_*` (8 templates added in PR #262) and `FreOverlay_PackageDisplayName_*` (2 keys) — `[UT+]` (parity test analogous to `every_locale_has_all_en_us_keys` for WTA YAML, not yet implemented)
 
 ### 1. Settings > AI Agents
 - Page opens — `[E2E]`

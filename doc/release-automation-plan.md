@@ -71,7 +71,7 @@ artifacts\release-validation\logs.zip
 
 | Release checklist area | Automation strategy | Manual remainder |
 |---|---|---|
-| FRE | UI automation for happy path, skip/close, toggles, agent selection, settings persistence, logs | Visual polish, localized wording, install UX edge cases |
+| FRE | UI automation for Welcome→Save happy path, tab/window close survival, toggles, agent selection, choice persistence across restart, agent pane position (Bottom/Right/Left/Top), shell-integration install outcomes (pwsh7 / Windows PowerShell / ExecutionPolicy variants), hooks install on Save (Session Management toggle on), log/diag capture; headless reproducers for each `FreWingetFailureKind` (Network/BlockedByPolicy/PackageNotFound/NoCompatibleInstaller/InstallerFailed/Timeout/Generic) and the WingetMissing pre-flight gate; prewarm single-flight assertions | RTL mirror & localized text-clipping visual check; RebootRequired manual verification |
 | Settings > AI Agents | UI automation plus settings.json verification | Visual layout and accessibility judgment |
 | Agent pane chat | Fake ACP E2E for open/hide/focus/chat/tool request | Real agent quality smoke |
 | Slash commands | Rust unit tests for parse/intent; fake ACP E2E for dispatch | Visual polish of popups |
@@ -95,6 +95,7 @@ artifacts\release-validation\logs.zip
 - WTA CLI parsing and session list formatting: `tools\wta\src\cli_tests.rs`.
 - Slash command parsing: `tools\wta\src\commands.rs` and WTA slash-command tests.
 - Agent registry command/model resolution: `tools\wta\src\agent_registry.rs`.
+- Policy lock state coverage: `IsAgentPolicyLockedTracksAllowedAgents`, `IsCustomAgentPolicyLockedTracksBlocked` in `CustomAgentAndPolicyTests.cpp`.
 
 ### New or expanded UT areas
 
@@ -112,9 +113,15 @@ artifacts\release-validation\logs.zip
   - correct target tab/pane routing
 - FRE/Settings view-model logic:
   - detection/suggestion dependency
-  - session-management hint visibility
+  - session-management hint visibility — speculative until `SessionManagementHintRow`/`AutoDetectShellIntegrationHintRow` visibility binding is extracted into a view-model getter
+  - Node prereq hint — speculative until `AgentInstallHintRow` visibility (driven by Claude/Codex selection, independent of Node install state) is extracted into a view-model getter
+  - `needsNode` gate: `(agentId == L"claude" || agentId == L"codex") && !_IsNodeInstalled()` — Copilot Save path must never trigger Node install (`FreOverlay.cpp:1451`)
   - pane position persistence
-  - policy lock states
+  - `_SetSavingState(true/false)` form-disable / spinner / "Setting up..." / Save-re-enable transitions
+  - `FreProblemKind` priority semantics (WingetMissing early hard gate; ShellIntegrationExecutionPolicy > ShellIntegration > Hooks for soft failures)
+  - `_ClassifyWingetHResult` HRESULT → `FreWingetFailureKind` mapping (Network / BlockedByPolicy / PackageNotFound / NoCompatibleInstaller / Generic fall-through)
+  - `_IsNetworkLikeHResult` whitelist
+  - `FreOverlay_InstallError_*` and `FreOverlay_PackageDisplayName_*` `.resw` locale parity (analogous to WTA YAML `every_locale_has_all_en_us_keys`)
 - Agent registry:
   - Copilot/Claude/Codex/Gemini command construction
   - model flag behavior
@@ -144,7 +151,7 @@ Run these after launching the packaged build:
 Recommended smoke path:
 
 1. Start packaged Intelligent Terminal with isolated settings.
-2. Complete or skip FRE.
+2. Complete FRE (Welcome → Save). FRE has no skip/close — closing the parent tab/window is the only escape and must not crash.
 3. Open Settings with `Ctrl+,`.
 4. Navigate to AI Agents.
 5. Configure fake custom ACP agent.

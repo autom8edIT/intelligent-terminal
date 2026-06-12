@@ -46,7 +46,7 @@ Net effect: UT shrinks the manual matrix to "did the wiring and UI connect", not
 - [ ] `[UT~]` `[E2E]` **FRE respects policy locks:** If agent, autofix, or session-management policy is locked, affected controls are disabled and explain why. _(UT: `IsAgentPolicyLockedTracksAllowedAgents`, `IsCustomAgentPolicyLockedTracksBlocked` cover the `IsAgentPolicyLocked` gate; XAML disable behavior is E2E only.)_
 - [ ] `[UT~]` `[MANUAL]` **FRE RTL/localized layout is usable:** Layout mirrors correctly for RTL locales and text is not clipped in localized builds. _(UT: `IsRtlLocale`.)_
 - [ ] `[E2E]` **FRE completion opens an agent pane:** After a successful `Completed` event, `TerminalPage::_OnFreCompleted` runs deferred startup which creates/selects a tab, then `_OpenOrReuseAgentPane(false, "FirstRunExperience")` opens the agent pane on the focused tab. If no tabs exist, the window closes instead.
-- [ ] `[UT+]` **All FRE choices persist across restart:** `acpAgent`, `agentPanePosition`, `autoErrorDetectionEnabled`, `autoFixEnabled` survive load → save → reload, plus their default-resolution. _(UT: `BuiltInAcpAgentRoundtrips`, `AgentPanePositionRoundtripsAndDefaults`, `AutoErrorSettingsRoundtrip` already cover this via `[UT✓]`; the cross-restart end-to-end remains `[E2E]`.)_
+- [ ] `[UT✓]` `[E2E]` **All FRE choices persist across restart:** `acpAgent`, `agentPanePosition`, `autoErrorDetectionEnabled`, `autoFixEnabled` survive load → save → reload, plus their default-resolution. _(UT: `BuiltInAcpAgentRoundtrips`, `AgentPanePositionRoundtripsAndDefaults`, `AutoErrorSettingsRoundtrip` cover the round-trip logic; the cross-restart end-to-end remains `[E2E]`.)_
 
 ### FRE agent selection
 
