@@ -2069,6 +2069,85 @@ fn inject_wta_pane_meta(meta: &mut Option<acp::Meta>) {
     );
 }
 
+fn elapsed_ms_since(start: std::time::Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1000.0
+}
+
+fn acp_result_failure_fields<T>(result: &acp::Result<T>) -> (&'static str, i32) {
+    match result {
+        Ok(_) => ("", 0),
+        Err(e) => ("AcpError", e.code.into()),
+    }
+}
+
+fn timeout_result_failure_fields<T>(
+    result: &std::result::Result<acp::Result<T>, tokio::time::error::Elapsed>,
+) -> (&'static str, i32) {
+    match result {
+        Ok(inner) => acp_result_failure_fields(inner),
+        Err(_) => ("Timeout", 0),
+    }
+}
+
+fn log_acp_initialize_timeout_result(
+    route: &str,
+    started: std::time::Instant,
+    result: &std::result::Result<
+        acp::Result<acp::InitializeResponse>,
+        tokio::time::error::Elapsed,
+    >,
+) {
+    let (failure_kind, acp_error_code) = timeout_result_failure_fields(result);
+    crate::telemetry::log_acp_initialize_complete(
+        elapsed_ms_since(started),
+        matches!(result, Ok(Ok(_))),
+        route,
+        failure_kind,
+        acp_error_code,
+    );
+}
+
+fn log_acp_new_session_result(
+    route: &str,
+    started: std::time::Instant,
+    result: &acp::Result<acp::NewSessionResponse>,
+) {
+    let session_id = result.as_ref().ok().map(|resp| resp.session_id.to_string());
+    let (failure_kind, acp_error_code) = acp_result_failure_fields(result);
+    crate::telemetry::log_acp_new_session_complete(
+        session_id.as_deref(),
+        elapsed_ms_since(started),
+        result.is_ok(),
+        route,
+        failure_kind,
+        acp_error_code,
+    );
+}
+
+fn log_acp_new_session_timeout_result(
+    route: &str,
+    started: std::time::Instant,
+    result: &std::result::Result<
+        acp::Result<acp::NewSessionResponse>,
+        tokio::time::error::Elapsed,
+    >,
+) {
+    let session_id = result
+        .as_ref()
+        .ok()
+        .and_then(|inner| inner.as_ref().ok())
+        .map(|resp| resp.session_id.to_string());
+    let (failure_kind, acp_error_code) = timeout_result_failure_fields(result);
+    crate::telemetry::log_acp_new_session_complete(
+        session_id.as_deref(),
+        elapsed_ms_since(started),
+        matches!(result, Ok(Ok(_))),
+        route,
+        failure_kind,
+        acp_error_code,
+    );
+}
+
 /// Handle a `session/load` failure (Err or timeout) in the
 /// `load_session_rx` arm of `run_acp_client_over_pipe`.
 ///
@@ -2112,7 +2191,9 @@ async fn handle_load_failure(
     });
     let mut new_req = acp::NewSessionRequest::new(cwd);
     inject_wta_pane_meta(&mut new_req.meta);
+    let fallback_started = std::time::Instant::now();
     let fallback = conn.new_session(new_req).await;
+    log_acp_new_session_result("HelperPipeFallback", fallback_started, &fallback);
     match fallback {
         Ok(resp) => {
             let new_sid = resp.session_id.clone();
@@ -2339,6 +2420,7 @@ pub async fn run_acp_client_over_pipe(
     // are fast because master just re-forwards.
     let _ = event_tx.send(AppEvent::ConnectionStage("Initializing ACP...".to_string()));
     startup_probe.log("Initializing ACP (over pipe)");
+    let init_started = std::time::Instant::now();
     let init_future = conn.initialize(
         acp::InitializeRequest::new(acp::ProtocolVersion::V1)
             .client_capabilities(acp::ClientCapabilities::new().terminal(true))
@@ -2347,8 +2429,10 @@ pub async fn run_acp_client_over_pipe(
                     .title("Windows Terminal Agent (helper)"),
             ),
     );
-    let init_resp = tokio::time::timeout(std::time::Duration::from_secs(60), init_future)
-        .await
+    let init_result =
+        tokio::time::timeout(std::time::Duration::from_secs(60), init_future).await;
+    log_acp_initialize_timeout_result("HelperPipe", init_started, &init_result);
+    let init_resp = init_result
         .map_err(|_| {
             tracing::error!(
                 target: "helper",
@@ -2477,7 +2561,14 @@ pub async fn run_acp_client_over_pipe(
             startup_probe.log("Creating session (over pipe)");
             let mut new_session_req = acp::NewSessionRequest::new(cwd.clone());
             inject_wta_pane_meta(&mut new_session_req.meta);
-            let session = conn.new_session(new_session_req).await.map_err(|e| {
+            let new_session_started = std::time::Instant::now();
+            let new_session_result = conn.new_session(new_session_req).await;
+            log_acp_new_session_result(
+                "HelperPipeStartup",
+                new_session_started,
+                &new_session_result,
+            );
+            let session = new_session_result.map_err(|e| {
                 // Attach the typed classification so an auth error
                 // (or any ACP code) survives the `?`-collapse into
                 // `anyhow` and can be recovered by `classify_anyhow`
@@ -2741,10 +2832,14 @@ pub async fn run_acp_client_over_pipe(
                     // has the row but no pane GUID to feed wtcli focus-pane.
                     let mut new_session_req = acp::NewSessionRequest::new(cwd);
                     inject_wta_pane_meta(&mut new_session_req.meta);
-                    let new_session = match conn_for_new
-                        .new_session(new_session_req)
-                        .await
-                    {
+                    let new_session_started = std::time::Instant::now();
+                    let new_session_result = conn_for_new.new_session(new_session_req).await;
+                    log_acp_new_session_result(
+                        "HelperPipeNewSessionForTab",
+                        new_session_started,
+                        &new_session_result,
+                    );
+                    let new_session = match new_session_result {
                         Ok(s) => s,
                         Err(e) => {
                             let _ = event_tx_for_new.send(AppEvent::AgentError {
@@ -3289,6 +3384,7 @@ async fn run_inner(
     // fail fast instead of hanging forever.
     let _ = event_tx.send(AppEvent::ConnectionStage("Initializing ACP...".to_string()));
     startup_probe.log("Initializing ACP");
+    let init_started = std::time::Instant::now();
     let init_future = conn.initialize(
         acp::InitializeRequest::new(acp::ProtocolVersion::V1)
             .client_capabilities(acp::ClientCapabilities::new().terminal(true))
@@ -3304,32 +3400,31 @@ async fn run_inner(
     let agent_label: String = adapter_package
         .clone()
         .unwrap_or_else(|| raw_program.to_string());
-    let init_resp = tokio::time::timeout(
-        std::time::Duration::from_secs(init_timeout_secs),
-        init_future,
-    )
-    .await
-    .map_err(|_| {
-        tracing::error!(
-            target: "acp",
-            step = "acp_initialize",
-            timeout_secs = init_timeout_secs,
-            agent = %agent_label,
-            "ACP initialize timed out — agent CLI did not respond"
-        );
-        anyhow::anyhow!(
-            "ACP initialize timed out after {} s — '{}' did not respond. \
-             First-run npx adapters download ~5MB; check network. \
-             Built-in ACP agents: copilot, claude (via @zed-industries/claude-code-acp), \
-             codex (via @zed-industries/codex-acp), gemini.",
-            init_timeout_secs,
-            agent_label
-        )
-    })?
-    .map_err(|e| {
-        tracing::error!(target: "acp", step = "acp_initialize", error = %e, "ACP initialize failed");
-        anyhow::anyhow!("initialize failed: {}", e)
-    })?;
+    let init_result =
+        tokio::time::timeout(std::time::Duration::from_secs(init_timeout_secs), init_future).await;
+    log_acp_initialize_timeout_result("DirectAgent", init_started, &init_result);
+    let init_resp = init_result
+        .map_err(|_| {
+            tracing::error!(
+                target: "acp",
+                step = "acp_initialize",
+                timeout_secs = init_timeout_secs,
+                agent = %agent_label,
+                "ACP initialize timed out — agent CLI did not respond"
+            );
+            anyhow::anyhow!(
+                "ACP initialize timed out after {} s — '{}' did not respond. \
+                 First-run npx adapters download ~5MB; check network. \
+                 Built-in ACP agents: copilot, claude (via @zed-industries/claude-code-acp), \
+                 codex (via @zed-industries/codex-acp), gemini.",
+                init_timeout_secs,
+                agent_label
+            )
+        })?
+        .map_err(|e| {
+            tracing::error!(target: "acp", step = "acp_initialize", error = %e, "ACP initialize failed");
+            anyhow::anyhow!("initialize failed: {}", e)
+        })?;
 
     // Log the agent's initialize response for debugging
     startup_probe.log(&format!("Agent init response received: {:?}", init_resp));
@@ -3371,8 +3466,14 @@ async fn run_inner(
         let mut last_err: Option<anyhow::Error> = None;
         let mut ok = None;
         for (i, cwd) in attempts.iter().enumerate() {
-            let fut = conn.new_session(acp::NewSessionRequest::new(cwd.clone()));
-            match tokio::time::timeout(std::time::Duration::from_secs(15), fut).await {
+            let session_started = std::time::Instant::now();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                conn.new_session(acp::NewSessionRequest::new(cwd.clone())),
+            )
+            .await;
+            log_acp_new_session_timeout_result("DirectAgentStartup", session_started, &result);
+            match result {
                 Err(_) => {
                     last_err = Some(anyhow::anyhow!("new_session timed out after 15 s"));
                     break;
@@ -3633,10 +3734,15 @@ async fn run_inner(
                             .await;
                     }
 
-                    let new_session = match conn_for_new
-                        .new_session(acp::NewSessionRequest::new(cwd))
-                        .await
-                    {
+                    let new_session_started = std::time::Instant::now();
+                    let new_session_result =
+                        conn_for_new.new_session(acp::NewSessionRequest::new(cwd)).await;
+                    log_acp_new_session_result(
+                        "DirectAgentNewSessionForTab",
+                        new_session_started,
+                        &new_session_result,
+                    );
+                    let new_session = match new_session_result {
                         Ok(s) => s,
                         Err(e) => {
                             let _ = event_tx_for_new.send(AppEvent::AgentError {
@@ -4174,10 +4280,16 @@ async fn dispatch_prompt_body(
                 .and_then(|c| c.cwd.clone())
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-            let new_session = match conn_task
+            let new_session_started = std::time::Instant::now();
+            let new_session_result = conn_task
                 .new_session(acp::NewSessionRequest::new(cwd))
-                .await
-            {
+                .await;
+            log_acp_new_session_result(
+                "LazyCreateOnFirstPrompt",
+                new_session_started,
+                &new_session_result,
+            );
+            let new_session = match new_session_result {
                 Ok(s) => s,
                 Err(e) => {
                     let _ = event_tx_task.send(AppEvent::AgentError {

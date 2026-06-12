@@ -974,8 +974,11 @@ fn run_hooks_install(cli: HooksCliFilter) -> Result<()> {
 
     // Verify the install actually landed by checking on-disk status.
     // ensure_installed_scoped is fire-and-forget (silent on failure),
-    // so we inspect the result independently.
-    let report = agent_hooks_installer::status();
+    // so we inspect the result independently. `status_scoped(scope)`
+    // skips the Node-CLI spawns for CLIs outside the requested scope —
+    // a `--cli copilot` install no longer pays for `claude plugin list`
+    // and `gemini extensions list` (each ~1-3s of Node startup).
+    let report = agent_hooks_installer::status_scoped(scope);
     let failed: Vec<&str> = report
         .clis
         .iter()
@@ -1236,7 +1239,8 @@ async fn fetch_sessions_from_master(
         let _ = handle_io.await;
     });
 
-    conn.initialize(
+    let init_started = std::time::Instant::now();
+    let init_result = conn.initialize(
         acp::InitializeRequest::new(acp::ProtocolVersion::V1)
             .client_capabilities(acp::ClientCapabilities::new())
             .client_info(
@@ -1244,8 +1248,19 @@ async fn fetch_sessions_from_master(
                     .title("Windows Terminal Agent sessions CLI"),
             ),
     )
-    .await
-    .map_err(|_| anyhow::anyhow!(MASTER_NOT_RUNNING))?;
+    .await;
+    telemetry::log_acp_initialize_complete(
+        init_started.elapsed().as_secs_f64() * 1000.0,
+        init_result.is_ok(),
+        "SessionsCli",
+        if init_result.is_ok() { "" } else { "AcpError" },
+        init_result
+            .as_ref()
+            .err()
+            .map(|e| e.code.into())
+            .unwrap_or(0),
+    );
+    init_result.map_err(|_| anyhow::anyhow!(MASTER_NOT_RUNNING))?;
 
     let req = session_registry::build_sessions_list_request();
     let resp = conn
