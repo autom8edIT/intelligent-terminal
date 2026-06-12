@@ -40,45 +40,29 @@ pub enum PathFormat {
     Posix,
 }
 
-/// Classify a path by inspecting it textually. `None` when indeterminate
-/// (empty / relative / unrecognized).
-pub fn classify(path: &Path) -> Option<PathFormat> {
-    let s = path.to_string_lossy();
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
+/// Classify a path's namespace: POSIX if it starts with `/`, Windows
+/// otherwise (drive-letter `C:\…`, UNC `\\server\share`, extended-length
+/// `\\?\C:\…`, etc.). It's a strict binary — there are only two namespaces
+/// an agent can want, and callers always start from a real cwd, so there's
+/// no third "indeterminate" case to reason about.
+pub fn classify(path: &Path) -> PathFormat {
+    if path.to_string_lossy().trim_start().starts_with('/') {
+        PathFormat::Posix
+    } else {
+        PathFormat::Windows
     }
-    if s.starts_with('/') {
-        return Some(PathFormat::Posix);
-    }
-    // UNC / extended-length forms — all absolute Windows paths:
-    // `\\server\share`, `\\?\C:\…`, `\\?\UNC\…`, `\\wsl$\…`.
-    if s.starts_with("\\\\") {
-        return Some(PathFormat::Windows);
-    }
-    // Drive-letter form. Absolute only: `C:`, `C:\…`, `C:/…`. A
-    // drive-relative path like `C:foo` is NOT absolute, so it's left
-    // indeterminate (None) and handled by the fallback ladder.
-    let b = s.as_bytes();
-    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
-        if b.len() == 2 || b[2] == b'\\' || b[2] == b'/' {
-            return Some(PathFormat::Windows);
-        }
-        return None;
-    }
-    None
 }
 
 /// Learn the agent's namespace from the cwd values it reports in
-/// `session/list`. Returns the format of the first classifiable entry, or
-/// `None` when the list is empty / inconclusive (caller then tries both
-/// formats).
+/// `session/list`. Returns the first non-empty entry's format, or `None`
+/// when the list is empty (caller then tries both formats).
 pub fn detect_format<'a>(
     session_cwd_values: impl IntoIterator<Item = &'a str>,
 ) -> Option<PathFormat> {
     session_cwd_values
         .into_iter()
-        .find_map(|c| classify(Path::new(c)))
+        .find(|c| !c.trim().is_empty())
+        .map(|c| classify(Path::new(c)))
 }
 
 /// Choose the source cwd value, dropping junk launcher dirs (`System32`,
@@ -103,11 +87,8 @@ pub fn pick_value(candidate: Option<&Path>) -> PathBuf {
 ///   don't know here — this is the rare WSL-pane→native-agent corner).
 pub fn to_windows_format(path: &Path) -> PathBuf {
     match classify(path) {
-        Some(PathFormat::Windows) => path.to_path_buf(),
-        Some(PathFormat::Posix) => {
-            mnt_to_windows(&path.to_string_lossy()).unwrap_or_else(user_profile_dir)
-        }
-        None => user_profile_dir(),
+        PathFormat::Windows => path.to_path_buf(),
+        PathFormat::Posix => mnt_to_windows(&path.to_string_lossy()).unwrap_or_else(user_profile_dir),
     }
 }
 
@@ -115,12 +96,11 @@ pub fn to_windows_format(path: &Path) -> PathBuf {
 /// * already POSIX → unchanged;
 /// * Windows drive path `C:\a\b` → `/mnt/c/a/b` (standard WSL auto-mount,
 ///   distro-independent — no shell-out needed);
-/// * indeterminate → `/tmp`.
+/// * non-drive Windows path (true UNC) → `/tmp` (via `windows_to_mnt`).
 pub fn to_linux_format(path: &Path) -> PathBuf {
     match classify(path) {
-        Some(PathFormat::Posix) => path.to_path_buf(),
-        Some(PathFormat::Windows) => PathBuf::from(windows_to_mnt(&path.to_string_lossy())),
-        None => PathBuf::from("/tmp"),
+        PathFormat::Posix => path.to_path_buf(),
+        PathFormat::Windows => PathBuf::from(windows_to_mnt(&path.to_string_lossy())),
     }
 }
 
@@ -145,11 +125,11 @@ pub fn build_attempts(value: &Path, target: Option<PathFormat>) -> Vec<PathBuf> 
             // Target unknown: try the value in its own format first, then the
             // opposite, then a safe floor for each namespace.
             match classify(value) {
-                Some(PathFormat::Posix) => {
+                PathFormat::Posix => {
                     push(to_linux_format(value));
                     push(to_windows_format(value));
                 }
-                _ => {
+                PathFormat::Windows => {
                     push(to_windows_format(value));
                     push(to_linux_format(value));
                 }
@@ -255,7 +235,7 @@ fn user_profile_dir() -> PathBuf {
     }
     if let Some(h) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
         let home = PathBuf::from(h);
-        if classify(&home) == Some(PathFormat::Windows) {
+        if classify(&home) == PathFormat::Windows {
             return home;
         }
     }
@@ -319,17 +299,19 @@ mod tests {
 
     #[test]
     fn classify_basic() {
-        assert_eq!(classify(Path::new(r"C:\foo")), Some(PathFormat::Windows));
-        assert_eq!(classify(Path::new("/home/u")), Some(PathFormat::Posix));
-        assert_eq!(classify(Path::new("/mnt/c/foo")), Some(PathFormat::Posix));
-        // UNC / extended-length are Windows, not None.
-        assert_eq!(classify(Path::new(r"\\server\share")), Some(PathFormat::Windows));
-        assert_eq!(classify(Path::new(r"\\?\C:\foo")), Some(PathFormat::Windows));
-        assert_eq!(classify(Path::new(r"\\wsl$\Ubuntu\home\u")), Some(PathFormat::Windows));
-        assert_eq!(classify(Path::new("")), None);
-        assert_eq!(classify(Path::new("relative\\path")), None);
-        // drive-relative C:foo is not absolute → None
-        assert_eq!(classify(Path::new(r"C:foo")), None);
+        // POSIX = leading '/' (after trimming leading whitespace).
+        assert_eq!(classify(Path::new("/home/u")), PathFormat::Posix);
+        assert_eq!(classify(Path::new("/mnt/c/foo")), PathFormat::Posix);
+        assert_eq!(classify(Path::new("  /leading/space")), PathFormat::Posix);
+        // Everything else is Windows: drive (back- or forward-slash), bare
+        // drive, UNC, extended-length, even a bare relative fragment.
+        assert_eq!(classify(Path::new(r"C:\foo")), PathFormat::Windows);
+        assert_eq!(classify(Path::new("C:/foo")), PathFormat::Windows);
+        assert_eq!(classify(Path::new("C:")), PathFormat::Windows);
+        assert_eq!(classify(Path::new(r"\\server\share")), PathFormat::Windows);
+        assert_eq!(classify(Path::new(r"\\?\C:\foo")), PathFormat::Windows);
+        assert_eq!(classify(Path::new(r"\\wsl$\Ubuntu\home\u")), PathFormat::Windows);
+        assert_eq!(classify(Path::new(r"relative\path")), PathFormat::Windows);
     }
 
     #[test]
@@ -342,7 +324,22 @@ mod tests {
             detect_format([r"Q:\official", r"C:\Users\me"]),
             Some(PathFormat::Windows)
         );
+        // Leading empty/blank entries are skipped; first real one decides.
+        assert_eq!(detect_format(["", "   ", "/home/u"]), Some(PathFormat::Posix));
+        // Empty list / all-blank → unknown.
         assert_eq!(detect_format(Vec::<&str>::new()), None);
+        assert_eq!(detect_format(["", "  "]), None);
+    }
+
+    #[test]
+    fn windows_linux_round_trips() {
+        // A real drive path survives a round trip through both converters.
+        let win = Path::new(r"C:\repo\sub");
+        let posix = to_linux_format(win);
+        assert_eq!(posix, PathBuf::from("/mnt/c/repo/sub"));
+        assert_eq!(to_windows_format(&posix), PathBuf::from(r"C:\repo\sub"));
+        // bare drive
+        assert_eq!(to_linux_format(Path::new("C:")), PathBuf::from("/mnt/c"));
     }
 
     #[test]
@@ -438,7 +435,7 @@ mod tests {
             ("SystemDrive", "C:"),
         ]);
         let got = user_profile_dir();
-        assert_eq!(classify(&got), Some(PathFormat::Windows));
+        assert_eq!(classify(&got), PathFormat::Windows);
         assert_eq!(got, PathBuf::from(r"C:\"));
     }
 
