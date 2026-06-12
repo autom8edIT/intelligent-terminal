@@ -6954,7 +6954,16 @@ impl App {
                     // instead of refusing. It is dispatched FIFO once the
                     // turn returns to an accepting state by
                     // `drain_pending_prompts`.
-                    if !self.current_tab().turn.accepts_new_prompt() {
+                    //
+                    // `loading_session` is treated as busy here even though
+                    // `turn` stays Idle through replay — `drain_pending_prompts`
+                    // already gates on `loading_session` for the same reason
+                    // (a fresh prompt mid-replay would interleave a new turn
+                    // with loadSession replay chunks). Keep both sides
+                    // symmetric so Enter and drain agree on what "busy" means.
+                    if !self.current_tab().turn.accepts_new_prompt()
+                        || self.current_tab().loading_session
+                    {
                         let tab = self.current_tab_mut();
                         if tab.pending_prompts.len() >= PENDING_PROMPT_QUEUE_CAP {
                             // Keep the user's text intact so they can edit
@@ -14710,6 +14719,41 @@ mod tests {
         app.drain_pending_prompts();
         assert_eq!(app.current_tab().pending_prompts.len(), 1,
             "drain must not fire while disconnected — the prompt would never reach the agent");
+    }
+
+    #[test]
+    fn enter_during_session_load_queues_instead_of_dispatching() {
+        // During session/load replay, `tab.turn` stays Idle (no
+        // TurnState::Submitted is created for replay), so
+        // `accepts_new_prompt()` returns true. Without the
+        // `loading_session` gate on the Enter path, the prompt would
+        // dispatch immediately and interleave a new turn with the
+        // in-progress loadSession replay chunks.
+        let mut app = connected_app_with_text("type-during-load");
+        app.current_tab_mut().loading_session = true;
+        press_enter(&mut app);
+        assert!(app.current_tab().turn.is_idle(),
+            "turn should stay idle during load replay (got {:?})",
+            app.current_tab().turn);
+        assert_eq!(app.current_tab().pending_prompts.len(), 1,
+            "Enter during loading_session must queue, not dispatch");
+        assert_eq!(app.current_tab().pending_prompts[0].text, "type-during-load");
+        assert!(app.current_tab().input.is_empty(), "input cleared after enqueue");
+        assert_eq!(app.current_tab().messages.len(), 0,
+            "no User bubble while the prompt is queued");
+
+        // Drain while still loading is also a no-op (existing contract).
+        app.drain_pending_prompts();
+        assert_eq!(app.current_tab().pending_prompts.len(), 1,
+            "drain must not fire while loading_session is true");
+
+        // Once load completes, drain dispatches the queued prompt.
+        app.current_tab_mut().loading_session = false;
+        app.drain_pending_prompts();
+        assert!(matches!(app.current_tab().turn, TurnState::Submitted(_)),
+            "queued prompt dispatched once load completed (got {:?})",
+            app.current_tab().turn);
+        assert!(app.current_tab().pending_prompts.is_empty());
     }
 
     #[test]
