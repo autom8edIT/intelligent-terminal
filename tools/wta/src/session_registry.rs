@@ -443,6 +443,14 @@ pub fn parse_focus_session_params(
 /// ExtRequest method for "helper observed a SessionEvent; master should apply it".
 pub const INTELLTERM_METHOD_SESSION_HOOK: &str = "intellterm.wta/session_hook";
 
+/// ExtRequest method for a #266 *born-bound* registration — a WTA-launched CLI
+/// session (delegate `?<prompt>` / resume) that IT bound to its pane at launch.
+/// Same body as `session_hook`, distinct method so the master records it as
+/// *binding-only* (`born_bound`) rather than hook-owned: with no real hook
+/// installed the file watcher may still supply activity/status for it (never
+/// re-binding). A later real `session_hook` event moves it to hook-owned.
+pub const INTELLTERM_METHOD_SESSION_BORN_BOUND: &str = "intellterm.wta/session_born_bound";
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum SessionHookCliSource {
@@ -635,6 +643,18 @@ pub fn build_session_hook_request(event: &crate::agent_sessions::SessionEvent) -
     let raw = serde_json::value::RawValue::from_string(json)
         .expect("serde_json::to_string always produces valid JSON");
     acp::ExtRequest::new(INTELLTERM_METHOD_SESSION_HOOK, Arc::from(raw))
+}
+
+/// Build a #266 *born-bound* registration ExtRequest. Identical body to
+/// [`build_session_hook_request`] but a distinct method
+/// ([`INTELLTERM_METHOD_SESSION_BORN_BOUND`]) so the master treats it as
+/// binding-only (watcher may still supply status), not hook-owned.
+pub fn build_born_bound_request(event: &crate::agent_sessions::SessionEvent) -> acp::ExtRequest {
+    let params = SessionHookParams::from(event);
+    let json = serde_json::to_string(&params).expect("SessionHookParams serialization is infallible");
+    let raw = serde_json::value::RawValue::from_string(json)
+        .expect("serde_json::to_string always produces valid JSON");
+    acp::ExtRequest::new(INTELLTERM_METHOD_SESSION_BORN_BOUND, Arc::from(raw))
 }
 
 /// Parse a master-bound `session_hook` body into the canonical reducer event.
@@ -2413,6 +2433,28 @@ mod tests {
         let request = build_session_hook_request(&event);
         let parsed = parse_session_hook_params(&request.params)
             .expect("unknown cli_source must round-trip");
+        assert_eq!(parsed, event);
+    }
+
+    #[test]
+    fn build_born_bound_request_uses_distinct_method_and_round_trips() {
+        use crate::agent_sessions::{CliSource, SessionEvent};
+        let event = SessionEvent::SessionStarted {
+            key: "bb-1".to_string(),
+            cli_source: CliSource::Claude,
+            pane_session_id: "pane-bb".to_string(),
+            cwd: PathBuf::from(r#"C:\repo"#),
+            title: String::new(),
+        };
+        let request = build_born_bound_request(&event);
+        assert_eq!(
+            &*request.method,
+            INTELLTERM_METHOD_SESSION_BORN_BOUND,
+            "born-bound must use its own method, not session_hook"
+        );
+        // Body is the same wire shape, so the master parses it identically.
+        let parsed =
+            parse_session_hook_params(&request.params).expect("born-bound body must round-trip");
         assert_eq!(parsed, event);
     }
 

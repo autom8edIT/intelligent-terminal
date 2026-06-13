@@ -19,12 +19,16 @@ This spec adds a **file/process watcher as a pure fallback** that fills exactly
 that hole, for all four CLIs, **without changing anything about the hook path**.
 The design principle is one sentence:
 
-> **Hooks (and born-bound) are authoritative when present; the watcher only
-> ever fills the gap, and the two never double-track the same session.**
+> **A real hook owns a session outright; #266 born-bound owns only its binding;
+> the watcher fills the rest — surfacing user-typed sessions and supplying
+> *status* for born-bound (delegate/resume) sessions that have no hook — and the
+> three never double-track.**
 
 The C++ side is unchanged — this is entirely a `wta` (Rust) addition: the
-watcher itself, an event-dedup gate, an in-window liveness gate, a liveness
-reaper, and a codex title-extraction fix.
+watcher itself, the two-set dedup (`hook_owned` / `born_bound`), an in-window
+liveness gate, a liveness reaper, the born-bound *status* fallback, per-CLI
+status detection (Claude is turn-based on `stop_reason`; Gemini is deferred), and
+a codex title-extraction fix.
 
 ## Background: Class A / Class B
 
@@ -61,24 +65,23 @@ an opt-out-free fallback rather than a hook replacement.
   or a missed transient state is acceptable. We deliberately avoid adding
   polling sweeps or CLI-specific heroics to chase the last 1%.
 
-## Principle: two independent signals, one registry
+## Principle: hooks own, born-bound binds, the watcher fills the gap
 
 ```
-                       wta-master registry  (one row per session)
-                                  ▲
-            ┌─────────────────────┼─────────────────────┐
-            │ authoritative       │            fallback  │
-   hooks / born-bound ────────────┤            ┌─────────┴── file/process watcher
-   (intellterm.wta/session_hook)  │            │            (in-process, master)
-            │                     │            │
-     marks session in        apply_watcher_event drops the event if the
-     `hook_owned` set ───────► session is already hook_owned OR is Class A
+   real hook / ACP event   ──►  `hook_owned`  ──► watcher fully suppressed
+   #266 born-bound              `born_bound`   ──► watcher supplies STATUS only
+   (delegate / resume)     ──►                     (never re-binds)
+   user-typed CLI, no hook ───────────────────► watcher creates + binds the row
+                                  │
+                                  ▼
+                    wta-master registry (one row per session)
 ```
 
-Both signals feed the **same reducer** and the **same registry rows**. A
-master-side `hook_owned: Mutex<HashSet<SessionId>>` is the seam that keeps them
-from fighting (see *Dedup* below). Everything runs always; dedup is what makes
-the watcher a no-op for hook-owned sessions, so there is no "hooks mode" vs
+All paths feed the **same reducer** and the **same registry rows**. Two
+master-side sets are the seam (see *Dedup*): `hook_owned` (a real hook / ACP
+agent-pane event owns binding **and** activity → watcher dropped) and
+`born_bound` (WTA-launched delegate/resume — binding only → the watcher may
+still supply **status**). Everything runs always; there is no "hooks mode" vs
 "watcher mode" switch and no install-state probing.
 
 ## Solution design
@@ -136,23 +139,60 @@ A failed bind never blocks the row — it yields `pane = None` / `pid = None`. T
 resolved `pid` is stored on the row as `bound_pid` (`session_registry.rs`) and
 feeds the reaper.
 
-### Dedup: how hooks and the watcher never double-track
+### Dedup: how the watcher coordinates with hooks and born-bound
 
-`master/mod.rs` holds `hook_owned: Mutex<HashSet<SessionId>>`.
-`handle_session_hook` inserts the session key for **every** inbound
-`intellterm.wta/session_hook` event — which covers both real PowerShell hooks
-**and** born-bound registration, since both arrive through that one method.
+The master keeps **two disjoint** ownership sets (`master/mod.rs`):
 
-`apply_watcher_event` early-returns (drops the watcher event) when **either**:
+- `hook_owned: Mutex<HashSet<SessionId>>` — sessions a **real** producer owns
+  outright (PowerShell hooks, ACP agent-pane events). Owns binding **and**
+  activity.
+- `born_bound: Mutex<HashSet<SessionId>>` — #266 **born-bound** sessions
+  (WTA-launched delegate `?<prompt>` and `/sessions` resume). These provide a
+  pane binding but **no activity** — binding-only.
 
-1. `hook_owned.contains(sid)` — a hook/born-bound has claimed it; or
-2. the existing registry row's `origin == AgentPane` — it's Class A (ACP).
+`handle_session_hook` routes each inbound event: a binding-only event (the
+dedicated `intellterm.wta/session_born_bound` method, or a
+`ResumeDispatched`/`ResumePaneAssigned` resume-binding event) → `born_bound`;
+anything else (a real hook / ACP event) → `hook_owned` (and, if the session was
+born-bound, drops it from `born_bound` — a real hook **takes over**).
 
-So the moment a hook is heard for a session, the watcher goes silent for it.
-There is no ordering requirement: if the watcher created the row first and a
-hook arrives later, subsequent watcher events are dropped and the hook owns the
-row from then on (the row identity is the same session id, so no duplicate is
-produced).
+`apply_watcher_event` then, in order:
+
+1. `hook_owned.contains(sid)` → **drop** (the hook owns binding and activity);
+2. `born_bound.contains(sid)` → **apply status only** (see below), never re-bind;
+3. existing row `origin == AgentPane` → drop (Class A, ACP-driven);
+4. otherwise → the normal create/bind/gate path (user-typed sessions).
+
+There is no ordering requirement and the row identity is the same session id
+throughout, so no duplicate is ever produced.
+
+### Born-bound activity fallback
+
+Born-bound (see [wta-launched-cli-session-binding.md](./wta-launched-cli-session-binding.md))
+registers a WTA-launched session's `(session id → pane)` at launch and records
+it in `born_bound`. It supplies the **binding** but emits **no activity**. With
+hooks installed the CLI's hook supplies activity (and takes over); with **no**
+hooks the row would otherwise sit at `Idle` forever.
+
+Because born-bound hands us the **exact** session id, the watcher already knows
+which transcript to read — the binding ambiguity that limits the *typed*
+Claude/Gemini path doesn't apply. So for a `born_bound` session
+`apply_watcher_event` applies the watcher's **status** event (Working / Idle /
+Attention) to the existing row **without** re-binding the pane or touching the
+origin — `emitted.event` is always a keyed status event (`ToolStarting` /
+`ToolCompleted` / `Notification`), never a `SessionStarted`, so the binding is
+safe. The liveness gate and `ensure_watched_session_row` are skipped (born-bound
+already owns the live, vetted binding).
+
+This covers all born-bound CLIs (**Copilot / Claude / Gemini**); Codex has no
+`--session-id`, is never born-bound, and is naturally excluded.
+
+**Resume.** `/sessions` resume publishes `ResumeDispatched` / `ResumePaneAssigned`
+over the generic `session_hook` method (not the born-bound method). These are
+the hook-free resume binding, so `handle_session_hook` records them in
+`born_bound` rather than `hook_owned` — without this, a resumed session would be
+treated as hook-owned and its row would sit at `Idle` forever even as the watcher
+saw activity.
 
 ### Liveness gate: scoping to this IT window
 
@@ -234,23 +274,58 @@ title).
 | Per-CLI discovery / classify | `session_watcher/{discover,classify_copilot,classify_codex,classify_claude,classify_gemini}.rs` |
 | Pane binding helper | `session_watcher/bind.rs` |
 | Win32 probes (PEB, lock, RM) | `tools/wta/src/proc_bind.rs` |
-| Apply / dedup / gate / reaper | `tools/wta/src/master/mod.rs` (`apply_watcher_event`, `ensure_watched_session_row`, `resolve_watched_pane_pid_cwd`, `watcher_row_allowed`, `live_it_pane_guids`, `reap_dead_class_b_sessions`, `hook_owned`) |
+| Apply / dedup / gate / reaper | `tools/wta/src/master/mod.rs` (`apply_watcher_event`, `handle_session_hook`, `ensure_watched_session_row`, `watcher_row_allowed`, `live_it_pane_guids`, `reap_dead_class_b_sessions`, `hook_owned` + `born_bound` sets) |
+| Born-bound registration | `session_registry.rs` (`build_born_bound_request`, `INTELLTERM_METHOD_SESSION_BORN_BOUND`), `main.rs` (`register_launched_session_with_master`) |
 | Row `bound_pid` field | `tools/wta/src/session_registry.rs` |
 | Codex title / subagent / phantom | `tools/wta/src/history_loader.rs` |
+| User-input tool heuristic | `agent_sessions.rs` (`is_user_input_tool`) |
 
-### Activity-state mapping
+### Status detection (per-CLI)
 
-The watcher maps file evidence to the same `AgentStatus` the hook reducer uses:
-a fresh/updated session is `Idle`; the per-CLI classifier promotes to `Working`
-on in-progress turn markers and to `Attention` on a pending user-input prompt;
-the reaper (or a hook taking over) moves it out of those states. Terminal states
-are `Historical` (from the startup history scan) and `Ended` (pane/process
-gone).
+The watcher maps each CLI's on-disk transcript to the same `AgentStatus` the
+hook reducer uses, via three events: `ToolStarting` → **Working**,
+`ToolCompleted` → **Idle**, `Notification` → **Attention**. A fresh/bound session
+starts `Idle`; terminal states are `Historical` (startup history scan) and
+`Ended` (pane/process gone); the 5 s reaper or a hook taking over moves a row out
+of the live states.
+
+- **Claude** (`classify_claude.rs`) — **turn-based, keyed on `stop_reason`**.
+  Claude re-writes the same assistant message id several times as it streams
+  (text first, then `+tool_use`), so classifying by content presence flickers;
+  `stop_reason` is stable across the stream. A `type:user` record (typed prompt
+  or `tool_result`) → Working; an assistant `stop_reason == "tool_use"` →
+  Working, unless a `tool_use` names a user-input tool (`AskUserQuestion`) →
+  Attention; any other `stop_reason` (`end_turn`, …) → Idle.
+- **Copilot / Codex** (`classify_copilot.rs` / `classify_codex.rs`) — tool-based
+  classify over their append-only logs: tool start → Working, turn/tool end →
+  Idle, user-input tool → Attention.
+- **Gemini — DEFERRED (no reliable status from the log).** Gemini is the
+  weakest-bound CLI (no lock file, no reliable open-file owner → cwd
+  correlation) **and** has the messiest transcript: each `gemini` message is
+  appended **twice** under the same id (text/thoughts, then `+toolCalls`),
+  interleaved with `$set:lastUpdated` metadata lines, with **no turn-completion
+  signal** (no `stop_reason`/`finishReason`). A `gemini`-without-`toolCalls`
+  line is therefore ambiguous — the first phase of a tool turn, or a final text
+  response — so Idle vs Working can't be told from one line. The current snapshot
+  classifier also yields nothing when the file ends on a `$set:lastUpdated` op
+  (no `messages` array). A clean turn-based status for Gemini is not achievable
+  from the log alone, so it is **deferred**: Gemini's born-bound rows still bind,
+  they just won't reflect live status without hooks.
+
+**Limitation — permission prompts.** A tool that pauses for **permission** (e.g.
+`Bash`/`Edit` in `default` mode) is **indistinguishable** in the transcript from
+a tool that is merely running — there is no approval/pending marker (only
+`permissionMode`). So a permission wait shows as **Working**, not Attention;
+only an explicit user-input tool (`AskUserQuestion`) is Attention. Reliable
+permission → Attention would require hooks. (A `dangerous-tool → Attention`
+name heuristic was considered and rejected: it is wrong under auto-approve and
+conflates a running write-tool with a wait.)
 
 ## What is explicitly unchanged
 
-- The hook path, born-bound registration, and the `intellterm.wta/session_hook`
-  reducer.
+- The PowerShell hook path and the `intellterm.wta/session_hook` reducer
+  semantics. (Born-bound now uses its own `…/session_born_bound` method so it can
+  be treated as binding-only — see *Dedup* — but the wire body is identical.)
 - All C++ (FRE "Install hooks", Settings UI, `ConptyConnection`,
   `agent_hooks_installer`, the four hook bundles).
 - Class-A agent-pane tracking.
@@ -291,17 +366,23 @@ gone).
 ## Testing
 
 - Unit: `master::tests` (`watcher_event_*`, `watcher_row_allowed_*`,
-  `live_it_pane_guids_*` — incl. numeric `window_id`/`tab_id` mock,
-  `reap_*`, `session_hook_marks_*`), `history_loader::tests`
-  (`codex_title_skips_injected_agents_md_instructions`,
-  `codex_session_with_only_injected_context_is_phantom`, subagent filter), and
-  `session_watcher` discovery/classify tests.
+  `live_it_pane_guids_*` — incl. numeric `window_id`/`tab_id` mock, `reap_*`,
+  `session_hook_marks_*`; born-bound: `session_born_bound_marks_born_bound_not_hook_owned`,
+  `born_bound_session_gets_watcher_activity_without_rebinding`,
+  `real_hook_takes_over_born_bound_session`, `resume_binding_events_are_born_bound_not_hook_owned`),
+  `history_loader::tests` (codex title / subagent / phantom), and
+  `session_watcher` discovery/classify tests (incl. `classify_claude` turn-based:
+  user→Working, `stop_reason` end_turn→Idle / tool_use→Working, streaming-partial
+  stays Working, AskUserQuestion→Attention).
 - Manual matrix:
   - hooks installed → row tracked by hook; master log shows watcher events
     deduped.
   - hooks uninstalled → user-typed codex tracked by the watcher with the correct
     real-prompt title (verified in an `AGENTS.md` repo); external/non-IT copilot
     sessions stay hidden; no PowerShell shell-hook events in the master log.
+  - hooks uninstalled → a **delegate** (`?<prompt>`) and a **resumed** Claude
+    session show live status (Working/Idle/Attention) from the watcher, not a
+    frozen `Idle`.
 
 ## Diagnostics
 
@@ -324,10 +405,19 @@ gone).
 - **Pane-is-some filter instead of the in-window gate** — rejected: machine-wide
   CLI sessions also carry `WT_SESSION`, so only membership in *this* window's
   live pane set is sufficient.
+- **Gemini turn-based status** — **deferred** (see *Status detection*): Gemini's
+  transcript has no turn-completion signal and a 2-phase / `$set`-interleaved
+  shape that makes Idle-vs-Working ambiguous from the log. Its rows still bind;
+  live status awaits hooks or a cleaner Gemini format.
+- **`dangerous-tool → Attention` heuristic** — rejected: a permission wait is
+  indistinguishable from a running tool in the transcript, and the heuristic is
+  wrong under auto-approve.
 
 ## Future considerations
 
 - A stronger Claude/Gemini bind (e.g. a CLI-provided pid file) would let the
   watcher cover those two as confidently as Copilot/Codex.
+- A reliable Gemini turn signal (a `finishReason`, or a stable per-message
+  completion marker) would let Gemini join the turn-based status model.
 - If a CLI gains a first-class "session ended" file marker, the reaper could
   react to it instead of polling pid liveness.

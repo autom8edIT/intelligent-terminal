@@ -233,6 +233,13 @@ struct MasterStateInner {
     /// and re-adding is idempotent, so no eviction is needed. Independent lock —
     /// touched only on the session_hook ingest path and the watcher apply path.
     hook_owned: Mutex<HashSet<acp::SessionId>>,
+    /// #266 born-bound sessions (WTA-launched delegate/resume — copilot/claude/
+    /// gemini). **Binding-only**: unlike `hook_owned`, the file watcher may
+    /// still supply STATUS for these when no real hook is installed
+    /// (activity-only, never re-binding the pane). A subsequent real hook moves
+    /// the session into `hook_owned` and out of here, after which the watcher
+    /// fully backs off.
+    born_bound: Mutex<HashSet<acp::SessionId>>,
     /// Short-lived cache of the live pane GUIDs in THIS IT instance (lowercased),
     /// from a `list_windows`→`list_tabs`→`list_panes` walk over the master's WT
     /// channel. Used by [`apply_watcher_event`] to gate watcher-discovered
@@ -1258,7 +1265,17 @@ impl acp::Agent for HelperHandler {
                 helper_id = ?self.helper_id,
                 "handling intellterm.wta/session_hook locally"
             );
-            return handle_session_hook(&self.state, &args.params).await;
+            return handle_session_hook(&self.state, &args.params, false).await;
+        }
+        if method == crate::session_registry::INTELLTERM_METHOD_SESSION_BORN_BOUND {
+            tracing::info!(
+                target: "master",
+                op = "ext_method",
+                method = %method,
+                helper_id = ?self.helper_id,
+                "handling intellterm.wta/session_born_bound locally"
+            );
+            return handle_session_hook(&self.state, &args.params, true).await;
         }
         if method == crate::session_registry::INTELLTERM_METHOD_SESSION_RESUME_DISPATCHED {
             return handle_session_resume_dispatched(&self.state, &args.params).await;
@@ -1589,6 +1606,7 @@ async fn run_master_loop(cli: Cli, pipe_name: String) -> Result<()> {
         cli_source,
         helper_meta: Mutex::new(HashMap::new()),
         hook_owned: Mutex::new(HashSet::new()),
+        born_bound: Mutex::new(HashSet::new()),
         live_panes_cache: Mutex::new(None),
     });
 
@@ -2239,6 +2257,7 @@ where
 async fn handle_session_hook(
     state: &MasterStateInner,
     params: &serde_json::value::RawValue,
+    is_born_bound: bool,
 ) -> acp::Result<acp::ExtResponse> {
     let event = crate::session_registry::parse_session_hook_params(params).map_err(|err| {
         tracing::warn!(
@@ -2263,17 +2282,41 @@ async fn handle_session_hook(
     // the refresh is fine.
     let refresh_key = session_event_key(&event).map(str::to_owned);
 
-    // Mark this session as hook-owned so the file watcher (the fallback
-    // producer) stops tracking it — hooks and #266 born-bound registrations are
-    // authoritative. Keyed variants only (PaneClosed / ConnectionFailed carry no
-    // session key); those are pane-keyed terminal transitions, not a claim of
-    // ownership, so they don't belong in the set.
+    // Resume binding events (`ResumeDispatched` / `ResumePaneAssigned`) are the
+    // hook-free born-bound binding for `/sessions` resume (published over the
+    // generic `session_hook` method by the helper). Treat them as binding-only —
+    // same as a #266 delegate registration — so the watcher can still supply
+    // status for a resumed session when no real hook is installed. Without this
+    // they'd mark the session `hook_owned` and the resumed row would sit at Idle
+    // forever (the delegate path already works because it uses the dedicated
+    // born-bound method).
+    let binding_only = is_born_bound
+        || matches!(
+            &event,
+            crate::agent_sessions::SessionEvent::ResumeDispatched { .. }
+                | crate::agent_sessions::SessionEvent::ResumePaneAssigned { .. }
+        );
+
+    // Record ownership so the file watcher (the fallback producer) coordinates
+    // with this authoritative event. Keyed variants only (PaneClosed /
+    // ConnectionFailed carry no session key — pane-keyed terminal transitions,
+    // not an ownership claim).
+    //
+    //  * binding-only (#266 delegate born-bound + resume binding events): record
+    //    in `born_bound` so the watcher may still supply STATUS when no real hook
+    //    is installed — without re-binding the pane.
+    //  * real hook / ACP agent-pane event: authoritative for binding AND
+    //    activity. Record in `hook_owned` (full watcher suppression) and, if the
+    //    session was previously born-bound, drop it from `born_bound` — the real
+    //    hook now owns it.
     if let Some(key) = &refresh_key {
-        state
-            .hook_owned
-            .lock()
-            .await
-            .insert(acp::SessionId::new(key.clone()));
+        let sid = acp::SessionId::new(key.clone());
+        if binding_only {
+            state.born_bound.lock().await.insert(sid);
+        } else {
+            state.hook_owned.lock().await.insert(sid.clone());
+            state.born_bound.lock().await.remove(&sid);
+        }
     }
 
     let applied = state.registry.apply_event(event).await;
@@ -2308,14 +2351,40 @@ async fn apply_watcher_event(
 ) {
     let sid = acp::SessionId::new(emitted.key.clone());
 
-    // Hybrid dedup — the watcher is a *fallback*. Drop its event when an
-    // authoritative producer already owns this session:
-    //   1. a hook / #266 born-bound registration recorded it in `hook_owned`, or
-    //   2. it's an agent-pane (Class A) session, driven by ACP `session/update`.
-    // Either way the file watcher must not double-track or fight the binding.
+    // Hybrid dedup — the watcher is a *fallback*. Coordinate with authoritative
+    // producers:
+    //   1. a real hook / ACP agent-pane event recorded the session in
+    //      `hook_owned` → drop (the hook owns binding AND activity); or
+    //   2. it's a #266 born-bound row (`born_bound`) → the watcher owns no
+    //      binding here, but with no real hook it supplies STATUS only (handled
+    //      just below); or
+    //   3. it's an agent-pane (Class A) session, driven by ACP `session/update`.
     if state.hook_owned.lock().await.contains(&sid) {
         return;
     }
+
+    // Born-bound activity-only fallback: the row already exists and is bound to
+    // its pane by #266 born-bound. Born-bound emits no activity, so when no real
+    // hook is installed the watcher supplies STATUS. `emitted.event` is always a
+    // keyed status event (ToolStarting/ToolCompleted/Notification), so applying
+    // it updates the row's status without touching the pane binding / origin.
+    // Skip the liveness gate and `ensure_watched_session_row` — born-bound owns
+    // the (live, vetted) binding; we only move the status.
+    if state.born_bound.lock().await.contains(&sid) {
+        let key = emitted.key.clone();
+        let applied = state.registry.apply_event(emitted.event).await;
+        let title_upgraded =
+            try_refresh_title_from_disk(&state.registry, &acp::SessionId::new(key)).await;
+        if applied || title_upgraded {
+            broadcast_ext_to_helpers(
+                state,
+                crate::session_registry::build_sessions_changed_notification(),
+            )
+            .await;
+        }
+        return;
+    }
+
     let existing = state.registry.lookup(&sid).await;
     if let Some(ref e) = existing {
         if e.origin == Some(crate::agent_sessions::SessionOrigin::AgentPane) {
@@ -3143,6 +3212,7 @@ mod tests {
             cli_source: Some(crate::agent_sessions::CliSource::Copilot),
             helper_meta: Mutex::new(HashMap::new()),
             hook_owned: Mutex::new(HashSet::new()),
+            born_bound: Mutex::new(HashSet::new()),
             live_panes_cache: Mutex::new(None),
         })
     }
@@ -4055,6 +4125,7 @@ mod tests {
             cli_source: Some(crate::agent_sessions::CliSource::Copilot),
             helper_meta: Mutex::new(HashMap::new()),
             hook_owned: Mutex::new(HashSet::new()),
+            born_bound: Mutex::new(HashSet::new()),
             live_panes_cache: Mutex::new(None),
         })
     }
@@ -4213,7 +4284,7 @@ mod tests {
         }))
         .unwrap();
 
-        let err = handle_session_hook(&state, &garbage)
+        let err = handle_session_hook(&state, &garbage, false)
             .await
             .expect_err("malformed session_hook params must error");
         assert_eq!(err.code, acp::ErrorCode::InvalidParams);
@@ -4238,7 +4309,7 @@ mod tests {
         };
         let req = crate::session_registry::build_session_hook_request(&event);
 
-        let response = handle_session_hook(&state, &req.params)
+        let response = handle_session_hook(&state, &req.params, false)
             .await
             .expect("valid session_hook accepted");
         assert_eq!(response.0.get(), r#"{"applied":true}"#);
@@ -4760,7 +4831,7 @@ mod tests {
             title: String::new(),
         };
         let req = crate::session_registry::build_session_hook_request(&event);
-        handle_session_hook(&state, &req.params)
+        handle_session_hook(&state, &req.params, false)
             .await
             .expect("valid session_hook accepted");
 
@@ -4785,6 +4856,161 @@ mod tests {
             Some("pane-from-hook"),
             "watcher must not clobber the hook-sourced pane binding"
         );
+    }
+
+    #[tokio::test]
+    async fn session_born_bound_marks_born_bound_not_hook_owned() {
+        // #266 born-bound (WTA-launched delegate/resume) is binding-only: it must
+        // land in `born_bound`, NOT `hook_owned`, so the watcher can still supply
+        // status for it when no real hook is installed.
+        let state = make_state();
+        let event = crate::agent_sessions::SessionEvent::SessionStarted {
+            key: "bb-mark".to_string(),
+            cli_source: crate::agent_sessions::CliSource::Claude,
+            pane_session_id: "pane-bb".to_string(),
+            cwd: std::path::PathBuf::from("C:\\repo"),
+            title: String::new(),
+        };
+        let req = crate::session_registry::build_born_bound_request(&event);
+        handle_session_hook(&state, &req.params, true)
+            .await
+            .expect("valid born-bound accepted");
+
+        let sid = acp::SessionId::new("bb-mark".to_string());
+        assert!(
+            state.born_bound.lock().await.contains(&sid),
+            "born-bound registration must record the session in `born_bound`"
+        );
+        assert!(
+            !state.hook_owned.lock().await.contains(&sid),
+            "born-bound is binding-only — must NOT be hook-owned"
+        );
+    }
+
+    #[tokio::test]
+    async fn born_bound_session_gets_watcher_activity_without_rebinding() {
+        // The whole point: a born-bound row (no hook) gets STATUS from the
+        // watcher, while its pane binding (owned by born-bound) is untouched.
+        let state = make_state();
+        let sid = acp::SessionId::new("bb-activity".to_string());
+
+        let mut info =
+            crate::session_registry::SessionInfo::new(sid.clone(), std::path::PathBuf::from("C:\\repo"));
+        info.cli_source = Some(crate::agent_sessions::CliSource::Claude);
+        info.origin = Some(crate::agent_sessions::SessionOrigin::Unknown);
+        info.status = Some(crate::agent_sessions::AgentStatus::Idle);
+        info.pane_session_id = Some("born-pane".to_string());
+        state.registry.upsert(info).await;
+        state.born_bound.lock().await.insert(sid.clone());
+
+        // Watcher observes a tool start (the Emitted's cli is irrelevant on the
+        // born-bound path — binding/gate are skipped).
+        apply_watcher_event(&state, codex_emitted("bb-activity")).await;
+
+        let row = state.registry.lookup(&sid).await.unwrap();
+        assert_eq!(
+            row.status,
+            Some(crate::agent_sessions::AgentStatus::Working),
+            "watcher must supply status for a born-bound row with no hook"
+        );
+        assert_eq!(
+            row.pane_session_id.as_deref(),
+            Some("born-pane"),
+            "watcher must NOT re-bind a born-bound row's pane"
+        );
+    }
+
+    #[tokio::test]
+    async fn real_hook_takes_over_born_bound_session() {
+        // If a real hook later fires for a born-bound session (hooks installed
+        // after launch), it becomes fully hook-owned and leaves `born_bound`, so
+        // the watcher backs off entirely.
+        let state = make_state();
+        let sid = acp::SessionId::new("bb-takeover".to_string());
+
+        let bb = crate::agent_sessions::SessionEvent::SessionStarted {
+            key: "bb-takeover".to_string(),
+            cli_source: crate::agent_sessions::CliSource::Claude,
+            pane_session_id: "pane-bb".to_string(),
+            cwd: std::path::PathBuf::from("C:\\repo"),
+            title: String::new(),
+        };
+        handle_session_hook(
+            &state,
+            &crate::session_registry::build_born_bound_request(&bb).params,
+            true,
+        )
+        .await
+        .expect("born-bound accepted");
+        assert!(state.born_bound.lock().await.contains(&sid));
+
+        // A real hook event arrives via session_hook (is_born_bound = false).
+        let hook = crate::agent_sessions::SessionEvent::ToolStarting {
+            key: "bb-takeover".to_string(),
+            tool_name: "Bash".to_string(),
+        };
+        handle_session_hook(
+            &state,
+            &crate::session_registry::build_session_hook_request(&hook).params,
+            false,
+        )
+        .await
+        .expect("real hook accepted");
+
+        assert!(
+            state.hook_owned.lock().await.contains(&sid),
+            "the real hook must take ownership"
+        );
+        assert!(
+            !state.born_bound.lock().await.contains(&sid),
+            "the real hook must remove the stale born-bound claim"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_binding_events_are_born_bound_not_hook_owned() {
+        // `/sessions` resume publishes ResumeDispatched / ResumePaneAssigned over
+        // the generic session_hook method. These are the hook-free resume binding,
+        // so they must record `born_bound` (watcher can supply status), NOT
+        // `hook_owned` — otherwise the resumed row sits at Idle forever.
+        let state = make_state();
+        let sid = acp::SessionId::new("sid-resume".to_string());
+
+        let dispatched = crate::agent_sessions::SessionEvent::ResumeDispatched {
+            key: "sid-resume".to_string(),
+        };
+        handle_session_hook(
+            &state,
+            &crate::session_registry::build_session_hook_request(&dispatched).params,
+            false,
+        )
+        .await
+        .expect("resume dispatched accepted");
+        assert!(
+            state.born_bound.lock().await.contains(&sid),
+            "ResumeDispatched must be born_bound"
+        );
+        assert!(
+            !state.hook_owned.lock().await.contains(&sid),
+            "ResumeDispatched must NOT be hook_owned"
+        );
+
+        let assigned = crate::agent_sessions::SessionEvent::ResumePaneAssigned {
+            key: "sid-resume".to_string(),
+            pane_session_id: "pane-resume".to_string(),
+        };
+        handle_session_hook(
+            &state,
+            &crate::session_registry::build_session_hook_request(&assigned).params,
+            false,
+        )
+        .await
+        .expect("resume pane assigned accepted");
+        assert!(
+            state.born_bound.lock().await.contains(&sid),
+            "ResumePaneAssigned must be born_bound"
+        );
+        assert!(!state.hook_owned.lock().await.contains(&sid));
     }
 
     // ── Liveness gate: only surface watcher sessions bound to a live IT pane ──

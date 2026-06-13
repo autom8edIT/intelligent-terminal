@@ -291,8 +291,9 @@ pub enum SessionEvent {
 /// block until the user answers — so the row should show ATTENTION, not
 /// WORKING. Match list is case-insensitive.
 ///
-/// Known matches (verified against actual hook payloads):
+/// Known matches (verified against actual hook payloads / transcripts):
 ///   - Copilot CLI: `ask_user` (carries `tool_input.question` + `choices`)
+///   - Claude CLI: `AskUserQuestion` (assistant `tool_use`, `caller.type=direct`)
 /// Speculative aliases for other CLIs are included so the heuristic catches
 /// the common variants without needing per-CLI plumbing.
 pub fn is_user_input_tool(name: &str) -> bool {
@@ -302,6 +303,8 @@ pub fn is_user_input_tool(name: &str) -> bool {
         | "ask-user"
         | "ask_question"
         | "askquestion"
+        | "askuserquestion"
+        | "ask_user_question"
         | "ask_for_clarification"
         | "request_input"
         | "request_user_input"

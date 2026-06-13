@@ -325,8 +325,32 @@ and `liveness()` derive from it (see `agent_sessions.rs`).
   immediately, even if master's `session_removed` notification
   hasn't landed yet.
 
-* **Class B** is driven entirely by hooks + WT pane events
-  (`SessionStarted` / `SessionStopped` / `PaneClosed`).
+* **Class B** is tracked by a **hybrid** of three producers (full design:
+  [`doc/specs/hybrid-agent-session-tracking.md`](../../doc/specs/hybrid-agent-session-tracking.md)):
+  a real PowerShell **hook** owns a session outright; #266 **born-bound**
+  (delegate `?<prompt>` / `/sessions` resume) owns only its pane binding; and a
+  file/process **watcher** is the fallback — it surfaces user-typed sessions and
+  supplies **status** for born-bound sessions that have no hook. The master keeps
+  two disjoint sets, `hook_owned` and `born_bound`, so the three never
+  double-track (`master/mod.rs`: `apply_watcher_event` / `handle_session_hook`).
+
+### Status (Working / Idle / Attention) from the log
+
+When a Class-B session has no hook, the watcher derives status from the CLI's
+transcript (`session_watcher/classify_*.rs` -> `ToolStarting` = Working /
+`ToolCompleted` = Idle / `Notification` = Attention):
+
+* **Claude** — turn-based, keyed on `stop_reason` (a `user` record -> Working;
+  assistant `stop_reason:tool_use` -> Working, `AskUserQuestion` -> Attention;
+  `end_turn` -> Idle). Claude re-writes the same message id while streaming, so
+  keying on content would flicker — `stop_reason` is stable.
+* **Copilot / Codex** — tool-based over their append-only logs.
+* **Gemini — deferred**: no turn-completion signal + a 2-phase / `$set`-
+  interleaved transcript make Idle-vs-Working ambiguous from the log; its rows
+  bind but won't show live status without hooks.
+* **Limitation**: a permission prompt (`Bash`/`Edit` in default mode) is
+  indistinguishable from a running tool in the transcript -> shows **Working**,
+  not Attention (only the explicit `AskUserQuestion` tool is Attention).
 
 ### Cold-startup race
 
