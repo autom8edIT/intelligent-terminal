@@ -191,7 +191,7 @@ use std::sync::mpsc::Sender;
 
 /// Seed per-file progress to each existing session file's current end, so the
 /// watcher only processes content appended *after* it starts. Without this, the
-/// first `notify` event for a pre-existing historical file (which the OS can
+/// first `notify` event for a preexisting historical file (which the OS can
 /// deliver spuriously — e.g. an indexer/AV touch, or a delayed
 /// ReadDirectoryChangesW batch) would make `process_change` replay that file's
 /// entire record stream from offset 0. Each replayed record revives its
@@ -286,7 +286,7 @@ pub fn watch(tx: Sender<Emitted>) -> notify::Result<()> {
     let mut progress: HashMap<PathBuf, Progress> = HashMap::new();
     // Skip every record that already existed when we started watching — only
     // track genuinely new activity. Startup-only (not polling); prevents a
-    // spurious notify on a pre-existing file from replaying its whole history
+    // spurious notify on a preexisting file from replaying its whole history
     // and flooding master with revive broadcasts. See `seed_existing_progress_in`.
     seed_existing_progress_in(&watched_roots(), &mut progress);
 
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn seed_skips_preexisting_history_then_tracks_new_appends() {
-        // A pre-existing Codex rollout (history) must be seeded to EOF so it is
+        // A preexisting Codex rollout (history) must be seeded to EOF so it is
         // NOT replayed from offset 0 — the bug that flooded master with revive
         // broadcasts. New content appended after seeding is still tracked.
         let root = std::env::temp_dir().join(format!("wta-seed-{}", std::process::id()));
