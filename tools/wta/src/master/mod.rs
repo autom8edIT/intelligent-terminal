@@ -220,10 +220,12 @@ struct MasterStateInner {
     /// routing hot path never contends on it.
     pub(crate) helper_meta: Mutex<HashMap<HelperId, HelperRecoveryMeta>>,
     /// Session ids claimed by an *authoritative* producer — a PowerShell agent
-    /// hook or a #266 born-bound registration, both of which arrive via
-    /// `intellterm.wta/session_hook`. The hookless file watcher is a **fallback**
-    /// only: once a session id appears here, its watcher-emitted events are
-    /// dropped in [`apply_watcher_event`] so hooks and the watcher never
+    /// hook (arrives via `intellterm.wta/session_hook`) or an ACP agent-pane
+    /// session (driven by ACP `session/*`), both of which fully own binding and
+    /// activity. The hookless file watcher is a **fallback** only: once a session
+    /// id appears here, its watcher-emitted events are dropped in
+    /// [`apply_watcher_event`] so hooks and the watcher never double-track the
+    /// same session.
     /// double-track the same session. This is what lets a CLI that ships hooks
     /// (and the WTA-launched born-bound sessions) keep their exact, hook-sourced
     /// pane binding while the watcher still covers user-typed CLIs that have no
