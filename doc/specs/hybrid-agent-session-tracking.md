@@ -27,8 +27,9 @@ The design principle is one sentence:
 The C++ side is unchanged — this is entirely a `wta` (Rust) addition: the
 watcher itself, the two-set dedup (`hook_owned` / `born_bound`), an in-window
 liveness gate, a liveness reaper, the born-bound *status* fallback, per-CLI
-status detection (Claude is turn-based on `stop_reason`; Gemini is deferred), and
-a codex title-extraction fix.
+status detection (all four turn-based; Gemini is Working-only — it shows live
+Working/Attention but defers the turn-end → Idle), and a codex
+title-extraction fix.
 
 ## Background: Class A / Class B
 
@@ -432,10 +433,11 @@ of the live states.
 - **Pane-is-some filter instead of the in-window gate** — rejected: machine-wide
   CLI sessions also carry `WT_SESSION`, so only membership in *this* window's
   live pane set is sufficient.
-- **Gemini turn-based status** — **deferred** (see *Status detection*): Gemini's
+- **Gemini turn-end → Idle** — **deferred** (see *Status detection*): Gemini's
   transcript has no turn-completion signal and a 2-phase / `$set`-interleaved
-  shape that makes Idle-vs-Working ambiguous from the log. Its rows still bind;
-  live status awaits hooks or a cleaner Gemini format.
+  shape, so the *end* of a turn can't be told from the log. Gemini already shows
+  live **Working/Attention** (read per record from the append log); only the
+  turn-end → Idle transition awaits hooks or a cleaner Gemini format.
 - **`dangerous-tool → Attention` heuristic** — rejected: a permission wait is
   indistinguishable from a running tool in the transcript, and the heuristic is
   wrong under auto-approve.
