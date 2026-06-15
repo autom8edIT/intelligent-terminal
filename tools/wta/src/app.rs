@@ -472,6 +472,21 @@ impl WtNotification {
     }
 }
 
+/// Autofix request held on a `TabSession` because the tab was showing a
+/// recommendation card when the request arrived. The card-resolution
+/// paths (`turn_execute_card`, `turn_cancel`) replay this through
+/// `trigger_autofix_inner` once the card transitions out of
+/// `Surfaced{Recommendation}`. See `TabSession::pending_autofix` for the
+/// full lifecycle.
+#[derive(Debug, Clone)]
+pub struct DeferredAutofix {
+    pub notification: WtNotification,
+    /// Carried through to `trigger_autofix_inner` on replay so the
+    /// auto-suggest gate respects the original entry mode (`true` for
+    /// explicit Ctrl+Alt+./pill-click, `false` for shell-emit auto-trigger).
+    pub forced: bool,
+}
+
 /// Open a URL in the user's default browser. Used by Setup mode's
 /// "press O to open install URL" key handler.
 fn open_url_in_browser(url: &str) -> std::io::Result<()> {
@@ -1488,6 +1503,20 @@ pub struct TabSession {
     /// by `PENDING_PROMPT_QUEUE_CAP`.
     pub pending_prompts: VecDeque<QueuedPrompt>,
 
+    /// Autofix request deferred because a recommendation card was visible
+    /// when the autofix was triggered. Dispatching immediately would call
+    /// `turn_submit_prompt` and wipe the card the user was about to
+    /// Run/Insert/Esc. Instead we stash the request here; the card
+    /// resolution paths (`turn_execute_card`, `turn_cancel`) check this
+    /// slot after transitioning out of `Surfaced{Recommendation}` and
+    /// replay it through `trigger_autofix_inner`. Latest-wins: a second
+    /// autofix trigger while one is already deferred overwrites the
+    /// slot, matching the "latest event always wins" comment in
+    /// `trigger_autofix_inner`. Cleared by `clear_chat_history` alongside
+    /// `pending_prompts` (the request was about a conversation being
+    /// reset).
+    pub pending_autofix: Option<DeferredAutofix>,
+
     // "Does this tab want the agent pane visible?" — per-tab user intent.
     // Independent of where the (single, shared) XAML pane physically lives:
     // C++ relocates the pane to whichever active tab has `pane_open == true`
@@ -1607,6 +1636,10 @@ impl TabSession {
         // wiped — allowing them to survive across the reset would surprise
         // the user by firing into the fresh session.
         self.pending_prompts.clear();
+        // Same reasoning: a deferred autofix was about a failing pane in
+        // the conversation being wiped. Firing it into a fresh session
+        // would be surprising.
+        self.pending_autofix = None;
     }
 
     /// Flush pending user/agent replay buffers at a turn boundary during
@@ -8741,6 +8774,30 @@ impl App {
         // card had pinned. The C++ side falls back to source-of-agent.
         let target_tab = self.tab_for_session(session_id);
         self.recompute_chip_override(&target_tab);
+
+        // Card resolved — fire any autofix request that was deferred
+        // while the card was visible. See `TabSession::pending_autofix`
+        // for the deferral lifecycle.
+        self.fire_deferred_autofix_if_any(&target_tab);
+    }
+
+    /// Re-fire a deferred autofix if one was stashed on `tab_id`.
+    /// Called from `turn_execute_card` and `turn_cancel` after the tab
+    /// transitions out of `Surfaced{Recommendation}` so the card no
+    /// longer blocks dispatch. Latest-wins semantics are already
+    /// enforced at stash time; this just replays the most recent.
+    fn fire_deferred_autofix_if_any(&mut self, tab_id: &str) {
+        let pending = self.tab_mut(tab_id).pending_autofix.take();
+        if let Some(deferred) = pending {
+            tracing::info!(
+                target: "autofix",
+                tab_id = %tab_id,
+                pane_id = %deferred.notification.pane_id,
+                forced = deferred.forced,
+                "replaying deferred autofix after card resolved",
+            );
+            self.trigger_autofix_inner(&deferred.notification, deferred.forced);
+        }
     }
 
     /// User pressed Esc — cancel the in-flight turn. Bumps
@@ -8878,6 +8935,11 @@ impl App {
         // state; release whatever the helper had pinned. C++ falls back to
         // source-of-agent driven rendering.
         self.recompute_chip_override(&target_tab);
+
+        // If the cancel just dismissed a recommendation card, fire any
+        // autofix that was deferred while the card was visible. See
+        // `TabSession::pending_autofix`.
+        self.fire_deferred_autofix_if_any(&target_tab);
     }
 
     // ── Internal surface helpers (shared between eager and end-of-turn). ──
@@ -15396,5 +15458,176 @@ mod tests {
             app.tab_sessions["tab-b"].pending_prompts.is_empty(),
             "tab-b's queue head was popped on dispatch"
         );
+    }
+
+    // ── Deferred autofix while a recommendation card is visible ─────
+
+    fn make_autofix_notification(pane: &str, tab: &str, summary: &str) -> WtNotification {
+        WtNotification {
+            severity: WtEventSeverity::Actionable,
+            pane_id: pane.to_string(),
+            tab_id: Some(tab.to_string()),
+            summary: summary.to_string(),
+            acknowledged: false,
+            age_ticks: 0,
+        }
+    }
+
+    /// Seed a tab with a Surfaced{Recommendation} state so autofix
+    /// dispatch would have to wipe the card to proceed. Uses
+    /// `stage_surfaced_recommendation` but on a named tab key.
+    fn stage_card_on_tab(app: &mut App, tab_id: &str) {
+        let prompt = SubmittedPrompt {
+            id: 1,
+            text: "p".into(),
+            submitted_at_unix_s: 0.0,
+            autofix: None,
+        };
+        let recs = crate::coordinator::RecommendationSet {
+            recommended_choice: Some(0),
+            choices: vec![send_choice("pane-1", "echo hi")],
+        };
+        let tab = app.tab_mut(tab_id);
+        tab.selected_recommendation = 0;
+        tab.turn = TurnState::Surfaced {
+            prompt,
+            outcome: TurnOutcome::Recommendation(recs),
+            end_pending: false,
+        };
+    }
+
+    #[test]
+    fn autofix_defers_when_recommendation_card_visible() {
+        // User-reported scenario: a recommendation card is on screen
+        // and a new command failure triggers autofix. Without deferral,
+        // `trigger_autofix_inner` would call `turn_submit_prompt`,
+        // which wipes the card the user was about to interact with.
+        // Contract: pending_autofix gets the request, no dispatch
+        // happens, and tab.autofix.pane_id is NOT armed yet (would be
+        // armed only on actual dispatch).
+        let mut app = test_app();
+        app.state = ConnectionState::Connected;
+        app.autofix_enabled = true;
+        let tab = "test-tab";
+        stage_card_on_tab(&mut app, tab);
+        let notif = make_autofix_notification("failing-pane", tab, "dateime: not recognized");
+
+        app.trigger_autofix_inner(&notif, /*forced=*/ true);
+
+        // Card is intact.
+        assert!(
+            app.tab_mut(tab).turn.recommendations().is_some(),
+            "card must NOT be wiped by deferred autofix; got {:?}",
+            app.tab_mut(tab).turn,
+        );
+        // Request is stashed.
+        let pending = app.tab_mut(tab).pending_autofix.as_ref()
+            .expect("pending_autofix must be set");
+        assert_eq!(pending.notification.pane_id, "failing-pane");
+        assert!(pending.forced, "forced flag preserved for replay");
+        // No dispatch — autofix.pane_id only gets armed on actual dispatch.
+        assert!(
+            app.tab_mut(tab).autofix.pane_id.is_none(),
+            "autofix must NOT arm pane_id while deferred"
+        );
+    }
+
+    #[test]
+    fn deferred_autofix_replays_when_card_executed_via_enter() {
+        // Card visible + autofix deferred + user presses Enter on card
+        // → turn_execute_card transitions state and fires the deferred.
+        let mut app = test_app();
+        app.state = ConnectionState::Connected;
+        app.autofix_enabled = true;
+        let tab = "test-tab";
+        app.current_tab_mut().session_id = Some(DEFAULT_TAB_ID.to_string());
+        stage_card_on_tab(&mut app, DEFAULT_TAB_ID);
+        let notif = make_autofix_notification("failing-pane", DEFAULT_TAB_ID, "boom");
+        app.trigger_autofix_inner(&notif, true);
+        assert!(app.tab_mut(DEFAULT_TAB_ID).pending_autofix.is_some());
+
+        app.turn_execute_card(DEFAULT_TAB_ID);
+
+        // Pending slot was consumed.
+        assert!(
+            app.tab_mut(DEFAULT_TAB_ID).pending_autofix.is_none(),
+            "deferred autofix must be consumed by replay"
+        );
+        // Replay armed the autofix pane_id (proof of dispatch).
+        assert_eq!(
+            app.tab_mut(DEFAULT_TAB_ID).autofix.pane_id.as_deref(),
+            Some("failing-pane"),
+            "replay must arm autofix on the failing pane"
+        );
+        let _ = tab;
+    }
+
+    #[test]
+    fn deferred_autofix_replays_when_card_dismissed_via_esc() {
+        // Card visible + autofix deferred + user presses Esc → turn_cancel
+        // transitions state to Idle and fires the deferred.
+        let mut app = test_app();
+        app.state = ConnectionState::Connected;
+        app.autofix_enabled = true;
+        app.current_tab_mut().session_id = Some(DEFAULT_TAB_ID.to_string());
+        stage_card_on_tab(&mut app, DEFAULT_TAB_ID);
+        let notif = make_autofix_notification("failing-pane", DEFAULT_TAB_ID, "boom");
+        app.trigger_autofix_inner(&notif, true);
+        assert!(app.tab_mut(DEFAULT_TAB_ID).pending_autofix.is_some());
+
+        app.turn_cancel(DEFAULT_TAB_ID);
+
+        assert!(
+            app.tab_mut(DEFAULT_TAB_ID).pending_autofix.is_none(),
+            "deferred autofix must be consumed by Esc-dismiss replay"
+        );
+        assert_eq!(
+            app.tab_mut(DEFAULT_TAB_ID).autofix.pane_id.as_deref(),
+            Some("failing-pane")
+        );
+    }
+
+    #[test]
+    fn latest_autofix_request_overwrites_pending_while_card_visible() {
+        // Two autofix triggers in a row while card visible (e.g. two
+        // shell commands fail back-to-back). Latest wins — the user
+        // cares about the most recent failure.
+        let mut app = test_app();
+        app.state = ConnectionState::Connected;
+        app.autofix_enabled = true;
+        stage_card_on_tab(&mut app, "test-tab");
+
+        app.trigger_autofix_inner(
+            &make_autofix_notification("pane-1", "test-tab", "first failure"), true);
+        app.trigger_autofix_inner(
+            &make_autofix_notification("pane-2", "test-tab", "second failure"), false);
+
+        let pending = app.tab_mut("test-tab").pending_autofix.as_ref()
+            .expect("pending_autofix set");
+        assert_eq!(pending.notification.pane_id, "pane-2",
+            "latest autofix request overwrites the earlier one");
+        assert_eq!(pending.notification.summary, "second failure");
+        assert!(!pending.forced,
+            "the second request's forced=false flag must be preserved");
+    }
+
+    #[test]
+    fn clear_chat_history_drops_pending_autofix() {
+        // /clear, /new, /restart, tab reset all funnel through
+        // clear_chat_history. Pending autofix was about the
+        // conversation being wiped — must be dropped so it doesn't
+        // fire into the fresh session.
+        let mut app = test_app();
+        app.state = ConnectionState::Connected;
+        app.autofix_enabled = true;
+        stage_card_on_tab(&mut app, DEFAULT_TAB_ID);
+        let notif = make_autofix_notification("failing-pane", DEFAULT_TAB_ID, "boom");
+        app.trigger_autofix_inner(&notif, true);
+        assert!(app.current_tab().pending_autofix.is_some());
+
+        app.current_tab_mut().clear_chat_history();
+
+        assert!(app.current_tab().pending_autofix.is_none(),
+            "clear_chat_history must drop deferred autofix");
     }
 }

@@ -131,6 +131,38 @@ impl App {
             }
         };
 
+        // Defer when a recommendation card is visible on the target tab.
+        // Dispatching now would call `turn_submit_prompt` and wipe the
+        // card the user is interacting with. The queue PR's `Enter` path
+        // takes the same defer-and-let-card-resolve approach for user
+        // prompts; doing the same for autofix keeps both surfaces
+        // consistent (and matches what users expect now that we have a
+        // queue: "autofix should wait its turn just like everything
+        // else"). Latest-wins on overwrite — the most recent failure is
+        // what the user cares about. The card-resolution paths
+        // (`turn_execute_card` and `turn_cancel`) drain
+        // `pending_autofix` and replay it through this function once
+        // the card transitions out of `Surfaced{Recommendation}`.
+        if self
+            .tab_mut(&target_tab_id)
+            .turn
+            .recommendations()
+            .is_some()
+        {
+            tracing::info!(
+                target: "autofix",
+                pane_id = %notification.pane_id,
+                tab_id = %target_tab_id,
+                forced,
+                "deferring autofix: recommendation card visible — will replay on dismiss/execute",
+            );
+            self.tab_mut(&target_tab_id).pending_autofix = Some(crate::app::DeferredAutofix {
+                notification: notification.clone(),
+                forced,
+            });
+            return;
+        }
+
         // Suggest-mode: when auto-suggest is off AND this isn't a user-
         // forced activation, just surface the Detected pill and let the
         // user decide whether to call the LLM. Skips the busy / generation
