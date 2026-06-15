@@ -26,6 +26,7 @@
     <ClCompile Include="AgentHooksStatusTests.cpp" />
     <ClCompile Include="CustomAgentIdTests.cpp" />
     <ClCompile Include="RtlHelperTests.cpp" />
+    <ClCompile Include="FreWingetClassifierTests.cpp" />
     <ClCompile Include="precomp.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>

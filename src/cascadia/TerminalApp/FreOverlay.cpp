@@ -22,6 +22,7 @@ using namespace winrt::Windows::UI::Xaml;
 using namespace winrt::Windows::UI::Xaml::Controls;
 using namespace winrt::Windows::UI::Xaml::Documents;
 namespace Automation = winrt::Windows::UI::Xaml::Automation;
+namespace FreWinget = ::Microsoft::Terminal::FreWinget;
 
 namespace winrt::TerminalApp::implementation
 {
@@ -996,7 +997,7 @@ namespace winrt::TerminalApp::implementation
                     // VPN" message — anything else (hash/cert/disk/AV)
                     // falls back to Generic so we don't send the user
                     // chasing the wrong problem.
-                    kind = _IsNetworkLikeHResult(hr)
+                    kind = FreWinget::IsNetworkLikeHResult(hr)
                                ? Kind::Network
                                : Kind::Generic;
                     break;
@@ -1013,7 +1014,7 @@ namespace winrt::TerminalApp::implementation
                 // source server is unreachable), so route through the
                 // full classifier instead of just the network check.
                 case InstallResultStatus::CatalogError:
-                    kind = _ClassifyWingetHResult(hr);
+                    kind = FreWinget::ClassifyWingetHResult(hr);
                     break;
                 default:
                     kind = Kind::Generic;
@@ -1043,12 +1044,13 @@ namespace winrt::TerminalApp::implementation
                 "[FRE] winget exception: hr=0x{:08X} msg={}",
                 static_cast<uint32_t>(hr),
                 winrt::to_string(e.message())));
-            // _ClassifyWingetHResult recognizes APPINSTALLER_CLI_ERROR_*
-            // codes (e.g. 0x8A15003A == BLOCKED_BY_POLICY), so a GP
-            // block surfaces as Kind::BlockedByPolicy with the
-            // actionable "contact IT admin" message instead of the
-            // generic "(error code 0x8A15003A)" fallback.
-            co_return finish(_ClassifyWingetHResult(hr), hr, installerErr);
+            // FreWinget::ClassifyWingetHResult recognizes
+            // APPINSTALLER_CLI_ERROR_* codes (e.g. 0x8A15003A ==
+            // BLOCKED_BY_POLICY), so a GP block surfaces as
+            // Kind::BlockedByPolicy with the actionable "contact IT
+            // admin" message instead of the generic "(error code
+            // 0x8A15003A)" fallback.
+            co_return finish(FreWinget::ClassifyWingetHResult(hr), hr, installerErr);
         }
         catch (...)
         {
@@ -1056,113 +1058,6 @@ namespace winrt::TerminalApp::implementation
             co_return finish(Kind::Generic, hr, installerErr);
         }
     }
-
-    // Conservative network-class HRESULT whitelist. We list the specific
-    // WinINet / WinHTTP / Winsock codes that genuinely indicate a network
-    // problem (DNS failure, connection refused/timed out, TLS handshake
-    // failure, etc.). We deliberately do NOT include:
-    //  * HTTP-status HRESULTs (0x80190xxx) — HTTP 404 / 403 / 5xx aren't
-    //    "check your VPN" situations, they mean the request reached the
-    //    server.
-    //  * RPC_E_* — those are COM/service activation failures, not network.
-    //  * Whole facility ranges — too easy to misclassify edge cases.
-    //
-    // Names in trailing comments are the macros from winhttp.h / wininet.h
-    // / winsock2.h, kept here so we don't need to pull those headers in.
-    bool FreOverlay::_IsNetworkLikeHResult(int32_t hr) noexcept
-    {
-        switch (static_cast<uint32_t>(hr))
-        {
-        // FACILITY_INTERNET (12xxx range) — WinINet & WinHTTP share these
-        case 0x80072EE2: // ERROR_INTERNET_TIMEOUT / ERROR_WINHTTP_TIMEOUT       (12002)
-        case 0x80072EE7: // ERROR_INTERNET_NAME_NOT_RESOLVED                    (12007)
-        case 0x80072EFD: // ERROR_INTERNET_CANNOT_CONNECT                       (12029)
-        case 0x80072EFE: // ERROR_INTERNET_CONNECTION_ABORTED                   (12030)
-        case 0x80072EFF: // ERROR_INTERNET_CONNECTION_RESET                     (12031)
-        case 0x80072F8F: // ERROR_INTERNET_SECURITY_CHANNEL_ERROR (TLS)         (12175)
-        // FACILITY_WIN32 (Winsock 100xx, mapped via HRESULT_FROM_WIN32)
-        case 0x80072742: // WSAENETDOWN          (10050)
-        case 0x80072743: // WSAENETUNREACH       (10051)
-        case 0x80072744: // WSAENETRESET         (10052)
-        case 0x80072745: // WSAECONNABORTED      (10053)
-        case 0x80072746: // WSAECONNRESET        (10054)
-        case 0x8007274C: // WSAETIMEDOUT         (10060)
-        case 0x8007274D: // WSAECONNREFUSED      (10061)
-        case 0x80072751: // WSAEHOSTUNREACH      (10065)
-        case 0x80072AF9: // WSAHOST_NOT_FOUND    (11001)
-        case 0x80072AFC: // WSANO_DATA           (11004)
-            return true;
-        default:
-            return false;
-        }
-    }
-
-    // Map a raw HRESULT to the most-specific FreWingetFailureKind we can
-    // infer. Used in two places:
-    //  * the catch block of _WingetInstallAsync, where winget COM throws
-    //    APPINSTALLER_CLI_ERROR_* codes directly (this is how policy
-    //    blocks surface — winget throws 0x8A15003A *before* it ever
-    //    returns an InstallResult);
-    //  * the CatalogError install-status branch, where the structured
-    //    Status is generic but the ExtendedErrorCode tells us why.
-    //
-    // The match order matters. APPINSTALLER_CLI_ERROR_* codes are
-    // checked first because their meaning is unambiguous; the network
-    // whitelist comes last as a transport-level fallback.
-    //
-    // Code names come from
-    // https://github.com/microsoft/winget-cli/blob/master/src/AppInstallerSharedLib/Public/AppInstallerErrors.h
-    // and are kept here as comments so we don't need to take a header
-    // dependency on the winget-cli repo.
-    FreOverlay::FreWingetFailureKind FreOverlay::_ClassifyWingetHResult(int32_t hr) noexcept
-    {
-        using Kind = FreWingetFailureKind;
-        switch (static_cast<uint32_t>(hr))
-        {
-        // BlockedByPolicy family — group policy disabled winget or a
-        // specific source/feature. Triggered by setting
-        // HKLM\SOFTWARE\Policies\Microsoft\Windows\AppInstaller\EnableAppInstaller
-        // (and friends) to 0.
-        case 0x8A15003A: // APPINSTALLER_CLI_ERROR_BLOCKED_BY_POLICY
-        case 0x8A15001B: // APPINSTALLER_CLI_ERROR_MSSTORE_BLOCKED_BY_POLICY
-        case 0x8A15001C: // APPINSTALLER_CLI_ERROR_MSSTORE_APP_BLOCKED_BY_POLICY
-        case 0x8A15001D: // APPINSTALLER_CLI_ERROR_EXPERIMENTAL_FEATURE_DISABLED
-        case 0x8A15010F: // APPINSTALLER_CLI_ERROR_INSTALL_BLOCKED_BY_POLICY (install-phase variant of 0x8A15003A)
-            return Kind::BlockedByPolicy;
-
-        // Network / download failure codes that winget itself attaches
-        // (separate from the generic WinINet/Winsock whitelist below).
-        // INSTALL_NO_NETWORK is winget self-diagnosing "no network";
-        // DOWNLOAD_FAILED is the install-phase wrapper around any
-        // transport error during package download.
-        case 0x8A150008: // APPINSTALLER_CLI_ERROR_DOWNLOAD_FAILED
-        case 0x8A150107: // APPINSTALLER_CLI_ERROR_INSTALL_NO_NETWORK
-            return Kind::Network;
-
-        // Manifest was found but no installer entry matches this
-        // machine's OS / architecture / scope. Usually surfaces as
-        // InstallResultStatus::NoApplicableInstallers, but cover the
-        // exception form for older winget versions / unusual flows.
-        case 0x8A150010: // APPINSTALLER_CLI_ERROR_NO_APPLICABLE_INSTALLER
-            return Kind::NoCompatibleInstaller;
-
-        // No manifest with the requested package ID exists in any
-        // configured source. Usually surfaces as
-        // findResult.Matches().Size() == 0, but defensive coverage for
-        // the exception form.
-        case 0x8A150014: // APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND
-            return Kind::PackageNotFound;
-        }
-
-        // No winget-specific match — fall back to the transport-level
-        // network whitelist (DNS / connect / TLS), then Generic.
-        if (_IsNetworkLikeHResult(hr))
-        {
-            return Kind::Network;
-        }
-        return Kind::Generic;
-    }
-
 
     // ── Hooks install helper ────────────────────────────────────────────
 

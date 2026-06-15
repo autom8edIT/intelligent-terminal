@@ -6,6 +6,8 @@
 #include "FreAgentEntry.g.h"
 #include "FreOverlay.g.h"
 
+#include "../inc/FreWingetClassifier.h"
+
 #include <mutex>
 
 namespace winrt::TerminalApp::implementation
@@ -79,24 +81,11 @@ namespace winrt::TerminalApp::implementation
             Node = 1, // OpenJS.NodeJS.LTS
         };
 
-        // Categorization of why a winget install failed, derived from the COM
-        // API's structured status + HRESULT in _WingetInstallAsync. Each kind
-        // maps to a localized user-facing message that tells the user what
-        // happened and what to do next (retry, contact IT, install manually).
-        // The Success sentinel lets _WingetInstallAsync encode success/failure
-        // in a single IAsyncOperation<int32_t> return value (WinRT projection
-        // can't carry a richer struct without an IDL type).
-        enum class FreWingetFailureKind : int32_t
-        {
-            Success = -1, // install completed OK
-            Network = 0, // connect / download failed with a network-like HRESULT
-            BlockedByPolicy = 1, // winget GP / org policy blocked the install
-            PackageNotFound = 2, // catalog has no manifest with this ID
-            NoCompatibleInstaller = 3, // manifest exists but no installer matches this OS/arch
-            InstallerFailed = 4, // installer ran but reported an error (e.g. MSI 1603)
-            Timeout = 5, // we hit our own 20-min hard timeout
-            Generic = 6, // everything else (catalog corruption, internal error, unknown HRESULT, …)
-        };
+        // Categorization of why a winget install failed. Aliased from the
+        // free-function classifier in `inc/FreWingetClassifier.h` so the
+        // pure HRESULT → kind logic can be unit-tested without dragging in
+        // TerminalApp / WinRT / XAML.
+        using FreWingetFailureKind = ::Microsoft::Terminal::FreWinget::FailureKind;
 
         // Show a single problem: set the error message + manual-fix link, then
         // apply that problem's remediation (toggle off the affected feature, if
@@ -168,26 +157,12 @@ namespace winrt::TerminalApp::implementation
         int32_t _lastWingetHr{ 0 };
         uint32_t _lastWingetInstallerErrorCode{ 0 };
 
-        // Decide whether an HRESULT looks like a network-class failure
-        // (WinINet / WinHTTP / Winsock). Conservative whitelist of specific
-        // codes rather than facility-range scans, to avoid misclassifying
-        // HTTP-status HRESULTs (HTTP 404 is 0x80190194 — not a "check your
-        // VPN" situation) or RPC failures as network issues.
-        static bool _IsNetworkLikeHResult(int32_t hr) noexcept;
-
-        // Classify a raw HRESULT (from a winget COM exception or from
-        // InstallResult.ExtendedErrorCode) into the most-specific
-        // FreWingetFailureKind we can infer. Recognizes the winget-CLI's
-        // APPINSTALLER_CLI_ERROR_* family for policy blocks, missing
-        // packages, no-applicable-installer, and falls back to
-        // _IsNetworkLikeHResult, then Generic.
-        //
-        // Without this layer, winget COM exceptions like
-        // APPINSTALLER_CLI_ERROR_BLOCKED_BY_POLICY (0x8A15003A — thrown
-        // when group policy disables winget) would map to a generic
-        // "(error code 0x8A15003A)" message instead of the actionable
-        // "blocked by policy — contact your IT admin" message.
-        static FreWingetFailureKind _ClassifyWingetHResult(int32_t hr) noexcept;
+        // Pure HRESULT → FailureKind helpers live in
+        // `inc/FreWingetClassifier.h` as `IsNetworkLikeHResult` /
+        // `ClassifyWingetHResult` so they can be exercised by the
+        // `ut_app` test runner without a TerminalApp dependency. Call
+        // them directly via the `Microsoft::Terminal::FreWinget`
+        // namespace from `_WingetInstallAsync`.
 
         // Run wta.exe hooks install on a background thread.
         // Returns true on success.
