@@ -383,7 +383,9 @@ namespace Microsoft::Terminal::ShellIntegration
             const auto launch = commandline.substr(i);
 
             // Case-insensitive, slash-normalized prefix match against either
-            // needle — no allocation, no full tokenizer.
+            // needle — no allocation, no full tokenizer. After the matched
+            // `…\bash` we require a leaf boundary (end / `.` / whitespace /
+            // closing quote) so a longer leaf like `bashful.exe` can't match.
             const auto startsWith = [&](const std::wstring& needle) noexcept {
                 if (launch.size() < needle.size())
                 {
@@ -397,7 +399,12 @@ namespace Microsoft::Terminal::ShellIntegration
                         return false;
                     }
                 }
-                return true;
+                if (launch.size() == needle.size())
+                {
+                    return true; // exact `…\bash` (no extension)
+                }
+                const wchar_t after = launch[needle.size()];
+                return after == L'.' || after == L' ' || after == L'\t' || after == L'"';
             };
             return startsWith(sys32) || startsWith(sysnative);
         }

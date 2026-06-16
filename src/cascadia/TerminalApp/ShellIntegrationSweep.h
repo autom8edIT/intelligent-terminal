@@ -76,12 +76,15 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
     // profiles all work uniformly with no parsing.
     inline std::wstring WslProfileCommandline(const Profile& profile)
     {
-        std::wstring cmd{ profile.Commandline() };
-        if (cmd.empty() || !SI::IsWslProfile(cmd))
+        // Check the predicate on a view first; only copy into std::wstring for
+        // the (few) profiles that are actually WSL — this snapshot runs on the
+        // UI thread for every profile.
+        const auto cmd = profile.Commandline();
+        if (cmd.empty() || !SI::IsWslProfile(std::wstring_view{ cmd }))
         {
             return {};
         }
-        return cmd;
+        return std::wstring{ cmd };
     }
 
     // Snapshot the user's distinct WSL profile commandlines. MUST be called

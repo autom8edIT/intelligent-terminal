@@ -119,35 +119,62 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
         // Return the distro-SELECTION portion of a profile commandline: the
         // launcher + its options (`-d`/`--distribution`/`--distribution-id`/
         // `-u`/…), with any command the profile already specifies stripped.
-        // We must strip it before appending our own probe, otherwise a second
+        // We must strip it before appending our own probe; a leftover second
         // exec/command flag corrupts argument parsing and the probe fails for
         // profiles like `wsl.exe -d Ubuntu -e fish`, `wsl.exe --exec zsh`, or
         // `bash.exe -c "..."`.
         //   * wsl.exe terminates the option list at `-e` / `--exec` / `--`.
         //   * bash.exe takes its command via `-c`.
-        // Cuts at the EARLIEST such terminator (token-bounded with surrounding
-        // spaces so it can't match inside `--distribution-id` or a distro name).
+        // Token-aware (whitespace-delimited, quote-respecting) so it tolerates
+        // tabs / multiple spaces and a `--` at end-of-string, and only matches
+        // a WHOLE token (never inside `--distribution-id` or a distro name).
+        // Cuts at the EARLIEST such terminator token.
         inline std::wstring_view StripExecTail(std::wstring_view cmd, bool isBash) noexcept
         {
-            size_t cut = std::wstring_view::npos;
-            const auto consider = [&](std::wstring_view flag) noexcept {
-                const auto p = cmd.find(flag);
-                if (p != std::wstring_view::npos && p < cut)
-                {
-                    cut = p;
-                }
+            const auto isWs = [](wchar_t c) noexcept { return c == L' ' || c == L'\t'; };
+            const auto isTerminator = [&](std::wstring_view tok) noexcept {
+                return isBash ? (tok == L"-c")
+                              : (tok == L"-e" || tok == L"--exec" || tok == L"--");
             };
-            if (isBash)
+            size_t i = 0;
+            while (i < cmd.size())
             {
-                consider(L" -c ");
+                while (i < cmd.size() && isWs(cmd[i]))
+                {
+                    ++i;
+                }
+                const size_t tokStart = i;
+                if (i < cmd.size() && cmd[i] == L'"')
+                {
+                    ++i;
+                    while (i < cmd.size() && cmd[i] != L'"')
+                    {
+                        ++i;
+                    }
+                    if (i < cmd.size())
+                    {
+                        ++i; // consume closing quote
+                    }
+                }
+                else
+                {
+                    while (i < cmd.size() && !isWs(cmd[i]))
+                    {
+                        ++i;
+                    }
+                }
+                if (isTerminator(cmd.substr(tokStart, i - tokStart)))
+                {
+                    // Trim trailing whitespace before the terminator token.
+                    size_t cut = tokStart;
+                    while (cut > 0 && isWs(cmd[cut - 1]))
+                    {
+                        --cut;
+                    }
+                    return cmd.substr(0, cut);
+                }
             }
-            else
-            {
-                consider(L" -e ");
-                consider(L" --exec ");
-                consider(L" -- ");
-            }
-            return (cut == std::wstring_view::npos) ? cmd : cmd.substr(0, cut);
+            return cmd;
         }
 
         // Run the profile's launch commandline (distro SELECTION only — see

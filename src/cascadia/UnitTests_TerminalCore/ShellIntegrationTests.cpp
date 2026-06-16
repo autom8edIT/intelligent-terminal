@@ -1481,6 +1481,18 @@ void ShellIntegrationTests::Wsl_StripExecTail_StripsExistingExecCommand()
                      StripExecTail(L"bash.exe", true));
     VERIFY_ARE_EQUAL(std::wstring_view{ L"C:\\Windows\\System32\\bash.exe" },
                      StripExecTail(L"C:\\Windows\\System32\\bash.exe -c \"ls -la\"", true));
+    // Whitespace-robust: tabs / multiple spaces around the terminator, and a
+    // `--` at end-of-string, are all handled (hand-edited commandlines).
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe  -d  Ubuntu" },
+                     StripExecTail(L"wsl.exe  -d  Ubuntu   -e fish", false));
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe\t-d\tUbuntu" },
+                     StripExecTail(L"wsl.exe\t-d\tUbuntu\t-e\tfish", false));
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe -d Ubuntu" },
+                     StripExecTail(L"wsl.exe -d Ubuntu --", false));
+    // A token that merely STARTS with a terminator (e.g. `--exec-foo`,
+    // `-extra`) is not a terminator — only whole-token matches cut.
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe -d Ubuntu --execfoo bar" },
+                     StripExecTail(L"wsl.exe -d Ubuntu --execfoo bar", false));
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -1760,6 +1772,9 @@ void ShellIntegrationTests::IsWslProfile_GitBashAndOthers_False()
     VERIFY_IS_FALSE(IsWslProfile(L"C:\\Program Files\\Git\\bin\\bash.exe -i -l"));
     VERIFY_IS_FALSE(IsWslProfile(L"bash.exe -i"));
     VERIFY_IS_FALSE(IsWslProfile(L"pwsh.exe"));
+    // A longer leaf under System32 starting with "bash" must NOT match the
+    // System32-bash launcher (leaf-boundary check after `…\bash`).
+    VERIFY_IS_FALSE(IsWslProfile(L"C:\\Windows\\System32\\bashful.exe"));
     // Anchored on the launch exe: `cmd /c wsl …` launches cmd, not wsl.
     VERIFY_IS_FALSE(IsWslProfile(L"cmd.exe /c wsl -d Ubuntu"));
 }
