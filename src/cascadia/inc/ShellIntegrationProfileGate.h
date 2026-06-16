@@ -323,18 +323,14 @@ namespace Microsoft::Terminal::ShellIntegration
         }
 
         // The Windows directory (e.g. "C:\Windows"), resolved once per
-        // process. `SystemRoot` is the canonical, registry-backed value;
-        // `windir` is the legacy alias (fallback). Both are normally
-        // identical — SystemRoot is preferred for reliability.
+        // process via the OS API `GetWindowsDirectoryW` — which reads the
+        // real install path and cannot be spoofed by a tampered
+        // `%SystemRoot%` / `%windir%` environment variable.
         inline const std::wstring& WindowsDir()
         {
             static const std::wstring dir = []() -> std::wstring {
                 wchar_t buf[MAX_PATH];
-                DWORD n = GetEnvironmentVariableW(L"SystemRoot", buf, MAX_PATH);
-                if (n == 0 || n >= MAX_PATH)
-                {
-                    n = GetEnvironmentVariableW(L"windir", buf, MAX_PATH);
-                }
+                const UINT n = GetWindowsDirectoryW(buf, MAX_PATH);
                 if (n == 0 || n >= MAX_PATH)
                 {
                     return L"C:\\Windows"; // last-resort default

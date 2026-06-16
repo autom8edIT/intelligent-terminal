@@ -140,6 +140,7 @@ class TerminalCoreUnitTests::ShellIntegrationTests final
     TEST_METHOD(Wsl_IsSafeWslHome_RejectsRelativeAndTraversal);
     TEST_METHOD(Wsl_IsSafeWslHome_RejectsBadChars);
     TEST_METHOD(Wsl_UncPath_BuildsExpectedFormat);
+    TEST_METHOD(Wsl_StripExecTail_StripsExistingExecCommand);
 
     // Profile-presence gate (ShellIntegrationProfileGate.h)
     TEST_METHOD(ProfileGate_PwshSourceMatches);
@@ -1457,6 +1458,32 @@ void ShellIntegrationTests::Wsl_UncPath_BuildsExpectedFormat()
                      WslUncPath(L"Ubuntu", "home/x"));
 }
 
+void ShellIntegrationTests::Wsl_StripExecTail_StripsExistingExecCommand()
+{
+    using Microsoft::Terminal::ShellIntegration::Wsl::details::StripExecTail;
+    // No exec command -> returned unchanged.
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe -d Ubuntu" },
+                     StripExecTail(L"wsl.exe -d Ubuntu", false));
+    // --distribution-id GUID must NOT be mistaken for an exec terminator
+    // (the ` -- ` needle is space-bounded; `--distribution-id` has no
+    // trailing space after the dashes).
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"C:\\Windows\\system32\\wsl.exe --distribution-id {GUID}" },
+                     StripExecTail(L"C:\\Windows\\system32\\wsl.exe --distribution-id {GUID}", false));
+    // wsl.exe exec terminators (-e / --exec / --) are stripped so our probe
+    // doesn't collide with a shell the profile already requested.
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe -d Ubuntu" },
+                     StripExecTail(L"wsl.exe -d Ubuntu -e fish", false));
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe -d Ubuntu" },
+                     StripExecTail(L"wsl.exe -d Ubuntu --exec zsh", false));
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe -d Ubuntu" },
+                     StripExecTail(L"wsl.exe -d Ubuntu -- fish -l", false));
+    // bash.exe takes its command via -c.
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"bash.exe" },
+                     StripExecTail(L"bash.exe", true));
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"C:\\Windows\\System32\\bash.exe" },
+                     StripExecTail(L"C:\\Windows\\System32\\bash.exe -c \"ls -la\"", true));
+}
+
 // ───────────────────────────────────────────────────────────────────
 // Profile-presence gate (ShellIntegrationProfileGate.h)
 //
@@ -1689,8 +1716,10 @@ void ShellIntegrationTests::ProfileGate_BashRejectsSystem32WslLauncher()
     VERIFY_IS_TRUE(ProfileMatchesShell(Target::Bash, L"", L"\"C:\\Program Files\\Git\\bin\\bash.exe\" -i -l"));
     VERIFY_IS_TRUE(ProfileMatchesShell(Target::Bash, L"", L"bash.exe -i"));
     VERIFY_IS_TRUE(ProfileMatchesShell(Target::Bash, L"", L"bash"));
-    // A bash.exe under a dir merely *named* like system but deeper is
-    // still fine (only the immediate parent segment is checked).
+    // A bash.exe NOT under the real Windows System32/Sysnative directory
+    // (resolved via GetWindowsDirectoryW) is treated as Git Bash — the check
+    // anchors the launch-token prefix to the actual %SystemRoot%, so an
+    // unrelated path like C:\tools\bash.exe is not excluded.
     VERIFY_IS_TRUE(ProfileMatchesShell(Target::Bash, L"", L"C:\\tools\\bash.exe"));
 }
 

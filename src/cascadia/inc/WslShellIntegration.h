@@ -116,14 +116,48 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
             bool valid() const noexcept { return !name.empty() && !home.empty(); }
         };
 
-        // Run the profile's EXACT launch commandline with a probe appended,
-        // and read back the distro's own `$WSL_DISTRO_NAME` and `$HOME`. We
-        // NEVER parse the distro out of the commandline — the profile
-        // already selects it (`-d <name>`, `--distribution-id {GUID}`, or
-        // the default distro for bare `wsl.exe` / System32 `bash.exe`), so
-        // we reuse the command verbatim and let the running distro identify
-        // itself. This makes Source / `--distribution-id` / renamed profiles
-        // all "just work" with one code path.
+        // Return the distro-SELECTION portion of a profile commandline: the
+        // launcher + its options (`-d`/`--distribution`/`--distribution-id`/
+        // `-u`/…), with any command the profile already specifies stripped.
+        // We must strip it before appending our own probe, otherwise a second
+        // exec/command flag corrupts argument parsing and the probe fails for
+        // profiles like `wsl.exe -d Ubuntu -e fish`, `wsl.exe --exec zsh`, or
+        // `bash.exe -c "..."`.
+        //   * wsl.exe terminates the option list at `-e` / `--exec` / `--`.
+        //   * bash.exe takes its command via `-c`.
+        // Cuts at the EARLIEST such terminator (token-bounded with surrounding
+        // spaces so it can't match inside `--distribution-id` or a distro name).
+        inline std::wstring_view StripExecTail(std::wstring_view cmd, bool isBash) noexcept
+        {
+            size_t cut = std::wstring_view::npos;
+            const auto consider = [&](std::wstring_view flag) noexcept {
+                const auto p = cmd.find(flag);
+                if (p != std::wstring_view::npos && p < cut)
+                {
+                    cut = p;
+                }
+            };
+            if (isBash)
+            {
+                consider(L" -c ");
+            }
+            else
+            {
+                consider(L" -e ");
+                consider(L" --exec ");
+                consider(L" -- ");
+            }
+            return (cut == std::wstring_view::npos) ? cmd : cmd.substr(0, cut);
+        }
+
+        // Run the profile's launch commandline (distro SELECTION only — see
+        // StripExecTail) with a probe appended, and read back the distro's own
+        // `$WSL_DISTRO_NAME` and `$HOME`. We NEVER parse the distro out of the
+        // commandline — the profile already selects it (`-d <name>`,
+        // `--distribution-id {GUID}`, or the default distro for bare `wsl.exe`
+        // / System32 `bash.exe`), so we reuse the command and let the running
+        // distro identify itself. This makes Source / `--distribution-id` /
+        // renamed profiles all "just work" with one code path.
         //
         // The shell-invocation suffix differs by launcher:
         //   * `wsl.exe …` -> ` -e sh -c "echo $WSL_DISTRO_NAME; echo $HOME"`
@@ -167,20 +201,25 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
                 si.hStdError = writeEnd.get();
                 si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
 
-                // Build: <profile launch commandline> + probe suffix. We run
-                // the user's exact command and append a shell invocation that
-                // echoes the distro identity. The flag depends on whether the
-                // launcher is itself a shell (bash.exe -> `-c`) or a launcher
-                // (wsl.exe -> `-e sh -c`). See the function comment.
+                // Build the probe commandline: the profile's distro SELECTION
+                // (launcher + `-d`/`--distribution-id`/… options, with any
+                // command the profile already specifies stripped — see
+                // StripExecTail) plus OUR identity probe. Stripping first means
+                // a profile like `wsl.exe -d Ubuntu -e fish` or `bash.exe -c
+                // "..."` doesn't get a colliding second `-e`/`-c` that would
+                // corrupt parsing and fail the probe. The flag depends on
+                // whether the launcher is itself a shell (bash.exe -> `-c`) or
+                // a launcher (wsl.exe -> `-e sh -c`).
                 //
-                // No IsSafeDistroName guard on the INPUT here: we don't build
-                // a distro selector from user-editable text (the old
-                // injection vector) — we reuse the profile's own commandline
-                // (which the user already runs) and only validate the distro
-                // identity the probe REPORTS, before using it to build the
-                // \\wsl$ path below.
-                std::wstring cmdLine{ launchCommandline };
-                if (::Microsoft::Terminal::ShellIntegration::details::CommandlineHasExeToken(launchCommandline, L"bash"))
+                // No IsSafeDistroName guard on the INPUT here: we don't build a
+                // distro selector from user-editable text (the old injection
+                // vector) — we reuse the profile's own options (which the user
+                // already runs) and only validate the distro identity the probe
+                // REPORTS, before using it to build the \\wsl$ path below.
+                const bool isBash =
+                    ::Microsoft::Terminal::ShellIntegration::details::CommandlineHasExeToken(launchCommandline, L"bash");
+                std::wstring cmdLine{ StripExecTail(launchCommandline, isBash) };
+                if (isBash)
                 {
                     cmdLine += L" -c \"echo $WSL_DISTRO_NAME; echo $HOME\"";
                 }
