@@ -1861,6 +1861,12 @@ pub struct App {
     event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     /// Set after login completes — consumed by main loop to spawn ACP client.
     pub pending_acp_start: bool,
+    /// Set by LoginComplete success — consumed once by try_start_acp to pass
+    /// `post_login_reconnect=true` to the pipe-mode ACP client. This ensures
+    /// the authenticate RPC is only sent on genuine post-login reconnects, not
+    /// on agent-switch / retry / install-complete reconnects that also go
+    /// through try_start_acp.
+    needs_post_login_authenticate: bool,
     /// Agent ID selected by user (FRE/preflight) — sent to C++ once connected.
     pending_agent_selection: Option<String>,
     /// Show first-run welcome hint until user sends first message.
@@ -2170,6 +2176,7 @@ impl App {
             auth: None,
             event_tx: None,
             pending_acp_start: false,
+            needs_post_login_authenticate: false,
             pending_agent_selection: None,
             show_welcome_hint: false,
             deferred_acp: None,
@@ -2345,7 +2352,9 @@ impl App {
             return;
         }
         self.pending_acp_start = false;
-        tracing::info!(target: "acp", has_event_tx = self.event_tx.is_some(), has_deferred = self.deferred_acp.is_some(), "try_start_acp triggered");
+        let post_login_auth = self.needs_post_login_authenticate;
+        self.needs_post_login_authenticate = false;
+        tracing::info!(target: "acp", has_event_tx = self.event_tx.is_some(), has_deferred = self.deferred_acp.is_some(), post_login_auth, "try_start_acp triggered");
 
         if let (Some(ref tx), Some(ref mut params)) = (&self.event_tx, &mut self.deferred_acp) {
             // If channels were consumed by a previous (failed) attempt, create fresh ones.
@@ -2439,6 +2448,7 @@ impl App {
                                 master_ext_rx,
                                 shell_mgr,
                                 wt_connected,
+                                post_login_auth, // only true on genuine LoginComplete reconnects
                             )
                             .await
                         {
@@ -6137,6 +6147,7 @@ impl App {
                         });
                     }
                     self.pending_acp_start = true;
+                    self.needs_post_login_authenticate = true;
                     self.auth = None;
                 } else {
                     // Login failed — show auth screen again
