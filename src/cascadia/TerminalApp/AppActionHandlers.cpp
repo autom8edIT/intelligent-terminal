@@ -1976,7 +1976,7 @@ namespace winrt::TerminalApp::implementation
         // profiles for, on the UI thread BEFORE we go background.
         // _settings.AllProfiles() is an observable vector; iterating it
         // concurrently with a settings reload would be unsafe.
-        const auto wslDistros = ShellIntegrationSweep::SnapshotWslDistroNames(_settings);
+        const auto wslDistros = ShellIntegrationSweep::SnapshotWslCommandlines(_settings);
         const auto shellPresence = ShellIntegrationSweep::SnapshotShellPresence(_settings);
 
         co_await winrt::resume_background();
@@ -2170,7 +2170,7 @@ namespace winrt::TerminalApp::implementation
         // thread BEFORE going background. _settings.AllProfiles() is
         // an observable vector and must not be iterated concurrently
         // with a settings reload.
-        const auto wslDistros = ShellIntegrationSweep::SnapshotWslDistroNames(_settings);
+        const auto wslDistros = ShellIntegrationSweep::SnapshotWslCommandlines(_settings);
         const auto shellPresence = ShellIntegrationSweep::SnapshotShellPresence(_settings);
 
         co_await winrt::resume_background();

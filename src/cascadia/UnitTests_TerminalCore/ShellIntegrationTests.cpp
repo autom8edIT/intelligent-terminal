@@ -140,8 +140,6 @@ class TerminalCoreUnitTests::ShellIntegrationTests final
     TEST_METHOD(Wsl_IsSafeWslHome_RejectsRelativeAndTraversal);
     TEST_METHOD(Wsl_IsSafeWslHome_RejectsBadChars);
     TEST_METHOD(Wsl_UncPath_BuildsExpectedFormat);
-    TEST_METHOD(Wsl_InstallWslBash_RejectsUnsafeDistroName);
-    TEST_METHOD(Wsl_UninstallWslBash_RejectsUnsafeDistroName);
 
     // Profile-presence gate (ShellIntegrationProfileGate.h)
     TEST_METHOD(ProfileGate_PwshSourceMatches);
@@ -149,9 +147,17 @@ class TerminalCoreUnitTests::ShellIntegrationTests final
     TEST_METHOD(ProfileGate_WindowsPowerShellOnlyWhenNotPwsh);
     TEST_METHOD(ProfileGate_WindowsPowerShellWithDeveloperVsProfile);
     TEST_METHOD(ProfileGate_BashOnlyForGitBashNotWsl);
+    TEST_METHOD(ProfileGate_BashRejectsSystem32WslLauncher);
     TEST_METHOD(ProfileGate_AnyProfileEmptyCollection);
     TEST_METHOD(ProfileGate_AnyProfileFindsOne);
     TEST_METHOD(ProfileGate_AnyProfileMissingShellReturnsFalse);
+
+    // IsWslProfile — pure, Source-independent WSL recognizer (no parsing;
+    // the installer reuses the commandline + probes $WSL_DISTRO_NAME).
+    TEST_METHOD(IsWslProfile_WslLauncherForms_True);
+    TEST_METHOD(IsWslProfile_WslSource_True);
+    TEST_METHOD(IsWslProfile_System32BashLauncher_True);
+    TEST_METHOD(IsWslProfile_GitBashAndOthers_False);
 
     TEST_CLASS_SETUP(ClassSetup)
     {
@@ -1347,9 +1353,9 @@ void ShellIntegrationTests::Bash_InstallUninstallInstall_RoundTrip()
 //
 // Install/UninstallWslBash require a real running WSL distro on the host —
 // we cover only the pure-function helpers here. The shared UNC-mediated
-// write path is already covered by the Bash_* tests; once QueryWslHomeRaw
-// returns successfully the implementation IS InstallBash / UninstallBash
-// with a different profilePath / scriptDir.
+// write path is already covered by the Bash_* tests; once
+// QueryWslIdentityRaw returns successfully the implementation IS
+// InstallBash / UninstallBash with a different profilePath / scriptDir.
 // ═════════════════════════════════════════════════════════════════════════════
 
 void ShellIntegrationTests::Wsl_IsSafeDistroName_AcceptsCommonNames()
@@ -1449,25 +1455,6 @@ void ShellIntegrationTests::Wsl_UncPath_BuildsExpectedFormat()
     // leading slash.
     VERIFY_ARE_EQUAL(std::wstring{ LR"(\\wsl$\Ubuntu\home\x)" },
                      WslUncPath(L"Ubuntu", "home/x"));
-}
-
-void ShellIntegrationTests::Wsl_InstallWslBash_RejectsUnsafeDistroName()
-{
-    // The validator gates the wsl.exe spawn — we must never even
-    // attempt to launch with a tainted name. Verifying the early
-    // return prevents a regression where someone reorders the checks.
-    const auto r = InstallWslBash(L"Ubuntu\"; rm -rf ~ ; \"");
-    VERIFY_IS_FALSE(r.success);
-    VERIFY_IS_FALSE(r.alreadyInstalled);
-    VERIFY_IS_FALSE(r.errorMessage.empty());
-}
-
-void ShellIntegrationTests::Wsl_UninstallWslBash_RejectsUnsafeDistroName()
-{
-    const auto r = UninstallWslBash(L"Ubuntu | calc");
-    VERIFY_IS_FALSE(r.success);
-    VERIFY_IS_FALSE(r.alreadyInstalled);
-    VERIFY_IS_FALSE(r.errorMessage.empty());
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -1680,6 +1667,80 @@ void ShellIntegrationTests::ProfileGate_BashOnlyForGitBashNotWsl()
     VERIFY_IS_FALSE(ProfileMatchesShell(Target::Bash,
                                          L"",
                                          L"C:\\Windows\\System32\\wsl.exe -d Ubuntu -e bash.exe"));
+    // Legacy System32 bash.exe is the WSL default-distro launcher, NOT
+    // Git Bash — it must not be classified as Git Bash (it runs inside
+    // WSL whose $HOME is not %USERPROFILE%, so a Windows .bashrc would
+    // be a silent no-op).
+    VERIFY_IS_FALSE(ProfileMatchesShell(Target::Bash,
+                                         L"",
+                                         L"C:\\Windows\\System32\\bash.exe ~"));
+}
+
+void ShellIntegrationTests::ProfileGate_BashRejectsSystem32WslLauncher()
+{
+    // System32 / Sysnative bash.exe → WSL default distro, not Git Bash.
+    VERIFY_IS_FALSE(ProfileMatchesShell(Target::Bash, L"", L"C:\\Windows\\System32\\bash.exe"));
+    VERIFY_IS_FALSE(ProfileMatchesShell(Target::Bash, L"", L"\"C:\\Windows\\System32\\bash.exe\" ~"));
+    VERIFY_IS_FALSE(ProfileMatchesShell(Target::Bash, L"", L"C:\\Windows\\Sysnative\\bash.exe"));
+    VERIFY_IS_FALSE(ProfileMatchesShell(Target::Bash, L"", L"c:\\windows\\system32\\BASH.EXE -l"));
+    // Forward-slash separators must be treated like backslashes.
+    VERIFY_IS_FALSE(ProfileMatchesShell(Target::Bash, L"", L"C:/Windows/System32/bash.exe ~"));
+    // Real Git Bash (under Program Files) and bare leaf still match.
+    VERIFY_IS_TRUE(ProfileMatchesShell(Target::Bash, L"", L"\"C:\\Program Files\\Git\\bin\\bash.exe\" -i -l"));
+    VERIFY_IS_TRUE(ProfileMatchesShell(Target::Bash, L"", L"bash.exe -i"));
+    VERIFY_IS_TRUE(ProfileMatchesShell(Target::Bash, L"", L"bash"));
+    // A bash.exe under a dir merely *named* like system but deeper is
+    // still fine (only the immediate parent segment is checked).
+    VERIFY_IS_TRUE(ProfileMatchesShell(Target::Bash, L"", L"C:\\tools\\bash.exe"));
+}
+
+void ShellIntegrationTests::IsWslProfile_WslLauncherForms_True()
+{
+    // Every wsl.exe launch form is a WSL profile regardless of Source —
+    // the installer reuses the commandline and probes the distro, so we
+    // never parse `-d` / `--distribution-id` / Name(). This covers the
+    // common sourceless custom-profile gap AND the modern Store form.
+    VERIFY_IS_TRUE(IsWslProfile(L"", L"wsl.exe -d Ubuntu"));
+    VERIFY_IS_TRUE(IsWslProfile(L"", L"wsl -d Ubuntu"));
+    VERIFY_IS_TRUE(IsWslProfile(L"", L"wsl.exe ~ -d Ubuntu"));
+    VERIFY_IS_TRUE(IsWslProfile(L"", L"wsl.exe --distribution Debian"));
+    VERIFY_IS_TRUE(IsWslProfile(L"", L"C:\\Windows\\System32\\wsl.exe -d Ubuntu-22.04"));
+    VERIFY_IS_TRUE(IsWslProfile(L"", L"C:\\Windows\\system32\\wsl.exe --distribution-id {6f8e9a45-40ca-470d-a649-30afc57d2a57}"));
+    // Bare wsl.exe (default distro) is now supported — the probe resolves
+    // the default distro at runtime, so we no longer have to skip it.
+    VERIFY_IS_TRUE(IsWslProfile(L"", L"wsl.exe"));
+    VERIFY_IS_TRUE(IsWslProfile(L"", L"wsl"));
+}
+
+void ShellIntegrationTests::IsWslProfile_WslSource_True()
+{
+    // A WSL generator Source marks it as WSL even if the commandline form
+    // changes in future.
+    VERIFY_IS_TRUE(IsWslProfile(L"Windows.Terminal.Wsl", L"C:\\Windows\\System32\\wsl.exe -d Ubuntu"));
+    VERIFY_IS_TRUE(IsWslProfile(L"Microsoft.WSL", L"C:\\Windows\\system32\\wsl.exe --distribution-id {GUID}"));
+}
+
+void ShellIntegrationTests::IsWslProfile_System32BashLauncher_True()
+{
+    // Legacy System32 / Sysnative bash.exe IS the WSL default-distro
+    // launcher (runs bash in the default distro), so it's a WSL profile —
+    // even though ProfileMatchesShell(Bash) deliberately excludes it from
+    // Git Bash.
+    VERIFY_IS_TRUE(IsWslProfile(L"", L"C:\\Windows\\System32\\bash.exe"));
+    VERIFY_IS_TRUE(IsWslProfile(L"", L"C:\\Windows\\System32\\bash.exe ~"));
+    VERIFY_IS_TRUE(IsWslProfile(L"", L"C:\\Windows\\Sysnative\\bash.exe"));
+    VERIFY_IS_TRUE(IsWslProfile(L"", L"C:/Windows/System32/bash.exe"));
+}
+
+void ShellIntegrationTests::IsWslProfile_GitBashAndOthers_False()
+{
+    // Git Bash (under Program Files) is NOT WSL.
+    VERIFY_IS_FALSE(IsWslProfile(L"", L"\"C:\\Program Files\\Git\\bin\\bash.exe\" -i -l"));
+    VERIFY_IS_FALSE(IsWslProfile(L"", L"C:\\Program Files\\Git\\bin\\bash.exe -i -l"));
+    VERIFY_IS_FALSE(IsWslProfile(L"", L"bash.exe -i"));
+    VERIFY_IS_FALSE(IsWslProfile(L"", L"pwsh.exe"));
+    // Anchored on the launch exe: `cmd /c wsl …` launches cmd, not wsl.
+    VERIFY_IS_FALSE(IsWslProfile(L"", L"cmd.exe /c wsl -d Ubuntu"));
 }
 
 void ShellIntegrationTests::ProfileGate_AnyProfileEmptyCollection()

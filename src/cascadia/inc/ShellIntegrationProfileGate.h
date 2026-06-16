@@ -64,6 +64,23 @@ namespace Microsoft::Terminal::ShellIntegration
             return (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + (L'a' - L'A')) : c;
         }
 
+        // Case-insensitive (ASCII-fold) equality.
+        inline bool EqualsCi(std::wstring_view a, std::wstring_view b) noexcept
+        {
+            if (a.size() != b.size())
+            {
+                return false;
+            }
+            for (size_t i = 0; i < a.size(); ++i)
+            {
+                if (FoldAsciiLower(a[i]) != FoldAsciiLower(b[i]))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         // True if `commandline` at `pos` begins at a filesystem root: a
         // drive path (`X:\` or `X:/`) or a UNC path (`\\`). Only such an
         // unquoted launch executable can legitimately contain spaces
@@ -280,15 +297,7 @@ namespace Microsoft::Terminal::ShellIntegration
                 }
             }
             const std::wstring_view leafToken = commandline.substr(leafStart, end - leafStart);
-            const auto equalsCi = [](std::wstring_view a, std::wstring_view b) noexcept -> bool {
-                if (a.size() != b.size()) return false;
-                for (size_t i = 0; i < a.size(); ++i)
-                {
-                    if (FoldAsciiLower(a[i]) != FoldAsciiLower(b[i])) return false;
-                }
-                return true;
-            };
-            if (equalsCi(leafToken, leaf))
+            if (EqualsCi(leafToken, leaf))
             {
                 return true; // bare-leaf form
             }
@@ -311,6 +320,57 @@ namespace Microsoft::Terminal::ShellIntegration
                 }
             }
             return false;
+        }
+
+        // The Windows directory (e.g. "C:\Windows"), resolved once per
+        // process. `SystemRoot` is the canonical, registry-backed value;
+        // `windir` is the legacy alias (fallback). Both are normally
+        // identical — SystemRoot is preferred for reliability.
+        inline const std::wstring& WindowsDir()
+        {
+            static const std::wstring dir = []() -> std::wstring {
+                wchar_t buf[MAX_PATH];
+                DWORD n = GetEnvironmentVariableW(L"SystemRoot", buf, MAX_PATH);
+                if (n == 0 || n >= MAX_PATH)
+                {
+                    n = GetEnvironmentVariableW(L"windir", buf, MAX_PATH);
+                }
+                if (n == 0 || n >= MAX_PATH)
+                {
+                    return L"C:\\Windows"; // last-resort default
+                }
+                return std::wstring(buf, n);
+            }();
+            return dir;
+        }
+
+        // True when the launch exe is the OS WSL launcher
+        // `%SystemRoot%\System32\bash.exe` (or the `\Sysnative\` alias for
+        // 32-bit callers) — it has a `bash.exe` leaf but is NOT Git Bash; it
+        // runs bash in the DEFAULT WSL distro. We anchor on the REAL Windows
+        // directory (from %SystemRoot%) so a non-OS folder merely named
+        // "System32" cannot spoof it. Simple case-insensitive substring
+        // match — these OS paths never contain spaces.
+        inline bool IsSystem32BashLauncher(std::wstring_view commandline) noexcept
+        {
+            try
+            {
+                const auto lower = [](std::wstring s) {
+                    for (auto& c : s)
+                    {
+                        c = FoldAsciiLower(c == L'/' ? L'\\' : c);
+                    }
+                    return s;
+                };
+                const std::wstring cmd = lower(std::wstring{ commandline });
+                const std::wstring root = lower(WindowsDir());
+                return cmd.find(root + L"\\system32\\bash") != std::wstring::npos ||
+                       cmd.find(root + L"\\sysnative\\bash") != std::wstring::npos;
+            }
+            catch (...)
+            {
+                return false; // low-memory: fail-closed (treat as not-system32)
+            }
         }
     }
 
@@ -368,15 +428,55 @@ namespace Microsoft::Terminal::ShellIntegration
             // "PowerShell"; the launch-exe matcher anchors past that.
             return details::CommandlineHasExeToken(commandline, L"powershell");
         case Target::Bash:
-            // Same reasoning as WindowsPowerShell: a launch exe with
-            // leaf `bash(.exe)` cannot also have leaf `wsl(.exe)`, so
-            // a `!HasExeToken(... "wsl")` check is redundant. WSL
-            // distro profiles whose launch is wsl.exe naturally fail
-            // the `bash` leaf check.
-            return details::CommandlineHasExeToken(commandline, L"bash");
+            // A launch exe with leaf `bash(.exe)` cannot also have leaf
+            // `wsl(.exe)`, so a `!HasExeToken(... "wsl")` check is
+            // redundant for the common WSL-distro profile. BUT the legacy
+            // `C:\Windows\System32\bash.exe` (WSL default-distro launcher)
+            // DOES have a `bash.exe` leaf — it must be excluded, since it
+            // runs inside WSL (whose $HOME is not %USERPROFILE%), so a
+            // Windows .bashrc install would be a silent no-op.
+            return details::CommandlineHasExeToken(commandline, L"bash") &&
+                   !details::IsSystem32BashLauncher(commandline);
         default:
             return false;
         }
+    }
+
+    // Pure predicate: is this profile a WSL profile we should install bash
+    // integration into? True when ANY of:
+    //   * launch exe leaf is `wsl(.exe)` (covers `-d <name>`,
+    //     `--distribution <name>`, `--distribution-id {GUID}`, and bare
+    //     `wsl.exe` for the default distro — regardless of Source);
+    //   * Source is a WSL generator (`Windows.Terminal.Wsl` /
+    //     `Microsoft.WSL`);
+    //   * launch exe is the legacy WSL launcher `…\System32\bash.exe` /
+    //     `…\Sysnative\bash.exe` (runs bash in the DEFAULT distro — it IS
+    //     WSL, just not Git Bash; ProfileMatchesShell(Bash) excludes it).
+    //
+    // We deliberately do NOT parse the distro out of the commandline. The
+    // profile's commandline already selects the distro correctly, so the
+    // installer runs that exact commandline with a probe appended and reads
+    // `$WSL_DISTRO_NAME` / `$HOME` from the distro itself — no `-d` parse,
+    // no `Name()` fallback, no Source-specific handling, and renamed
+    // profiles / `--distribution-id {GUID}` / default-distro all just work.
+    //
+    // Anchored on the launch exe: `cmd.exe /c wsl -d Ubuntu` is NOT a WSL
+    // profile here (its launch exe is cmd.exe), consistent with the rest of
+    // the gate.
+    inline bool IsWslProfile(std::wstring_view source,
+                             std::wstring_view commandline) noexcept
+    {
+        if (details::CommandlineHasExeToken(commandline, L"wsl"))
+        {
+            return true;
+        }
+        if (source == L"Windows.Terminal.Wsl" || source == L"Microsoft.WSL")
+        {
+            return true;
+        }
+        // Legacy System32/Sysnative bash.exe == WSL default-distro launcher.
+        return details::CommandlineHasExeToken(commandline, L"bash") &&
+               details::IsSystem32BashLauncher(commandline);
     }
 
     // Iterates the profile collection and returns true if any profile
