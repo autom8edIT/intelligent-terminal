@@ -432,3 +432,5 @@ function Invoke-CodeFormat() {
 }
 
 Export-ModuleMember -Function Set-MsbuildDevEnvironment,Invoke-OpenConsoleTests,Invoke-OpenConsoleBuild,Start-OpenConsole,Debug-OpenConsole,Invoke-CodeFormat,Invoke-XamlFormat,Test-XamlFormat
+
+Invoke-ScriptAnalyzer -Path .\tools\OpenConsole.psm1 -Fix -IncludeRule PSAvoidUsingCmdletAliases
