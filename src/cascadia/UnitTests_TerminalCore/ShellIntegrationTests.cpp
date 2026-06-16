@@ -141,6 +141,7 @@ class TerminalCoreUnitTests::ShellIntegrationTests final
     TEST_METHOD(Wsl_IsSafeWslHome_RejectsBadChars);
     TEST_METHOD(Wsl_UncPath_BuildsExpectedFormat);
     TEST_METHOD(Wsl_StripExecTail_StripsExistingExecCommand);
+    TEST_METHOD(Wsl_QualifyBareLauncher_QualifiesBareWslBash);
 
     // Profile-presence gate (ShellIntegrationProfileGate.h)
     TEST_METHOD(ProfileGate_PwshSourceMatches);
@@ -1500,6 +1501,26 @@ void ShellIntegrationTests::Wsl_StripExecTail_StripsExistingExecCommand()
     // (only whole-token matches cut) — already covered by the
     // `--distribution-id` case above, which starts with the `--` terminator
     // but must not be stripped.
+}
+
+void ShellIntegrationTests::Wsl_QualifyBareLauncher_QualifiesBareWslBash()
+{
+    using Microsoft::Terminal::ShellIntegration::Wsl::details::QualifyBareLauncher;
+    // Build the expected prefix from the same OS-reported Windows dir the code
+    // uses, so this is machine-independent.
+    const std::wstring sys =
+        std::wstring{ Microsoft::Terminal::ShellIntegration::details::WindowsDir() } + L"\\System32\\";
+    // Bare wsl/bash launch tokens are qualified to the OS copy (option tail
+    // preserved); a bare `wsl` gets the `.exe` too.
+    VERIFY_ARE_EQUAL(sys + L"wsl.exe -d Ubuntu", QualifyBareLauncher(L"wsl.exe -d Ubuntu"));
+    VERIFY_ARE_EQUAL(sys + L"wsl.exe", QualifyBareLauncher(L"wsl"));
+    VERIFY_ARE_EQUAL(sys + L"bash.exe", QualifyBareLauncher(L"bash.exe"));
+    // Already path-qualified, quoted, or a non-wsl/bash leaf -> unchanged.
+    VERIFY_ARE_EQUAL(std::wstring{ L"C:\\Windows\\System32\\wsl.exe -d Ubuntu" },
+                     QualifyBareLauncher(L"C:\\Windows\\System32\\wsl.exe -d Ubuntu"));
+    VERIFY_ARE_EQUAL(std::wstring{ L"\"C:\\X\\wsl.exe\" -d Ubuntu" },
+                     QualifyBareLauncher(L"\"C:\\X\\wsl.exe\" -d Ubuntu"));
+    VERIFY_ARE_EQUAL(std::wstring{ L"cmd.exe /c wsl" }, QualifyBareLauncher(L"cmd.exe /c wsl"));
 }
 
 // ───────────────────────────────────────────────────────────────────

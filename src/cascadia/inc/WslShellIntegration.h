@@ -194,6 +194,60 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
             return cmd;
         }
 
+        // If the launch token is a BARE `wsl(.exe)` / `bash(.exe)` (no path,
+        // unquoted), qualify it to the OS copy under `<WindowsDir>\System32`.
+        // Our identity probe runs automatically (settings reconcile / FRE), so
+        // a bare token passed to `CreateProcessW(nullptr, …)` — whose search
+        // order includes the CURRENT DIRECTORY — could otherwise auto-run a
+        // planted same-named binary. Mirrors WslDistroGenerator's GH#11096
+        // hardening. A token that already carries a path (or is quoted, i.e.
+        // user-qualified) is returned unchanged.
+        inline std::wstring QualifyBareLauncher(std::wstring_view selection)
+        {
+            namespace SI = ::Microsoft::Terminal::ShellIntegration;
+            size_t start = 0;
+            while (start < selection.size() && (selection[start] == L' ' || selection[start] == L'\t'))
+            {
+                ++start;
+            }
+            // A quoted launcher is taken as-is (it's an explicit path).
+            if (start >= selection.size() || selection[start] == L'"')
+            {
+                return std::wstring{ selection };
+            }
+            size_t end = start;
+            while (end < selection.size() && selection[end] != L' ' && selection[end] != L'\t')
+            {
+                ++end;
+            }
+            const std::wstring_view tok = selection.substr(start, end - start);
+            for (const auto c : tok)
+            {
+                if (c == L'\\' || c == L'/' || c == L':')
+                {
+                    return std::wstring{ selection }; // already has a path
+                }
+            }
+            std::wstring leaf;
+            if (SI::details::EqualsCi(tok, L"wsl") || SI::details::EqualsCi(tok, L"wsl.exe"))
+            {
+                leaf = L"wsl.exe";
+            }
+            else if (SI::details::EqualsCi(tok, L"bash") || SI::details::EqualsCi(tok, L"bash.exe"))
+            {
+                leaf = L"bash.exe";
+            }
+            else
+            {
+                return std::wstring{ selection };
+            }
+            std::wstring out = SI::details::WindowsDir();
+            out += L"\\System32\\";
+            out += leaf;
+            out.append(selection.substr(end)); // preserve the option tail
+            return out;
+        }
+
         // Run the profile's launch commandline (distro SELECTION only — see
         // StripExecTail) with a probe appended, and read back the distro's own
         // `$WSL_DISTRO_NAME` and `$HOME`. We NEVER parse the distro out of the
@@ -262,7 +316,7 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
                 // REPORTS, before using it to build the \\wsl$ path below.
                 const bool isBash =
                     ::Microsoft::Terminal::ShellIntegration::details::CommandlineHasExeToken(launchCommandline, L"bash");
-                std::wstring cmdLine{ StripExecTail(launchCommandline, isBash) };
+                std::wstring cmdLine{ QualifyBareLauncher(StripExecTail(launchCommandline, isBash)) };
                 if (isBash)
                 {
                     cmdLine += L" -c \"echo $WSL_DISTRO_NAME; echo $HOME\"";
