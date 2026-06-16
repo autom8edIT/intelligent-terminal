@@ -204,6 +204,7 @@ pub fn shutdown_flush() {
 /// Ctrl+C is delivered as a key event (not `CTRL_C_EVENT`), so this handler
 /// does not normally see it and does not alter the TUI's Ctrl+C behavior.
 pub fn install_ctrl_handler() {
+    use windows_sys::Win32::Foundation::GetLastError;
     use windows_sys::Win32::System::Console::{
         SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_C_EVENT,
         CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
@@ -239,11 +240,17 @@ pub fn install_ctrl_handler() {
     // process-global, thread-safe Win32 operation.
     unsafe {
         if SetConsoleCtrlHandler(Some(handler), 1) == 0 {
+            // Capture the Win32 error immediately, before any other call (incl.
+            // the logging macro's own work) can reset thread-last-error.
+            let error_code = GetLastError();
             // warn (not debug): this is the diagnostic feature itself failing
             // to arm, so release logs (info) must explain why later teardown
-            // signals are absent rather than leaving it a silent mystery.
+            // signals are absent rather than leaving it a silent mystery. The
+            // error code distinguishes the likely causes (e.g. no console
+            // attached vs. a permission failure).
             tracing::warn!(
                 target: "lifecycle",
+                error_code,
                 "SetConsoleCtrlHandler failed — teardown signals will not be logged"
             );
         }
