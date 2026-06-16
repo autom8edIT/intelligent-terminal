@@ -1731,7 +1731,9 @@ impl acp::Client for WtaClient {
 
     async fn session_notification(&self, args: acp::SessionNotification) -> acp::Result<()> {
         let kind = session_update_kind(&args.update);
-        acp_log(&format!("session_notification: kind={}", kind));
+        // Per-streamed-chunk; trace-only (not via acp_log's debug) so default
+        // debug logs aren't flooded with one line per token chunk.
+        tracing::trace!(target: "acp", "session_notification: kind={}", kind);
         // The full update carries agent message/thought text, tool-call
         // content, plan bodies, and replayed user-message chunks — trace only.
         acp_trace_content(&format!("session_notification update: {:?}", args.update));

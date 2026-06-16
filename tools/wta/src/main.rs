@@ -590,6 +590,11 @@ async fn main() -> Result<()> {
     // is held in a global and flushed via `logging::shutdown_flush()` on every
     // exit path (see the calls below and before each `process::exit`).
     logging::init(&process_label(&cli));
+    // Log + flush on console teardown signals (tab/window close, logoff,
+    // shutdown) so a torn-down helper/master isn't a silent disappearance —
+    // see `install_ctrl_handler` for why the success path alone left these
+    // deaths undiagnosable.
+    logging::install_ctrl_handler();
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "=== wta starting ===");
 
     let locale = cli

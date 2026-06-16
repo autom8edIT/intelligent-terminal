@@ -6,6 +6,7 @@
 #include "Tab.h"
 #include "AgentPaneContent.h"
 #include "AgentPaneDragStash.h"
+#include "AgentPaneLog.h"
 #include "SettingsPaneContent.h"
 #include "Tab.g.cpp"
 #include "Utils.h"
@@ -1423,6 +1424,22 @@ namespace winrt::TerminalApp::implementation
             });
 
             _tabStatus.IsConnectionClosed(isClosed);
+
+            // When the closed connection is the agent pane's, the wta helper
+            // backend has died (process exit / ConPTY torn down). The C++ side
+            // used to be silent here, so a dead helper left no trace in
+            // terminal-agent-pane.log and "helper stopped responding" incidents
+            // were undiagnosable from this side. Record it so the UI half of the
+            // disconnect correlates (to the millisecond) with the Rust logs.
+            // This fires even when the master itself is gone and so can't emit
+            // restart_agent_pane.
+            if (isClosed)
+            {
+                if (const auto agentPane = FindAgentPane(); agentPane && agentPane->IsConnectionClosed())
+                {
+                    _agentPaneLog("agent pane connection closed — wta helper backend disconnected");
+                }
+            }
         }
     }
 

@@ -383,7 +383,9 @@ impl acp::Client for MasterClient {
                                 "helper notification channel drained — backpressure cleared"
                             );
                         }
-                        tracing::debug!(
+                        // Per-streamed-chunk; trace-only so default debug logs
+                        // stay readable. Turn-level flow is in `prompt_timing`.
+                        tracing::trace!(
                             target: "master",
                             step = "agent→helper",
                             op = "session_notification",
@@ -1886,7 +1888,9 @@ async fn serve_helper(
             Some(notif) = notif_rx.recv() => {
                 let sid = notif.session_id.clone();
                 let kind = notification_kind(&notif);
-                tracing::debug!(
+                // Per-streamed-chunk; trace-only to keep default debug logs
+                // readable (this line alone dominated the master log volume).
+                tracing::trace!(
                     target: "master",
                     step = "master→helper",
                     op = "session_notification",

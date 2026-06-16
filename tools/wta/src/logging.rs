@@ -175,6 +175,78 @@ pub fn shutdown_flush() {
     }
 }
 
+/// Install a Windows console control handler that records the teardown
+/// signal and drains the log appender before the OS terminates us.
+///
+/// WTA helper/master processes run as ConPTY children of Windows Terminal.
+/// When a pane/tab/window closes — or the user logs off / shuts down — the
+/// OS delivers a control event (`CTRL_CLOSE`/`CTRL_LOGOFF`/`CTRL_SHUTDOWN`)
+/// to those children and then terminates them at the end of a short grace
+/// window. Without a handler those deaths are invisible: the process
+/// vanishes mid-stream and the non-blocking appender's last buffered
+/// records are lost, because [`shutdown_flush`] never runs (the
+/// `WorkerGuard` lives in a `static` and `static`s don't `Drop` at
+/// teardown). That is exactly the "helper just stopped responding"
+/// signature where the success path is logged exhaustively but the
+/// teardown path is silent and the incident is undiagnosable.
+///
+/// This closes that gap: it logs WHICH control event tore the process down
+/// and flushes so the final records (e.g. the transport-lost WARN in
+/// `run_acp_client_over_pipe`) actually reach disk. The handler returns
+/// FALSE so the default handler still runs and the process terminates as
+/// before — we only ADD a log line + flush, we never change termination
+/// behavior.
+///
+/// Limitation: a hard `TerminateProcess` (Task Manager "End task",
+/// `taskkill /F`, an OS resource kill) delivers NO control event and stays
+/// untraceable from inside the process — nothing in-process can observe it.
+/// Note also that while the Ratatui TUI holds the console in raw mode,
+/// Ctrl+C is delivered as a key event (not `CTRL_C_EVENT`), so this handler
+/// does not normally see it and does not alter the TUI's Ctrl+C behavior.
+pub fn install_ctrl_handler() {
+    use windows_sys::Win32::System::Console::{
+        SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_C_EVENT,
+        CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
+    };
+
+    // Returns `windows_sys`' `BOOL` (an `i32` alias) to match the
+    // PHANDLER_ROUTINE signature: 0 == FALSE (fall through to default).
+    unsafe extern "system" fn handler(ctrl_type: u32) -> i32 {
+        let event = match ctrl_type {
+            CTRL_C_EVENT => "CTRL_C",
+            CTRL_BREAK_EVENT => "CTRL_BREAK",
+            CTRL_CLOSE_EVENT => "CTRL_CLOSE",
+            CTRL_LOGOFF_EVENT => "CTRL_LOGOFF",
+            CTRL_SHUTDOWN_EVENT => "CTRL_SHUTDOWN",
+            _ => "UNKNOWN",
+        };
+        tracing::warn!(
+            target: "lifecycle",
+            ctrl_type,
+            event,
+            "console control event received — process being torn down; flushing logs"
+        );
+        // Drain the appender so the line above (and any earlier buffered
+        // records) hit disk before the grace window ends and we're killed.
+        shutdown_flush();
+        // FALSE → fall through to the default handler (terminate). We only
+        // add logging + flush; termination behavior is unchanged.
+        0
+    }
+
+    // SAFETY: `handler` is a valid `extern "system"` routine matching the
+    // PHANDLER_ROUTINE signature; registering a control handler is a
+    // process-global, thread-safe Win32 operation.
+    unsafe {
+        if SetConsoleCtrlHandler(Some(handler), 1) == 0 {
+            tracing::debug!(
+                target: "lifecycle",
+                "SetConsoleCtrlHandler failed — teardown signals will not be logged"
+            );
+        }
+    }
+}
+
 /// Filesystem upkeep run once per process at logging init, before our own
 /// appender opens.
 ///

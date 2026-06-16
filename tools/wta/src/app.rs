@@ -5137,7 +5137,10 @@ impl App {
                 tab_id,
                 params,
             } => {
-                tracing::debug!(target: "autofix", method = %method, pane_id = %pane_id, tab_id = ?tab_id, self_pane_id = ?self.pane_id, "WtEvent");
+                // Per-WT-event (every vt_sequence included) — trace-only; the
+                // single per-event breadcrumb stays at debug in main.rs
+                // (`wt_event_rx: received event`).
+                tracing::trace!(target: "autofix", method = %method, pane_id = %pane_id, tab_id = ?tab_id, self_pane_id = ?self.pane_id, "WtEvent");
 
                 // Hook bridge events: fire-and-forget into the agent registry
                 // so the agent session view stays current. Unrelated to autofix /
@@ -5781,7 +5784,8 @@ impl App {
                 }
 
                 let notification = classify_wt_event(&method, &pane_id, tab_id.as_deref(), &params);
-                tracing::debug!(target: "autofix", severity = ?notification.severity, summary = %notification.summary, tab_id = ?notification.tab_id, "classified");
+                // Per-WT-event classification — trace-only (vt_sequence volume).
+                tracing::trace!(target: "autofix", severity = ?notification.severity, summary = %notification.summary, tab_id = ?notification.tab_id, "classified");
 
                 // Per-tab filter. WT broadcasts pane-scoped events to every
                 // helper in the window, but another tab's failures are not
@@ -5796,7 +5800,9 @@ impl App {
                         && !self_tab.is_empty()
                         && event_tab != self_tab
                     {
-                        tracing::debug!(
+                        // Per-cross-tab-event (very high volume in multi-tab
+                        // windows) — trace-only.
+                        tracing::trace!(
                             target: "autofix",
                             event_tab,
                             self_tab,
