@@ -68,6 +68,8 @@ failure-handling for every step are in
        picked / skipped-empty → continue
        stuck → 5a (push branch, file upstream-sync-stuck issue, EXIT)
 6. (No commits picked? exit clean.)
+       before build: re-pin build/pgo/Terminal.PGO.props if upstream bumped
+       its Windows Terminal Major.Minor (else PGO build fails)
 7. Build               ← scripts/04-try-build.ps1  (→ JSON)
        build-ok → step 8
        build-failed → ONE focused fix commit, re-build; else 7a
@@ -133,6 +135,11 @@ Full rubric, worktree mechanics, PR-body template:
   but Tier-2 LLM-touched resolutions on `.yml`/`.xml`/`.csproj`/winget
   manifests may downgrade to LF. Re-normalize before staging — see
   [`references/03-conflict-triage.md`](./references/03-conflict-triage.md#line-endings).
+- **PGO pin follows upstream.** `build/pgo/Terminal.PGO.props` hard-pins the
+  PGO database to upstream's Windows Terminal `Major.Minor` (our `custom.props`
+  stays `0.1`, so it can't be derived). When a sync bumps the upstream version,
+  re-pin those two values or the build fails with `Could not find matching PGO
+  package`. Step 7's pre-build check covers this.
 
 ## Troubleshooting
 

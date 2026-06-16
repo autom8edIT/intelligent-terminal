@@ -202,6 +202,46 @@ a no-op) there is nothing to build or finalize. Delete the branch, report
 
 ## 7. Build
 
+### Pre-build check — re-pin the PGO database if upstream bumped its version
+
+This fork keeps its own product version (`custom.props` → `VersionMajor.VersionMinor`
+= `0.1`), so `build/pgo/Terminal.PGO.props` **cannot** derive the PGO database
+package version automatically — it carries a hard-coded pin to the upstream
+Windows Terminal `Major.Minor`. When a sync pulls in an upstream version bump
+(e.g. `1.25 → 1.26`), that pin must follow, or the build fails with:
+
+```
+Microsoft.PGO-Helpers.Cpp.targets : Error : Could not find matching PGO package.
+```
+
+(No `Microsoft.Internal.Windows.Terminal.PGODatabase` is published for `0.1` on the
+TerminalDependencies feed — only upstream versions exist.)
+
+Before building, compare the two values — no script needed, just read both:
+
+```
+# upstream product version the picked commits may have advanced:
+git show upstream/main:custom.props        # → <VersionMajor> / <VersionMinor>
+
+# current pin in build/pgo/Terminal.PGO.props:
+#   <PGOPackageVersionMajor> / <PGOPackageVersionMinor>
+```
+
+If upstream's `Major.Minor` is newer than the pin, edit those two
+`<PGOPackageVersionMajor>` / `<PGOPackageVersionMinor>` values in
+`build/pgo/Terminal.PGO.props` to match, and land it as its own mechanical
+commit on the sync branch (it's a deterministic, upstream-driven re-pin, not a
+judgment fix, so it does not consume the step-7 build-fix budget):
+
+```
+git add build/pgo/Terminal.PGO.props
+git commit -m "chore(upstream): re-pin PGO database to <maj>.<min>"
+```
+
+If the values already match, do nothing and proceed to the build.
+
+### Run the build
+
 ```pwsh
 $buildJson = pwsh -NoProfile -File .github/skills/upstream-sync/scripts/04-try-build.ps1
 if ($LASTEXITCODE -ne 0) { throw "04-try-build.ps1 exited $LASTEXITCODE before producing a JSON result." }
