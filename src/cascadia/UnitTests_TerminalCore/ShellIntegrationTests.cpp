@@ -852,7 +852,7 @@ void ShellIntegrationTests::QueryExecutionPolicy_ParsesStdoutAndLowercases()
     // Smoke test against real powershell.exe (always present on Windows).
     // We don't care WHICH policy the runner returns — we care that the
     // QueryExecutionPolicy contract holds:
-    //   * the call completes within the 5s timeout (no hang on the pipe),
+    //   * the call completes within the 20s timeout (no hang on the pipe),
     //   * stdout is captured (non-empty), and
     //   * the result is lowercase ASCII letters only — the parser strips
     //     newlines / spaces / tabs, lowercases A-Z, but a stray BOM byte or
@@ -1096,7 +1096,11 @@ void ShellIntegrationTests::Bash_ScriptContent_HasIdempotencyGuardAndOscSequence
     VERIFY_IS_TRUE(_Contains(script, "${BASH_VERSION:-}"));
     VERIFY_IS_TRUE(_Contains(script, "${-:-}"));
     VERIFY_IS_TRUE(_Contains(script, "${__IT_SHELLINTEG_INSTALLED:-}"));
-    VERIFY_IS_TRUE(_Contains(script, "${PROMPT_COMMAND:-}"));
+    // PROMPT_COMMAND can be an array (bash 5.1+) so scalar ${VAR:-}
+    // defaulting is wrong for it — it would only see element [0]. The
+    // set -u-safe form for the array read is the ${ARR[@]+...}
+    // alternate-value guard, which collapses to nothing when unset.
+    VERIFY_IS_TRUE(_Contains(script, "${PROMPT_COMMAND[@]+\"${PROMPT_COMMAND[@]}\"}"));
     VERIFY_IS_TRUE(_Contains(script, "${PS1:-}"));
     // PWD too — printf reads it for the OSC 9;9 CWD report.
     VERIFY_IS_TRUE(_Contains(script, "${PWD:-}"));
