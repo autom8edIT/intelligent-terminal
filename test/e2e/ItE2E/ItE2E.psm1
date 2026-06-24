@@ -14,7 +14,7 @@ foreach ($scope in @('Private', 'Public')) {
 # Export every function defined by the Public files (and the few private ones tests use).
 $publicFns = @(
     # Harness
-    'Resolve-ItApp', 'Resolve-WtComClsid', 'Start-Terminal', 'Start-TerminalClean', 'Stop-Terminal',
+    'Resolve-ItApp', 'Resolve-WtComClsid', 'Get-ItTestPackage', 'Start-Terminal', 'Start-TerminalClean', 'Stop-Terminal',
     'Reset-TerminalState', 'Backup-WtConfig', 'Restore-WtConfig', 'Get-WtProcessesForApp', 'Stop-AppInstances', 'Start-TerminalFre', 'Get-DescendantWtaIds',
     # Core (useful in tests)
     'Wait-Until', 'Test-Until', 'Invoke-Native', 'Write-ItLog', 'ConvertFrom-JsonSafe',
@@ -31,15 +31,17 @@ $publicFns = @(
     'Test-WtExecutionPolicyControllable', 'Test-WtPwshBlocksShellIntegration',
     # Ui
     'Get-UiTree', 'Find-UiElement', 'Invoke-UiElement', 'Invoke-UiClick', 'Set-UiValue', 'Get-UiValue',
-    'Wait-UiElement', 'Test-UiElementExists', 'Save-UiScreenshot', 'Get-WtWindowHwnds',
+    'Wait-UiElement', 'Test-UiElementExists', 'Save-UiScreenshot', 'Get-WtWindowHwnds', 'Test-WinAppAvailable',
     # Observe
     'Get-ItLogDir', 'Initialize-LogOffsets', 'Get-ItLogText', 'Start-WtEventListener', 'Get-WtEvents',
     'Wait-WtEvent', 'Stop-WtEventListener', 'Get-ContextBundle', 'ConvertTo-ContextText',
     # Agent / Autofix / Sessions
     'Open-AgentPane', 'Set-AgentPaneFocus', 'Wait-AgentReady', 'Send-AgentPrompt', 'Wait-AgentState',
     'Test-AgentPaneOpen', 'Stop-AgentPane', 'Restore-AgentPane', 'Get-AgentPaneSession', 'Get-AgentPaneText',
-    'Send-AgentKey', 'Clear-AgentInput', 'Open-AgentCommandMenu', 'Get-AgentMenuSelection', 'Invoke-AgentMenuItem',
+    'Send-AgentKey', 'Clear-AgentInput', 'Send-AgentWin32Key', 'Send-AgentAltV',
+    'Open-AgentCommandMenu', 'Get-AgentMenuSelection', 'Invoke-AgentMenuItem',
     'Test-AgentPopupShown', 'Wait-AgentPermission', 'Resolve-AgentPermission', 'Assert-AgentPaneText',
+    'Set-ClipboardImage',
     'Wait-Autofix', 'Wait-WtCommandFailure', 'Send-AutofixState', 'Invoke-FailingCommand', 'Get-WtSessions',
     'Open-SessionList', 'Close-SessionList', 'Test-SessionListShown', 'Get-SessionRows',
     'Get-SessionListSelection', 'Select-SessionRow', 'Resume-Session', 'Get-SessionListJson',
